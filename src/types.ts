@@ -26,6 +26,5 @@ export interface StreamState {
   streams: StreamRef[];
   addStream(input: string): boolean;
   removeStream(id: string): void;
-  toggleMute(id: string): void;
   subscribe(listener: () => void): () => void;
 }

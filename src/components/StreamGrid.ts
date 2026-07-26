@@ -1,51 +1,34 @@
-import {
-  clearStreamIframe,
-  observeStreamCard,
-  setStreamIframeSource,
-  shouldLazyLoadStream,
-  unobserveStreamCard,
-} from '../lib/lazyIframe';
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import type { StreamRef } from '../types';
 import type { StreamStore } from '../state/streams';
 
-function updateMuteButton(card: HTMLElement, stream: StreamRef): void {
-  const muteButton = card.querySelector<HTMLButtonElement>('[data-action="mute"]');
-  if (!muteButton) return;
+/**
+ * Kick only mounts desktop chrome (volume, quality) when the iframe's layout
+ * width is >= 769px. MultiTwitch-style optimize_size often makes cells smaller
+ * than that — so Kick iframes are rendered at ≥769px and CSS-scaled down into
+ * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
+ */
+const MIN_KICK_VIEWPORT_WIDTH = 769;
+const GRID_GAP = 12;
+const GRID_PADDING = 24;
+const CARD_HEADER_HEIGHT = 42;
 
-  muteButton.title = stream.muted ? 'Unmute' : 'Mute';
-  muteButton.setAttribute('aria-label', stream.muted ? 'Unmute stream' : 'Mute stream');
-  muteButton.textContent = stream.muted ? 'Unmute' : 'Mute';
+function clearLayoutVars(container: HTMLElement): void {
+  container.style.removeProperty('--grid-columns');
+  container.style.removeProperty('--player-height');
+  container.style.removeProperty('--player-width');
+  container.style.removeProperty('--kick-col-min');
+  container.style.removeProperty('--kick-render-width');
+  container.style.removeProperty('--kick-scale');
 }
 
-function replaceKickIframe(card: HTMLElement, stream: StreamRef): void {
-  const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
-  if (!iframe) return;
-
-  const adapter = getAdapter(stream.platform);
-  const next = document.createElement('iframe');
-  next.className = 'stream-card__iframe';
-  next.src = buildEmbedUrl(stream, stream.muted);
-  next.allowFullscreen = true;
-  next.title = `${adapter.label} stream: ${stream.channel}`;
-  next.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
-  next.setAttribute('scrolling', 'no');
-  iframe.replaceWith(next);
-}
-
-function applyMuteState(card: HTMLElement, stream: StreamRef): void {
-  updateMuteButton(card, stream);
-  card.dataset.muted = String(stream.muted);
-
-  if (stream.platform === 'kick') {
-    replaceKickIframe(card, stream);
-    return;
-  }
-
-  const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
-  if (!iframe) return;
-  setStreamIframeSource(iframe, stream, { autoplay: true, forceReload: true });
+function setKickScaleVars(container: HTMLElement, cellWidth: number): void {
+  const renderWidth = Math.max(MIN_KICK_VIEWPORT_WIDTH, Math.floor(cellWidth));
+  const scale = cellWidth / renderWidth;
+  container.style.setProperty('--kick-render-width', `${renderWidth}px`);
+  container.style.setProperty('--kick-scale', String(scale));
+  container.style.setProperty('--kick-col-min', `${Math.floor(cellWidth)}px`);
 }
 
 function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement {
@@ -55,7 +38,7 @@ function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement
   card.className = `stream-card stream-card--${stream.platform}`;
   card.dataset.streamId = stream.id;
   card.dataset.platform = stream.platform;
-  card.dataset.muted = String(stream.muted);
+  card.dataset.channel = stream.channel;
 
   const header = document.createElement('div');
   header.className = 'stream-card__header';
@@ -71,12 +54,6 @@ function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement
   const controls = document.createElement('div');
   controls.className = 'stream-card__controls';
 
-  const muteButton = document.createElement('button');
-  muteButton.type = 'button';
-  muteButton.className = 'stream-card__btn';
-  muteButton.dataset.action = 'mute';
-  muteButton.addEventListener('click', () => store.toggleMute(stream.id));
-
   const removeButton = document.createElement('button');
   removeButton.type = 'button';
   removeButton.className = 'stream-card__btn stream-card__btn--danger';
@@ -85,7 +62,7 @@ function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement
   removeButton.textContent = 'Remove';
   removeButton.addEventListener('click', () => store.removeStream(stream.id));
 
-  controls.append(muteButton, removeButton);
+  controls.append(removeButton);
   header.append(badge, title, controls);
 
   const player = document.createElement('div');
@@ -95,86 +72,151 @@ function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement
   iframe.className = 'stream-card__iframe';
   iframe.allowFullscreen = true;
   iframe.title = `${adapter.label} stream: ${stream.channel}`;
-  iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
-  iframe.setAttribute('scrolling', 'no');
+  iframe.referrerPolicy = 'no-referrer-when-downgrade';
 
-  // Kick: load immediately (same as the original working viewer).
-  // Twitch: defer via IntersectionObserver until near the viewport.
   if (stream.platform === 'kick') {
-    iframe.src = buildEmbedUrl(stream, stream.muted);
+    // Kick ignores muted=true once the page has autoplay permission. Omit
+    // allow=autoplay so the browser blocks unmuted audio. credentialless
+    // avoids Kick restoring a prior unmuted volume from iframe storage.
+    iframe.setAttribute('allow', 'fullscreen; picture-in-picture');
+    iframe.setAttribute('credentialless', '');
+    try {
+      (iframe as HTMLIFrameElement & { credentialless?: boolean }).credentialless = true;
+    } catch {
+      // Older browsers ignore this.
+    }
+    iframe.src = buildEmbedUrl(stream, true, { autoplay: true });
+
+    const kickFrame = document.createElement('div');
+    kickFrame.className = 'stream-card__kick-frame';
+    kickFrame.append(iframe);
+    player.append(kickFrame);
   } else {
-    setStreamIframeSource(iframe, stream, { autoplay: true });
+    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
+    iframe.src = buildEmbedUrl(stream, true);
+    player.append(iframe);
   }
 
-  player.append(iframe);
   card.append(header, player);
-  updateMuteButton(card, stream);
   return card;
-}
-
-function updatePlayerElement(card: HTMLElement, stream: StreamRef): void {
-  if ((card.dataset.muted === 'true') === stream.muted) {
-    return;
-  }
-  applyMuteState(card, stream);
 }
 
 export function syncStreamGrid(container: HTMLElement, store: StreamStore): void {
   const streams = store.getStreams();
-  const nextIds = new Set(streams.map((stream) => stream.id));
+  const existing = new Map(
+    Array.from(container.querySelectorAll<HTMLElement>('.stream-card')).map((card) => [
+      card.dataset.streamId ?? '',
+      card,
+    ]),
+  );
 
-  for (const card of [...container.querySelectorAll<HTMLElement>('.stream-card')]) {
-    const streamId = card.dataset.streamId;
-    if (!streamId || !nextIds.has(streamId)) {
-      unobserveStreamCard(card);
+  const nextIds = new Set(streams.map((stream) => stream.id));
+  for (const [id, card] of existing) {
+    if (!nextIds.has(id)) {
       card.remove();
+      existing.delete(id);
     }
   }
 
   for (const stream of streams) {
-    const existing = container.querySelector<HTMLElement>(
-      `[data-stream-id="${CSS.escape(stream.id)}"]`,
-    );
-    if (existing) {
-      updatePlayerElement(existing, stream);
-      continue;
+    let card = existing.get(stream.id);
+    if (!card) {
+      card = createPlayerElement(stream, store);
+      existing.set(stream.id, card);
     }
-
-    const card = createPlayerElement(stream, store);
     container.append(card);
-    if (shouldLazyLoadStream(stream)) {
-      observeStreamCard(card);
-    }
   }
 
   container.dataset.count = String(streams.length);
+  container.dataset.hasKick = streams.some((stream) => stream.platform === 'kick')
+    ? '1'
+    : '0';
 }
 
-/** Simple MultiTwitch-style column counts — never maximize single-column width. */
-function columnCountFor(count: number): number {
-  if (count <= 1) return 1;
-  if (count <= 4) return 2;
-  if (count <= 9) return 3;
-  return 4;
-}
-
+/**
+ * Port of MultiTwitch optimize_size: choose columns/size so every player
+ * fits in the streams pane at the largest possible 16:9 size. Resize only —
+ * do not remount iframes (keeps Twitch playing across chat toggles).
+ */
 export function updateGridLayout(container: HTMLElement): void {
   const count = Number(container.dataset.count ?? '0');
   if (count === 0) {
-    container.style.removeProperty('--grid-columns');
+    clearLayoutVars(container);
     return;
   }
 
-  const columns = isStackedStreamLayout() ? 1 : columnCountFor(count);
-  container.style.setProperty('--grid-columns', String(columns));
-}
+  const streamArea = container.closest('.stream-area');
+  if (!streamArea) {
+    clearLayoutVars(container);
+    return;
+  }
 
-export function unloadStreamGrid(container: HTMLElement): void {
-  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    unobserveStreamCard(card);
-    const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
-    if (iframe) {
-      clearStreamIframe(iframe);
+  const hasKick = container.dataset.hasKick === '1';
+  const areaWidth = streamArea.clientWidth - GRID_PADDING;
+
+  if (isStackedStreamLayout()) {
+    container.style.setProperty('--grid-columns', '1');
+    container.style.removeProperty('--player-height');
+    container.style.removeProperty('--player-width');
+    if (hasKick && areaWidth > 0) {
+      setKickScaleVars(container, areaWidth);
+    } else {
+      container.style.removeProperty('--kick-col-min');
+      container.style.removeProperty('--kick-render-width');
+      container.style.removeProperty('--kick-scale');
     }
+    return;
+  }
+
+  const areaHeight = streamArea.clientHeight - GRID_PADDING;
+
+  if (areaWidth <= 0 || areaHeight <= 0) {
+    return;
+  }
+
+  let bestColumns = 1;
+  let bestWidth = 0;
+  let bestHeight = 0;
+
+  for (let columns = 1; columns <= Math.min(count, 4); columns += 1) {
+    const rows = Math.ceil(count / columns);
+    let maxWidth = Math.floor((areaWidth - GRID_GAP * (columns - 1)) / columns);
+    let maxHeight =
+      Math.floor((areaHeight - GRID_GAP * (rows - 1)) / rows) - CARD_HEADER_HEIGHT;
+
+    if (maxWidth <= 0 || maxHeight <= 0) {
+      continue;
+    }
+
+    if ((maxWidth * 9) / 16 < maxHeight) {
+      maxHeight = (maxWidth * 9) / 16;
+    } else {
+      maxWidth = (maxHeight * 16) / 9;
+    }
+
+    if (maxWidth > bestWidth) {
+      bestWidth = maxWidth;
+      bestHeight = maxHeight;
+      bestColumns = columns;
+    }
+  }
+
+  if (bestWidth <= 0 || bestHeight <= 0) {
+    container.style.setProperty('--grid-columns', '1');
+    container.style.removeProperty('--player-height');
+    container.style.removeProperty('--player-width');
+    return;
+  }
+
+  container.style.setProperty('--grid-columns', String(bestColumns));
+  container.style.setProperty('--player-width', `${Math.floor(bestWidth)}px`);
+  container.style.setProperty('--player-height', `${Math.floor(bestHeight)}px`);
+
+  if (hasKick) {
+    setKickScaleVars(container, bestWidth);
+  } else {
+    container.style.removeProperty('--kick-col-min');
+    container.style.removeProperty('--kick-render-width');
+    container.style.removeProperty('--kick-scale');
   }
 }

@@ -21,8 +21,12 @@ const gridEl = grid;
 const chatPanelEl = chatPanel;
 
 function updateLayout(): void {
+  // Double rAF so flex has applied chat show/hide before measuring (MultiTwitch
+  // called optimize_size after show/hide synchronously on settled layout).
   requestAnimationFrame(() => {
-    updateGridLayout(gridEl);
+    requestAnimationFrame(() => {
+      updateGridLayout(gridEl);
+    });
   });
 }
 
@@ -37,6 +41,7 @@ bindStreamToolbar(store);
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 store.subscribe(renderStreams);
+chatStore.subscribe(updateLayout);
 
 const phoneQuery = phoneMediaQuery();
 

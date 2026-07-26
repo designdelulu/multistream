@@ -34,11 +34,18 @@ export const kickAdapter: PlatformAdapter = {
   },
 
   buildEmbedUrl(ref, opts) {
-    // Official Kick embed params only: muted + autoplay.
+    // Official params: muted + autoplay (+ parent on some embed paths).
+    // Always request muted. Do not cache-bust — remounts make Kick likelier to
+    // restore a remembered unmuted volume (unlike Twitch, which honors muted).
+    const autoplay = opts.autoplay ?? true;
     const params = new URLSearchParams({
-      muted: String(opts.muted),
-      autoplay: 'true',
+      muted: 'true',
+      autoplay: autoplay ? 'true' : 'false',
+      playsinline: 'true',
     });
+    if (opts.parent) {
+      params.set('parent', opts.parent);
+    }
     return `https://player.kick.com/${encodeURIComponent(ref.channel)}?${params.toString()}`;
   },
 

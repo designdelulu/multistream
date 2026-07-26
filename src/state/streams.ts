@@ -88,14 +88,6 @@ export function createStreamStore() {
       setStreams(streams.filter((stream) => stream.id !== id));
     },
 
-    toggleMute(id: string): void {
-      setStreams(
-        streams.map((stream) =>
-          stream.id === id ? { ...stream, muted: !stream.muted } : stream,
-        ),
-      );
-    },
-
     subscribe(listener: Listener): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);

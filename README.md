@@ -16,10 +16,11 @@ Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](http
 MultiStream.cc is a lightweight browser viewer for multi-stream watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
 
 - **Twitch + Kick** on the same page
-- **Responsive grid** that scales players while preserving aspect ratio
+- **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
 - **Shareable path URLs** like `/t:username/k:username`
-- **Mute / remove** controls per stream
-- **Twitch chat sidebar** (desktop and tablet)
+- **Remove** control per stream (volume lives in each platform’s own player UI)
+- **Twitch chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
+- **Streams always boot muted** — unmute from the Twitch/Kick player chrome
 - **No backend required** — static deploy, iframe embeds only
 
 Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) project, rebuilt for modern platforms and maintainability.
@@ -30,8 +31,8 @@ Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) p
 
 | Device | Layout | Chat | Notes |
 |---|---|---|---|
-| **Desktop** (>1024px) | Multi-column grid (1–4 columns by stream count) | Show / hide toggle | Best experience for 2+ streams |
-| **Tablet / iPad** (641px–1024px) | Multi-column grid | Show / hide toggle | Touch-friendly controls; chat panel slightly narrower |
+| **Desktop** (>1024px) | Multi-column grid sized to fit all players in the viewport | Show / hide toggle | Chat docks beside streams; grid reflows (does not overlay video) |
+| **Tablet / iPad** (641px–1024px) | Same packing grid | Show / hide toggle | Touch-friendly controls; chat panel slightly narrower |
 | **Phone** (≤640px) | Single-column scroll | Hidden | Streams stack vertically; toolbar stacks for easy tapping |
 
 Works in modern desktop and mobile browsers (Chrome, Firefox, Safari, Edge). Performance depends on how many live embeds are open — each stream is a full Twitch or Kick player. Fewer streams = smoother playback, especially on laptops and phones.
@@ -103,17 +104,17 @@ Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:use
 
 ### Add streams from the toolbar
 
-Enter one stream at a time — a username, platform prefix, or full channel URL:
+Use the **Twitch / Kick** toggle, then enter a username (or paste a full URL / `t:` / `k:` prefix):
 
 | You enter | Result |
 |---|---|
-| `t:username` | Twitch channel |
-| `k:username` | Kick channel |
-| `twitch.tv/username` | Twitch from URL |
-| `kick.com/username` | Kick from URL |
-| `username` | Twitch (plain username) |
+| Plain `username` + Twitch selected | Twitch channel |
+| Plain `username` + Kick selected | Kick channel |
+| `t:username` / `k:username` | That platform (overrides toggle) |
+| `twitch.tv/username` / `kick.com/username` | Platform from URL |
 
-The gray hint below the input shows an example multi-stream path: `multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username`.
+The gray hint under the toolbar shows an example multi-stream path:
+`multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username`.
 
 ---
 
@@ -126,7 +127,7 @@ src/
 ├── platforms/     # Twitch & Kick adapters (parse input, build embed URLs)
 ├── state/         # Stream list, chat visibility, URL sync
 ├── components/    # Grid, toolbar, chat panel, player cards
-├── lib/           # Lazy iframe loading, viewport helpers
+├── lib/           # Viewport helpers
 └── styles/        # Layout and UI
 ```
 
@@ -144,9 +145,10 @@ Adding a third platform later means adding one adapter file and registering it �
 - Players must be served over **HTTP(S)** — `file://` will not work.
 - **Twitch** embeds require a matching `parent` domain (injected automatically from `window.location.hostname`).
 - **Kick** has one official embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
-- MultiStream uses the same Kick URL as the first public commit: `?autoplay=true&muted=true`, with `src` set immediately on the iframe (Kick is not lazy-loaded).
-- **Kick volume slider** lives inside Kick’s player chrome (hover the video). MultiStream’s header **Mute / Unmute** only flips the `muted=` query param. If the player iframe is too short (layout bug), Kick switches to a compact UI and the slider disappears — that was a sizing regression in our CSS, not a different Kick embed type.
-- **Mute/unmute** reloads only the affected iframe. Cross-origin players do not expose volume APIs to the parent page.
+- **Layout packing** follows MultiTwitch’s `optimize_size` idea: pick the column count and 16:9 size that fits *every* stream in the streams pane. Chat docks beside the grid and triggers a reflow — it does not cover players (Twitch pauses embeds that are clipped or scrolled off-screen).
+- **Kick volume / control size:** Kick’s embed switches UI by **iframe layout width**. Below **769px** it uses mobile/tablet chrome (tiny overlays, often no volume). At **769px+** it uses desktop chrome with a speaker icon — hover the video, then the speaker, for the volume slider. When the packed cell is narrower than 769px, MultiStream still renders the Kick iframe at ≥769px and **CSS-scales** it into the cell so desktop chrome (including volume) stays available while the grid fits on-screen.
+- **Mute on load:** every embed boots with `muted=true`. Twitch honors this reliably. Kick sometimes ignores `muted` after the page has autoplay permission (e.g. after dismissing the welcome modal), so Kick iframes omit `allow=autoplay` and use `credentialless` where supported so the browser can block unmuted autoplay / blank Kick volume storage. Use each platform’s own player controls for volume after load.
+- Cross-origin players do not expose volume APIs to the parent page.
 - **Chat** is Twitch-only (Kick has no official chat embed). Hidden on phones.
 
 ---

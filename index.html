@@ -121,24 +121,16 @@
               </thead>
               <tbody>
                 <tr>
-                  <td><code>t:username</code></td>
-                  <td>Twitch channel</td>
+                  <td>Select <strong>Twitch</strong> or <strong>Kick</strong>, then a username</td>
+                  <td>That platform</td>
                 </tr>
                 <tr>
-                  <td><code>k:username</code></td>
-                  <td>Kick channel</td>
+                  <td><code>t:username</code> / <code>k:username</code></td>
+                  <td>Overrides the toggle</td>
                 </tr>
                 <tr>
-                  <td><code>twitch.tv/username</code></td>
-                  <td>Twitch from URL</td>
-                </tr>
-                <tr>
-                  <td><code>kick.com/username</code></td>
-                  <td>Kick from URL</td>
-                </tr>
-                <tr>
-                  <td><code>username</code></td>
-                  <td>Twitch (plain username)</td>
+                  <td><code>twitch.tv/…</code> / <code>kick.com/…</code></td>
+                  <td>From URL</td>
                 </tr>
               </tbody>
             </table>
@@ -151,27 +143,49 @@
 
     <div id="app">
       <header class="toolbar">
-        <h1 class="toolbar__title">
-          <a href="/" class="toolbar__brand">MultiStream.cc</a>
-        </h1>
-        <form id="add-stream-form" class="toolbar__form">
-          <div class="toolbar__field">
+        <div class="toolbar__row">
+          <h1 class="toolbar__title">
+            <a href="/" class="toolbar__brand">MultiStream.cc</a>
+          </h1>
+          <form id="add-stream-form" class="toolbar__form">
+            <div
+              class="toolbar__platform"
+              role="group"
+              aria-label="Stream platform"
+            >
+              <button
+                type="button"
+                class="toolbar__platform-btn is-active"
+                data-platform="twitch"
+                aria-pressed="true"
+              >
+                Twitch
+              </button>
+              <button
+                type="button"
+                class="toolbar__platform-btn"
+                data-platform="kick"
+                aria-pressed="false"
+              >
+                Kick
+              </button>
+            </div>
             <input
               id="stream-input"
               type="text"
-              placeholder="Username or URL e.g. t:[username] (Twitch), k:[username] (Kick)"
+              placeholder="Username or URL"
               autocomplete="off"
               spellcheck="false"
             />
-            <p class="toolbar__hint" aria-hidden="true">
-              multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username
-            </p>
-          </div>
-          <button type="submit">Add Stream</button>
-        </form>
-        <button type="button" id="chat-toggle" class="toolbar__chat-toggle" hidden>
-          Hide chat
-        </button>
+            <button type="submit">Add Stream</button>
+          </form>
+          <button type="button" id="chat-toggle" class="toolbar__chat-toggle" hidden>
+            Hide chat
+          </button>
+        </div>
+        <p class="toolbar__hint" id="toolbar-hint">
+          multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username
+        </p>
       </header>
 
       <div class="main-layout">
