@@ -30,11 +30,11 @@ Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) p
 
 | Device | Layout | Chat | Notes |
 |---|---|---|---|
-| **Desktop** (>1024px) | Multi-column grid, optimized sizing | Show / hide toggle | Best experience for 2+ streams |
-| **Tablet / iPad** (641px–1024px) | Multi-column grid, optimized sizing | Show / hide toggle | Touch-friendly controls; chat panel slightly narrower |
+| **Desktop** (>1024px) | Multi-column grid (1–4 columns by stream count) | Show / hide toggle | Best experience for 2+ streams |
+| **Tablet / iPad** (641px–1024px) | Multi-column grid | Show / hide toggle | Touch-friendly controls; chat panel slightly narrower |
 | **Phone** (≤640px) | Single-column scroll | Hidden | Streams stack vertically; toolbar stacks for easy tapping |
 
-Performance depends on how many live embeds are open — each stream runs a full Twitch or Kick player in its own iframe. Fewer streams = smoother playback, especially on laptops and phones.
+Works in modern desktop and mobile browsers (Chrome, Firefox, Safari, Edge). Performance depends on how many live embeds are open — each stream is a full Twitch or Kick player. Fewer streams = smoother playback, especially on laptops and phones.
 
 ---
 
@@ -143,9 +143,10 @@ Adding a third platform later means adding one adapter file and registering it �
 
 - Players must be served over **HTTP(S)** — `file://` will not work.
 - **Twitch** embeds require a matching `parent` domain (injected automatically from `window.location.hostname`).
-- **Kick** embeds use `https://player.kick.com/{username}?autoplay=true&muted=true&parent={domain}`. Kick loads immediately with a fresh iframe. Player height stays 16:9 from width — shrinking below that hides Kick’s volume slider and compact hover controls (a common embed issue when iframes are squeezed into a fixed viewport height).
-- **Kick volume controls** are inside the Kick player UI. Use **Unmute** on the card header, then adjust volume in the player. If controls look small or missing, scroll the grid or reduce stream count so each player has more space.
-- **Mute/unmute** reloads the affected iframe with updated embed params. Cross-origin players do not expose volume APIs to the parent page — use the in-player volume slider after unmuting.
+- **Kick** has one official embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
+- MultiStream uses the same Kick URL as the first public commit: `?autoplay=true&muted=true`, with `src` set immediately on the iframe (Kick is not lazy-loaded).
+- **Kick volume slider** lives inside Kick’s player chrome (hover the video). MultiStream’s header **Mute / Unmute** only flips the `muted=` query param. If the player iframe is too short (layout bug), Kick switches to a compact UI and the slider disappears — that was a sizing regression in our CSS, not a different Kick embed type.
+- **Mute/unmute** reloads only the affected iframe. Cross-origin players do not expose volume APIs to the parent page.
 - **Chat** is Twitch-only (Kick has no official chat embed). Hidden on phones.
 
 ---
