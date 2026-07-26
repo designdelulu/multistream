@@ -746,82 +746,78 @@ html.show-welcome .welcome-modal {
     height: auto;
   }
 
-  /* Match iPad density: one control row (wraps only if needed), same control height. */
+  /* Stacked + tight: title → Twitch/Kick → input|Add (grid keeps Add on same row). */
   .toolbar {
-    gap: 3px;
-    padding: 8px max(10px, env(safe-area-inset-right)) 6px max(10px, env(safe-area-inset-left));
+    gap: 4px;
+    padding: 8px max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
   }
 
   .toolbar__row {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
   }
 
   .toolbar__title {
-    width: auto;
-    flex: 0 0 auto;
-    font-size: 0.95rem;
+    width: 100%;
+    font-size: 1rem;
+    line-height: 1.2;
   }
 
   .toolbar__form {
-    display: flex;
-    flex: 1 1 220px;
-    flex-direction: row;
-    flex-wrap: nowrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    width: auto;
-    min-width: 0;
+    /* Override desktop flex: 1 1 280px — that made the form ~280px tall on phones. */
+    flex: 0 0 auto;
+    width: 100%;
     gap: 6px;
   }
 
   .toolbar__platform {
-    width: auto;
-    flex: 0 0 auto;
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .toolbar__platform-btn {
-    flex: 0 0 auto;
+    flex: 1;
     min-height: 0;
     padding: 8px 10px;
-    font-size: 0.8rem;
+    font-size: 0.82rem;
   }
 
-  /* 16px text avoids iOS zoom; padding matches Twitch/Kick / Add height. */
+  /* Comfortable height, not a tall slab; 16px keeps iOS from zooming. */
   .toolbar__form input {
-    flex: 1 1 auto;
-    width: auto;
+    width: 100%;
     min-width: 0;
     min-height: 0;
     padding: 8px 10px;
     font-size: 16px;
-    line-height: 1.2;
+    line-height: 1.25;
     border-radius: 8px;
   }
 
   .toolbar__form > button[type='submit'] {
-    flex: 0 0 auto;
     width: auto;
     min-height: 0;
-    padding: 8px 12px;
-    font-size: 0.8rem;
-    font-weight: 600;
+    padding: 8px 14px;
+    font-size: 0.84rem;
     border-radius: 8px;
+    white-space: nowrap;
   }
 
   .toolbar__chat-toggle {
-    width: auto;
+    width: 100%;
     min-height: 0;
     padding: 8px 12px;
-    font-size: 0.8rem;
+    font-size: 0.84rem;
   }
 
   .toolbar__hint,
   .toolbar__mobile-note {
     margin: 0;
     padding: 0;
-    font-size: 0.65rem;
+    font-size: 0.68rem;
     line-height: 1.3;
   }
 
