@@ -30,11 +30,14 @@ body {
 
 #app {
   min-height: 100vh;
+  max-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .toolbar {
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -65,6 +68,24 @@ body {
   flex: 1 1 280px;
   gap: 8px;
   min-width: 0;
+  align-items: flex-start;
+}
+
+.toolbar__field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.toolbar__hint {
+  margin: 0;
+  padding: 0 2px;
+  color: color-mix(in srgb, var(--muted) 55%, var(--bg));
+  font-size: 0.72rem;
+  line-height: 1.35;
+  word-break: break-all;
 }
 
 .toolbar__form input {
@@ -100,19 +121,145 @@ body {
   filter: brightness(1.08);
 }
 
-.stream-grid {
+.toolbar__chat-toggle {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toolbar__chat-toggle:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.main-layout {
   flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  min-width: 0;
+}
+
+.main-layout__streams {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.stream-area {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.stream-area:has(#empty-state:not([hidden])) {
+  min-height: clamp(220px, 45vh, 640px);
+}
+
+.stream-grid {
+  flex: 1 1 auto;
   display: grid;
-  grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr));
+  grid-template-columns: repeat(var(--grid-columns, 1), minmax(0, 1fr));
+  grid-auto-rows: max-content;
   gap: 12px;
   padding: 12px;
   align-content: start;
+  align-items: start;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.chat-panel {
+  width: min(340px, 34vw);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  min-height: 0;
+}
+
+.chat-panel[hidden] {
+  display: none !important;
+}
+
+.chat-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-panel__label {
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chat-panel__select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.chat-panel__select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.chat-panel__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.chat-panel__iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 280px;
+  border: 0;
+}
+
+.chat-panel__message {
+  margin: auto;
+  padding: 24px 20px;
+  max-width: 260px;
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.55;
 }
 
 .stream-card {
   display: flex;
   flex-direction: column;
+  width: 100%;
   min-width: 0;
+  height: max-content;
+  align-self: start;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -181,10 +328,17 @@ body {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
 
+/*
+  Padding-bottom 16:9 box — reliable under flex/grid height pressure.
+  aspect-ratio alone collapses when the only child is position:absolute
+  (no in-flow content), which was squashing every player into a thin strip.
+*/
 .stream-card__player {
   position: relative;
+  flex: 0 0 auto;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: 0;
+  padding-bottom: 56.25%;
   background: #000;
 }
 
@@ -197,16 +351,92 @@ body {
 }
 
 .empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin: 0;
   padding: 24px;
   text-align: center;
   color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.empty-state[hidden] {
+  display: none;
+}
+
+html.show-welcome {
+  overflow: hidden;
+}
+
+html.show-welcome #app {
+  pointer-events: none;
+  user-select: none;
+}
+
+.welcome-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+}
+
+html.show-welcome .welcome-modal {
+  display: flex;
+}
+
+.welcome-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.welcome-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: min(720px, 100%);
+  max-height: min(90vh, 900px);
+  overflow: auto;
+  padding: 24px 22px 20px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 2px);
+  background: var(--surface);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.welcome-modal__enter {
+  display: block;
+  width: 100%;
+  margin-top: 24px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.welcome-modal__enter:hover {
+  filter: brightness(1.08);
 }
 
 .site-footer {
+  flex-shrink: 0;
   border-top: 1px solid var(--border);
   background: var(--surface);
-  padding: 28px 18px 22px;
+  padding: 14px 18px;
 }
 
 .site-intro {
@@ -262,10 +492,42 @@ body {
   font-size: 0.88rem;
 }
 
-.site-intro__note {
-  margin: 24px 0 0;
-  padding-top: 4px;
+.site-footer__source {
+  max-width: 720px;
+  margin: 0 auto 10px;
+  text-align: center;
+  color: var(--muted);
   font-size: 0.88rem;
+}
+
+.site-footer__source a {
+  color: color-mix(in srgb, var(--text) 88%, var(--accent));
+  text-decoration: none;
+}
+
+.site-footer__source a:hover {
+  text-decoration: underline;
+}
+
+.site-credits {
+  max-width: 720px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.site-credits p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.site-credits a {
+  color: color-mix(in srgb, var(--text) 88%, var(--accent));
+  text-decoration: none;
+}
+
+.site-credits a:hover {
+  text-decoration: underline;
 }
 
 .usage-table-wrap {
@@ -303,30 +565,24 @@ body {
   color: var(--muted);
 }
 
-.site-credits {
-  max-width: 720px;
-  margin: 28px auto 0;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
-  text-align: center;
-}
+@media (max-width: 640px) {
+  .main-layout {
+    flex-direction: column;
+  }
 
-.site-credits p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.88rem;
-}
+  .stream-area {
+    min-height: clamp(200px, 38vh, 480px);
+  }
 
-.site-credits a {
-  color: color-mix(in srgb, var(--text) 88%, var(--accent));
-  text-decoration: none;
-}
+  .empty-state {
+    font-size: 1rem;
+    padding: 20px 16px;
+  }
 
-.site-credits a:hover {
-  text-decoration: underline;
-}
+  .chat-panel {
+    display: none;
+  }
 
-@media (max-width: 900px) {
   .stream-grid {
     grid-template-columns: 1fr;
     gap: 16px;
@@ -342,9 +598,7 @@ body {
     padding: 6px 12px;
     font-size: 0.82rem;
   }
-}
 
-@media (max-width: 640px) {
   .toolbar {
     padding: 12px max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left));
   }
@@ -358,15 +612,24 @@ body {
     width: 100%;
   }
 
+  .toolbar__field {
+    width: 100%;
+  }
+
   .toolbar__form input,
-  .toolbar__form button {
+  .toolbar__form button,
+  .toolbar__chat-toggle {
     width: 100%;
     min-height: 44px;
   }
 
   .site-footer {
-    padding: 24px max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom))
+    padding: 12px max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom))
       max(16px, env(safe-area-inset-left));
+  }
+
+  .welcome-modal__panel {
+    padding: 20px 16px 16px;
   }
 
   .site-intro h2 {
@@ -390,5 +653,22 @@ body {
     order: 3;
     width: 100%;
     justify-content: flex-end;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+  .chat-panel {
+    width: min(300px, 32vw);
+  }
+
+  .stream-card__btn {
+    min-height: 36px;
+    padding: 6px 12px;
+  }
+
+  .toolbar__form input,
+  .toolbar__form button,
+  .toolbar__chat-toggle {
+    min-height: 40px;
   }
 }

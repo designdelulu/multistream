@@ -1,12 +1,10 @@
 import {
-  deserializeStream,
+  buildPathFromStreams,
   parseStreamInput,
-  serializeStream,
+  streamsFromPathname,
+  streamsFromSearch,
 } from '../platforms';
 import type { StreamRef } from '../types';
-
-const STORAGE_KEY = 'multistream:streams';
-const DEFAULT_STREAMS = ['twitch:shroud', 'kick:xqc'];
 
 type Listener = () => void;
 
@@ -14,53 +12,19 @@ function createId(platform: string, channel: string): string {
   return `${platform}:${channel}`;
 }
 
-function loadFromQuery(): StreamRef[] {
-  const params = new URLSearchParams(window.location.search);
-  const raw = params.get('streams');
-  if (!raw) return [];
-
-  return raw
-    .split(',')
-    .map((token) => deserializeStream(token))
-    .filter((item): item is Omit<StreamRef, 'id' | 'muted'> => item !== null)
-    .map((item) => ({
-      ...item,
-      id: createId(item.platform, item.channel),
-      muted: true,
-    }));
+function toStreamRefs(items: Omit<StreamRef, 'id' | 'muted'>[]): StreamRef[] {
+  return items.map((item) => ({
+    ...item,
+    id: createId(item.platform, item.channel),
+    muted: true,
+  }));
 }
 
-function loadFromStorage(): StreamRef[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
+function loadFromUrl(): StreamRef[] {
+  const fromPath = toStreamRefs(streamsFromPathname(window.location.pathname));
+  if (fromPath.length > 0) return fromPath;
 
-    const parsed = JSON.parse(raw) as StreamRef[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item) =>
-        item &&
-        (item.platform === 'twitch' || item.platform === 'kick') &&
-        typeof item.channel === 'string' &&
-        typeof item.muted === 'boolean',
-    );
-  } catch {
-    return [];
-  }
-}
-
-function defaultStreams(): StreamRef[] {
-  return DEFAULT_STREAMS.map((token) => {
-    const parsed = deserializeStream(token);
-    if (!parsed) {
-      throw new Error(`Invalid default stream token: ${token}`);
-    }
-    return {
-      ...parsed,
-      id: createId(parsed.platform, parsed.channel),
-      muted: true,
-    };
-  });
+  return toStreamRefs(streamsFromSearch(window.location.search));
 }
 
 function dedupeStreams(streams: StreamRef[]): StreamRef[] {
@@ -73,33 +37,15 @@ function dedupeStreams(streams: StreamRef[]): StreamRef[] {
 }
 
 function syncUrl(streams: StreamRef[]): void {
-  const params = new URLSearchParams(window.location.search);
-  if (streams.length === 0) {
-    params.delete('streams');
-  } else {
-    params.set('streams', streams.map((s) => serializeStream(s)).join(','));
-  }
-
-  const query = params.toString();
-  const next = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+  const next = buildPathFromStreams(streams);
   window.history.replaceState(null, '', next);
 }
 
-function persistStreams(streams: StreamRef[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(streams));
-}
-
 export function createStreamStore() {
-  const fromQuery = loadFromQuery();
-  const fromStorage = loadFromStorage();
-  const initial =
-    fromQuery.length > 0 ? fromQuery : fromStorage.length > 0 ? fromStorage : defaultStreams();
-
-  let streams = dedupeStreams(initial);
+  let streams = dedupeStreams(loadFromUrl());
   const listeners = new Set<Listener>();
 
   syncUrl(streams);
-  persistStreams(streams);
 
   function notify(): void {
     for (const listener of listeners) {
@@ -110,7 +56,6 @@ export function createStreamStore() {
   function setStreams(next: StreamRef[]): void {
     streams = dedupeStreams(next);
     syncUrl(streams);
-    persistStreams(streams);
     notify();
   }
 

@@ -1,3 +1,4 @@
+import { parseStreamInput } from '../platforms';
 import type { StreamStore } from '../state/streams';
 
 export function bindStreamToolbar(store: StreamStore): void {
@@ -16,18 +17,14 @@ export function bindStreamToolbar(store: StreamStore): void {
     const added = store.addStream(value);
     if (!added) {
       input.classList.add('toolbar__input--error');
-      input.setAttribute(
-        'aria-invalid',
-        store.getStreams().some((s) => {
-          const normalized = value.toLowerCase();
-          return (
-            `${s.platform}:${s.channel}` === normalized ||
-            s.channel === normalized.replace(/^@/, '')
-          );
-        })
-          ? 'duplicate'
-          : 'true',
-      );
+      const parsed = parseStreamInput(value);
+      const isDuplicate =
+        parsed !== null &&
+        store.getStreams().some(
+          (stream) =>
+            stream.platform === parsed.platform && stream.channel === parsed.channel,
+        );
+      input.setAttribute('aria-invalid', isDuplicate ? 'duplicate' : 'true');
       return;
     }
 

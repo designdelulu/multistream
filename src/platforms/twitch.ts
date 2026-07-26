@@ -24,7 +24,7 @@ export const twitchAdapter: PlatformAdapter = {
     const value = normalizeInput(input);
     if (!value) return null;
 
-    const explicit = value.match(/^twitch:([a-zA-Z0-9_]+)$/i);
+    const explicit = value.match(/^(?:twitch|t):([a-zA-Z0-9_]+)$/i);
     if (explicit) {
       return { platform: 'twitch', channel: explicit[1].toLowerCase() };
     }
@@ -56,11 +56,23 @@ export const twitchAdapter: PlatformAdapter = {
       channel: ref.channel,
       muted: String(opts.muted),
     });
+    if (opts.autoplay !== false) {
+      params.set('autoplay', 'true');
+    }
     params.append('parent', opts.parent);
     if (opts.parent !== 'localhost') {
       params.append('parent', '127.0.0.1');
     }
     return `https://player.twitch.tv/?${params.toString()}`;
+  },
+
+  buildChatEmbedUrl(ref, opts) {
+    const params = new URLSearchParams();
+    params.append('parent', opts.parent);
+    if (opts.parent !== 'localhost') {
+      params.append('parent', '127.0.0.1');
+    }
+    return `https://www.twitch.tv/embed/${encodeURIComponent(ref.channel)}/chat?${params.toString()}`;
   },
 
   displayName(ref) {

@@ -10,6 +10,7 @@ export interface StreamRef {
 export interface EmbedOptions {
   muted: boolean;
   parent: string;
+  autoplay?: boolean;
 }
 
 export interface PlatformAdapter {
@@ -17,6 +18,7 @@ export interface PlatformAdapter {
   label: string;
   parseInput(input: string): Omit<StreamRef, 'id' | 'muted'> | null;
   buildEmbedUrl(ref: Pick<StreamRef, 'platform' | 'channel'>, opts: EmbedOptions): string;
+  buildChatEmbedUrl?(ref: Pick<StreamRef, 'platform' | 'channel'>, opts: EmbedOptions): string;
   displayName(ref: Pick<StreamRef, 'channel'>): string;
 }
 

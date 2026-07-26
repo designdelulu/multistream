@@ -8,7 +8,7 @@ export const kickAdapter: PlatformAdapter = {
     const value = input.trim().replace(/^@/, '');
     if (!value) return null;
 
-    const explicit = value.match(/^kick:([a-zA-Z0-9_-]+)$/i);
+    const explicit = value.match(/^(?:kick|k):([a-zA-Z0-9_-]+)$/i);
     if (explicit) {
       return { platform: 'kick', channel: explicit[1].toLowerCase() };
     }
@@ -34,6 +34,7 @@ export const kickAdapter: PlatformAdapter = {
   },
 
   buildEmbedUrl(ref, opts) {
+    // Official Kick embed params only: muted + autoplay.
     const params = new URLSearchParams({
       muted: String(opts.muted),
       autoplay: 'true',

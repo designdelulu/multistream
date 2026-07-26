@@ -17,11 +17,24 @@ MultiStream.cc is a lightweight browser viewer for multi-stream watch parties, c
 
 - **Twitch + Kick** on the same page
 - **Responsive grid** that scales players while preserving aspect ratio
-- **Shareable URLs** via `?streams=` query parameters
+- **Shareable path URLs** like `/t:username/k:username`
 - **Mute / remove** controls per stream
+- **Twitch chat sidebar** (desktop and tablet)
 - **No backend required** — static deploy, iframe embeds only
 
 Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) project, rebuilt for modern platforms and maintainability.
+
+---
+
+## Device compatibility
+
+| Device | Layout | Chat | Notes |
+|---|---|---|---|
+| **Desktop** (>1024px) | Multi-column grid, optimized sizing | Show / hide toggle | Best experience for 2+ streams |
+| **Tablet / iPad** (641px–1024px) | Multi-column grid, optimized sizing | Show / hide toggle | Touch-friendly controls; chat panel slightly narrower |
+| **Phone** (≤640px) | Single-column scroll | Hidden | Streams stack vertically; toolbar stacks for easy tapping |
+
+Performance depends on how many live embeds are open — each stream runs a full Twitch or Kick player in its own iframe. Fewer streams = smoother playback, especially on laptops and phones.
 
 ---
 
@@ -32,7 +45,7 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (default `http://localhost:5173/`). First visit loads **twitch:shroud** and **kick:xqc** side by side.
+Open the URL Vite prints (default `http://localhost:5173/`). Add streams from the toolbar or open a path URL like `/t:username/k:username`.
 
 ### Production build
 
@@ -58,7 +71,9 @@ Upload everything inside **`dist/`** to your domain’s web root (e.g. `multistr
 dist/
 ├── index.html
 ├── assets/
+├── og-image.png
 ├── robots.txt
+├── sitemap.xml
 └── .htaccess
 ```
 
@@ -70,7 +85,7 @@ Steps:
 4. Confirm `index.html` sits directly in the domain root.
 5. Visit `https://multistream.cc/` — Twitch embeds will automatically use `multistream.cc` as the `parent` domain.
 
-Query-param URLs like `?streams=twitch:shroud,kick:xqc` work without any server-side routing config.
+Path URLs like `/t:username/k:username` require the included `.htaccess` SPA fallback on Apache/DreamHost.
 
 ---
 
@@ -78,22 +93,27 @@ Query-param URLs like `?streams=twitch:shroud,kick:xqc` work without any server-
 
 ### Share a layout
 
-List streams in the `streams` query parameter, comma-separated:
+Add streams to the URL path, separated by slashes. Use `t:` for Twitch and `k:` for Kick (lowercase prefixes):
 
 ```
-https://multistream.cc/?streams=twitch:shroud,kick:xqc
+https://multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username
 ```
+
+Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:username`) still work.
 
 ### Add streams from the toolbar
 
+Enter one stream at a time — a username, platform prefix, or full channel URL:
+
 | You enter | Result |
 |---|---|
-| `shroud` | Twitch channel **shroud** |
-| `kick.com/xqc` | Kick channel **xqc** |
-| `twitch:shroud` | Twitch (explicit prefix) |
-| `kick:xqc` | Kick (explicit prefix) |
+| `t:username` | Twitch channel |
+| `k:username` | Kick channel |
+| `twitch.tv/username` | Twitch from URL |
+| `kick.com/username` | Kick from URL |
+| `username` | Twitch (plain username) |
 
-Plain usernames default to Twitch. Use a full URL or `kick:` prefix for Kick channels.
+The gray hint below the input shows an example multi-stream path: `multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username`.
 
 ---
 
@@ -104,14 +124,15 @@ Vanilla **TypeScript + Vite** — no React, no server.
 ```
 src/
 ├── platforms/     # Twitch & Kick adapters (parse input, build embed URLs)
-├── state/         # Stream list, URL sync, localStorage
-├── components/    # Grid, toolbar, player cards
+├── state/         # Stream list, chat visibility, URL sync
+├── components/    # Grid, toolbar, chat panel, player cards
+├── lib/           # Lazy iframe loading, viewport helpers
 └── styles/        # Layout and UI
 ```
 
 Each platform implements a small adapter:
 
-- `parseInput()` — username, URL, or `platform:channel`
+- `parseInput()` — username, URL, or `t:` / `k:` prefix
 - `buildEmbedUrl()` — iframe src with correct embed parameters
 
 Adding a third platform later means adding one adapter file and registering it — no changes to the grid or state layer.
@@ -122,14 +143,16 @@ Adding a third platform later means adding one adapter file and registering it �
 
 - Players must be served over **HTTP(S)** — `file://` will not work.
 - **Twitch** embeds require a matching `parent` domain (injected automatically from `window.location.hostname`).
-- **Kick** embeds use `https://player.kick.com/{username}` with `autoplay` and `muted` query params.
-- **Mute/unmute** reloads the iframe; cross-origin players do not expose volume APIs to the parent page.
+- **Kick** embeds use `https://player.kick.com/{username}?autoplay=true&muted=true&parent={domain}`. Kick loads immediately with a fresh iframe. Player height stays 16:9 from width — shrinking below that hides Kick’s volume slider and compact hover controls (a common embed issue when iframes are squeezed into a fixed viewport height).
+- **Kick volume controls** are inside the Kick player UI. Use **Unmute** on the card header, then adjust volume in the player. If controls look small or missing, scroll the grid or reduce stream count so each player has more space.
+- **Mute/unmute** reloads the affected iframe with updated embed params. Cross-origin players do not expose volume APIs to the parent page — use the in-player volume slider after unmuting.
+- **Chat** is Twitch-only (Kick has no official chat embed). Hidden on phones.
 
 ---
 
 ## Social / SEO image
 
-Add a repository and Open Graph image at `public/og-image.png` (recommended **1200×630**). The site meta tags already reference `https://multistream.cc/og-image.png`.
+The Open Graph image lives at `public/og-image.png` (used by the site and this README). Meta tags reference `https://multistream.cc/og-image.png`.
 
 ---
 

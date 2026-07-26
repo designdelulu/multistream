@@ -1,27 +1,56 @@
-import { renderStreamGrid, updateGridColumns } from './components/StreamGrid';
+import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
+import { syncStreamGrid, updateGridLayout } from './components/StreamGrid';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
+import { bindWelcomeModal } from './components/WelcomeModal';
+import { phoneMediaQuery } from './lib/viewport';
+import { createChatStore } from './state/chat';
 import { createStreamStore } from './state/streams';
 
 const store = createStreamStore();
+const chatStore = createChatStore(store);
 const grid = document.querySelector<HTMLElement>('#stream-grid');
+const chatPanel = document.querySelector<HTMLElement>('#chat-panel');
+const streamArea = document.querySelector<HTMLElement>('.stream-area');
+const mainLayout = document.querySelector<HTMLElement>('.main-layout');
 
-if (!grid) {
-  throw new Error('#stream-grid not found');
+if (!grid || !chatPanel || !streamArea || !mainLayout) {
+  throw new Error('Required layout elements not found');
 }
 
 const gridEl = grid;
+const chatPanelEl = chatPanel;
 
-function render(): void {
-  renderStreamGrid(gridEl, store);
-  updateGridColumns(gridEl);
-  updateEmptyState(store);
+function updateLayout(): void {
+  requestAnimationFrame(() => {
+    updateGridLayout(gridEl);
+  });
 }
 
+function renderStreams(): void {
+  syncStreamGrid(gridEl, store);
+  updateEmptyState(store);
+  updateLayout();
+}
+
+bindWelcomeModal();
 bindStreamToolbar(store);
-store.subscribe(render);
+bindChatToggle(chatStore);
+bindChatPanel(chatPanelEl, chatStore);
+store.subscribe(renderStreams);
 
-const mobileQuery = window.matchMedia('(max-width: 900px)');
-window.addEventListener('resize', () => updateGridColumns(gridEl));
-mobileQuery.addEventListener('change', () => updateGridColumns(gridEl));
+const phoneQuery = phoneMediaQuery();
 
-render();
+function handleViewportChange(): void {
+  updateLayout();
+}
+
+window.addEventListener('resize', handleViewportChange);
+phoneQuery.addEventListener('change', handleViewportChange);
+
+const resizeObserver = new ResizeObserver(() => {
+  updateGridLayout(gridEl);
+});
+resizeObserver.observe(mainLayout);
+resizeObserver.observe(streamArea);
+
+renderStreams();
