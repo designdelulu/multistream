@@ -2,6 +2,8 @@
 
 Watch multiple **Twitch** and **Kick** live streams on one page — in a responsive grid that keeps every player as large as possible at 16:9.
 
+![MultiStream.cc — Watch Twitch and Kick streams together](./public/og-image.png)
+
 **Live site:** [multistream.cc](https://multistream.cc)  
 **Repository:** [github.com/designdelulu/multistream](https://github.com/designdelulu/multistream)
 
@@ -40,6 +42,35 @@ npm run preview
 ```
 
 Deploy the `dist/` folder to any static host (Cloudflare Pages, Netlify, Vercel, S3, etc.).
+
+### DreamHost (multistream.cc)
+
+Do **not** upload the whole project folder. DreamHost needs the **built output**:
+
+```bash
+npm install
+npm run build
+```
+
+Upload everything inside **`dist/`** to your domain’s web root (e.g. `multistream.cc/` → `~/multistream.cc/` on DreamHost):
+
+```
+dist/
+├── index.html
+├── assets/
+├── robots.txt
+└── .htaccess
+```
+
+Steps:
+
+1. Run `npm run build` locally whenever you change the app.
+2. In DreamHost File Manager or FTP, open the folder for **multistream.cc**.
+3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root.
+4. Confirm `index.html` sits directly in the domain root.
+5. Visit `https://multistream.cc/` — Twitch embeds will automatically use `multistream.cc` as the `parent` domain.
+
+Query-param URLs like `?streams=twitch:shroud,kick:xqc` work without any server-side routing config.
 
 ---
 

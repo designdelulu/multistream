@@ -78,6 +78,7 @@ export function updateGridColumns(container: HTMLElement): void {
     return;
   }
 
-  const columns = count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4;
+  const isMobile = window.matchMedia('(max-width: 900px)').matches;
+  const columns = isMobile ? 1 : count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4;
   container.style.setProperty('--grid-columns', String(columns));
 }

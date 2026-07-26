@@ -20,6 +20,8 @@ function render(): void {
 bindStreamToolbar(store);
 store.subscribe(render);
 
+const mobileQuery = window.matchMedia('(max-width: 900px)');
 window.addEventListener('resize', () => updateGridColumns(gridEl));
+mobileQuery.addEventListener('change', () => updateGridColumns(gridEl));
 
 render();
