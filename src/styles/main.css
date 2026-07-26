@@ -137,6 +137,8 @@ body {
   border-radius: 8px;
   background: var(--bg);
   color: var(--text);
+  /* ≥16px prevents iOS Safari from zooming the page on focus */
+  font-size: 16px;
 }
 
 .toolbar__form input:focus {
@@ -267,6 +269,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font: inherit;
+  font-size: 16px;
 }
 
 .chat-panel__select:focus {
@@ -678,12 +681,26 @@ html.show-welcome .welcome-modal {
 }
 
 @media (max-width: 640px) {
+  /* Let the page scroll — locking 100vh + overflow:hidden breaks after iOS keyboard/zoom. */
+  #app {
+    max-height: none;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
   .main-layout {
     flex-direction: column;
+    flex: 1 0 auto;
+  }
+
+  .main-layout__streams,
+  .stream-area {
+    flex: 1 0 auto;
+    min-height: 0;
   }
 
   .stream-area {
-    min-height: clamp(200px, 38vh, 480px);
+    min-height: 0;
   }
 
   .empty-state {
@@ -699,16 +716,17 @@ html.show-welcome .welcome-modal {
     grid-template-columns: 1fr;
     gap: 16px;
     padding: 12px 12px 16px;
+    overflow: visible;
+    align-content: start;
   }
 
-  .stream-card__controls {
-    margin-left: auto;
-  }
-
-  .stream-card__btn {
-    min-height: 36px;
-    padding: 6px 12px;
-    font-size: 0.82rem;
+  /*
+   * Desktop packing sets height: var(--player-height). On phones that var is
+   * cleared, so absolute iframes collapsed the player to 0px — no video.
+   */
+  .stream-grid:not(:empty) .stream-card__player {
+    aspect-ratio: 16 / 9;
+    height: auto;
   }
 
   .toolbar {
@@ -796,23 +814,37 @@ html.show-welcome .welcome-modal {
     font-size: 0.72rem;
   }
 
+  /* One compact row: badge · name · Remove — was stacking to a huge header. */
   .stream-card__header {
-    padding: 10px 12px;
-  }
-
-  .stream-card__title {
-    flex: 1 1 100%;
-    order: 2;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 4px 8px;
+    min-height: 0;
   }
 
   .stream-card__badge {
-    order: 1;
+    padding: 1px 6px;
+    font-size: 0.62rem;
+  }
+
+  .stream-card__title {
+    flex: 1 1 auto;
+    font-size: 0.82rem;
+    font-weight: 600;
   }
 
   .stream-card__controls {
-    order: 3;
-    width: 100%;
-    justify-content: flex-end;
+    flex: 0 0 auto;
+    width: auto;
+    margin-left: 0;
+  }
+
+  .stream-card__btn {
+    min-height: 0;
+    padding: 2px 8px;
+    font-size: 0.68rem;
+    border-radius: 4px;
+    line-height: 1.2;
   }
 }
 

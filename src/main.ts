@@ -56,6 +56,7 @@ function handleViewportChange(): void {
 
 window.addEventListener('resize', handleViewportChange);
 phoneQuery.addEventListener('change', handleViewportChange);
+window.visualViewport?.addEventListener('resize', handleViewportChange);
 
 const resizeObserver = new ResizeObserver(() => {
   updateGridLayout(gridEl);

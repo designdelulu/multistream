@@ -200,6 +200,7 @@ export function updateGridLayout(container: HTMLElement): void {
   const areaWidth = streamArea.clientWidth - GRID_PADDING;
 
   if (isStackedStreamLayout()) {
+    // Phone: natural 16:9 stack (CSS). Still set Kick scale from column width.
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
     container.style.removeProperty('--player-width');
