@@ -1,0 +1,32 @@
+{
+  "name": "multistream",
+  "version": "0.1.0",
+  "description": "Watch multiple Twitch and Kick live streams on one page — MultiStream.cc",
+  "type": "module",
+  "author": "Eric Barker (https://ericbarker.co)",
+  "license": "MIT",
+  "homepage": "https://multistream.cc",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/designdelulu/multistream.git"
+  },
+  "bugs": {
+    "url": "https://github.com/designdelulu/multistream/issues"
+  },
+  "keywords": [
+    "multistream",
+    "twitch",
+    "kick",
+    "live-stream",
+    "multi-stream-viewer"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}

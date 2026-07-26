@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MultiStream.cc — Watch Twitch &amp; Kick Streams Together</title>
+    <meta
+      name="description"
+      content="Watch multiple Twitch and Kick live streams on one page. MultiStream.cc builds a shareable multi-stream layout that keeps every player at maximum size in 16:9."
+    />
+    <meta
+      name="keywords"
+      content="MultiStream, multistream, Twitch, Kick, multi stream viewer, watch multiple streams, live stream grid, Twitch and Kick together"
+    />
+    <meta name="author" content="Eric Barker" />
+    <link rel="canonical" href="https://multistream.cc/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://multistream.cc/" />
+    <meta property="og:title" content="MultiStream.cc — Watch Twitch &amp; Kick Streams Together" />
+    <meta
+      property="og:description"
+      content="Watch multiple Twitch and Kick live streams on one page. Share your layout with a URL and let MultiStream optimize the grid for you."
+    />
+    <meta property="og:site_name" content="MultiStream.cc" />
+    <meta property="og:image" content="https://multistream.cc/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="MultiStream.cc — Watch Twitch &amp; Kick Streams Together" />
+    <meta
+      name="twitter:description"
+      content="Watch multiple Twitch and Kick live streams on one page. Share your layout with a URL."
+    />
+    <meta name="twitter:image" content="https://multistream.cc/og-image.png" />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar">
+        <h1 class="toolbar__title">
+          <a href="/" class="toolbar__brand">MultiStream.cc</a>
+        </h1>
+        <form id="add-stream-form" class="toolbar__form">
+          <input
+            id="stream-input"
+            type="text"
+            placeholder="Username or URL (e.g. shroud, kick.com/xqc)"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="submit">Add Stream</button>
+        </form>
+      </header>
+
+      <main id="stream-grid" class="stream-grid" aria-live="polite"></main>
+
+      <p id="empty-state" class="empty-state" hidden>
+        No streams yet. Add a Twitch or Kick channel above, or open an example layout below.
+      </p>
+
+      <footer class="site-footer">
+        <section class="site-intro" aria-labelledby="intro-heading">
+          <h2 id="intro-heading">Watch Twitch and Kick streams together</h2>
+          <p>
+            MultiStream.cc lets you watch as many Twitch and Kick live streams as you like on a
+            single page — as many as your computer can comfortably handle. Add channels from the
+            toolbar, or open a link with your lineup already in the URL.
+          </p>
+          <p>
+            MultiStream arranges players in a responsive grid and scales each stream as large as
+            possible while keeping a clean 16:9 aspect ratio.
+          </p>
+
+          <h3>Share a layout with a link</h3>
+          <p>
+            Put your streams in the <code>streams</code> query parameter, separated by commas:
+          </p>
+          <p class="site-intro__example">
+            <a href="/?streams=twitch:shroud,kick:xqc">
+              multistream.cc/?streams=twitch:shroud,kick:xqc
+            </a>
+          </p>
+
+          <h3>How to add streams</h3>
+          <div class="usage-table-wrap">
+            <table class="usage-table">
+              <thead>
+                <tr>
+                  <th scope="col">You enter</th>
+                  <th scope="col">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>shroud</code></td>
+                  <td>Twitch channel <strong>shroud</strong></td>
+                </tr>
+                <tr>
+                  <td><code>kick.com/xqc</code></td>
+                  <td>Kick channel <strong>xqc</strong></td>
+                </tr>
+                <tr>
+                  <td><code>twitch:shroud</code></td>
+                  <td>Twitch channel (explicit)</td>
+                </tr>
+                <tr>
+                  <td><code>kick:xqc</code></td>
+                  <td>Kick channel (explicit)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p class="site-intro__note">
+            Source code:
+            <a href="https://github.com/designdelulu/multistream">github.com/designdelulu/multistream</a>
+          </p>
+        </section>
+
+        <section class="site-credits">
+          <p>
+            Built by
+            <a href="https://ericbarker.co" rel="author">Eric Barker</a>.
+            A product of
+            <a href="https://designdelulu.com">Design Delulu</a>.
+          </p>
+        </section>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

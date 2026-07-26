@@ -1,0 +1,342 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d0d0f;
+  --surface: #17171a;
+  --border: #2a2a30;
+  --text: #f3f3f5;
+  --muted: #9b9ba8;
+  --accent: #9146ff;
+  --kick: #53fc18;
+  --danger: #ff5d5d;
+  --radius: 10px;
+  --grid-columns: 2;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.toolbar__title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.toolbar__brand {
+  color: inherit;
+  text-decoration: none;
+}
+
+.toolbar__brand:hover {
+  color: color-mix(in srgb, var(--accent) 80%, white);
+}
+
+.toolbar__form {
+  display: flex;
+  flex: 1 1 280px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbar__form input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.toolbar__form input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.toolbar__form input.toolbar__input--error {
+  border-color: var(--danger);
+}
+
+.toolbar__form button {
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toolbar__form button:hover {
+  filter: brightness(1.08);
+}
+
+.stream-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+  align-content: start;
+}
+
+.stream-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.stream-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stream-card__badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stream-card__badge--twitch {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: #d5b8ff;
+}
+
+.stream-card__badge--kick {
+  background: color-mix(in srgb, var(--kick) 18%, transparent);
+  color: #b8ff9d;
+}
+
+.stream-card__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.stream-card__controls {
+  display: flex;
+  gap: 6px;
+}
+
+.stream-card__btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.stream-card__btn:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.stream-card__btn--danger {
+  color: #ffb4b4;
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.stream-card__player {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+
+.stream-card__iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.empty-state {
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 28px 18px 22px;
+}
+
+.site-intro {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.site-intro h2 {
+  margin: 0 0 10px;
+  font-size: 1.25rem;
+  font-weight: 650;
+}
+
+.site-intro h3 {
+  margin: 22px 0 8px;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--text) 92%, var(--muted));
+}
+
+.site-intro p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.site-intro a {
+  color: color-mix(in srgb, var(--accent) 75%, white);
+  text-decoration: none;
+}
+
+.site-intro a:hover {
+  text-decoration: underline;
+}
+
+.site-intro code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-size: 0.92em;
+}
+
+.site-intro__example {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  word-break: break-all;
+}
+
+.site-intro__example a {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88rem;
+}
+
+.site-intro__note {
+  margin-top: 18px;
+  font-size: 0.88rem;
+}
+
+.usage-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.usage-table th,
+.usage-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-table tr:last-child td,
+.usage-table tr:last-child th {
+  border-bottom: 0;
+}
+
+.usage-table th {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  font-weight: 650;
+}
+
+.usage-table td {
+  color: var(--muted);
+}
+
+.site-credits {
+  max-width: 720px;
+  margin: 22px auto 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.site-credits p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.site-credits a {
+  color: color-mix(in srgb, var(--text) 88%, var(--accent));
+  text-decoration: none;
+}
+
+.site-credits a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+  .stream-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .toolbar {
+    padding: 12px;
+  }
+
+  .toolbar__form {
+    flex-direction: column;
+  }
+
+  .toolbar__form button {
+    width: 100%;
+  }
+}
