@@ -1,5 +1,9 @@
 import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
-import { syncStreamGrid, updateGridLayout } from './components/StreamGrid';
+import {
+  bindTabVisibilityPlayers,
+  syncStreamGrid,
+  updateGridLayout,
+} from './components/StreamGrid';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
 import { bindWelcomeModal } from './components/WelcomeModal';
 import { phoneMediaQuery } from './lib/viewport';
@@ -40,6 +44,7 @@ bindWelcomeModal();
 bindStreamToolbar(store);
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
+bindTabVisibilityPlayers(gridEl);
 store.subscribe(renderStreams);
 chatStore.subscribe(updateLayout);
 

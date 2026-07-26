@@ -1,6 +1,6 @@
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
-import type { StreamRef } from '../types';
+import type { Platform, StreamRef } from '../types';
 import type { StreamStore } from '../state/streams';
 
 /**
@@ -85,7 +85,6 @@ function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement
     } catch {
       // Older browsers ignore this.
     }
-    iframe.src = buildEmbedUrl(stream, true, { autoplay: true });
 
     const kickFrame = document.createElement('div');
     kickFrame.className = 'stream-card__kick-frame';
@@ -93,12 +92,58 @@ function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement
     player.append(kickFrame);
   } else {
     iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
-    iframe.src = buildEmbedUrl(stream, true);
     player.append(iframe);
+  }
+
+  // Kick keeps playing in background tabs; unload while hidden (Twitch pauses itself).
+  if (document.hidden) {
+    iframe.dataset.tabFrozen = '1';
+    iframe.src = 'about:blank';
+  } else {
+    iframe.src = buildEmbedUrl(stream, true, {
+      autoplay: stream.platform === 'kick' ? true : undefined,
+    });
   }
 
   card.append(header, player);
   return card;
+}
+
+/** Stop all stream embeds (Kick ignores tab backgrounding and keeps playing audio). */
+export function freezeStreamPlayers(container: HTMLElement): void {
+  for (const iframe of container.querySelectorAll<HTMLIFrameElement>('.stream-card__iframe')) {
+    if (iframe.dataset.tabFrozen === '1') continue;
+    iframe.dataset.tabFrozen = '1';
+    iframe.src = 'about:blank';
+  }
+}
+
+/** Reload muted embeds after the tab is visible again. */
+export function resumeStreamPlayers(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
+    const platform = card.dataset.platform as Platform | undefined;
+    const channel = card.dataset.channel;
+    if (!iframe || !platform || !channel) continue;
+    if (iframe.dataset.tabFrozen !== '1') continue;
+
+    delete iframe.dataset.tabFrozen;
+    iframe.src = buildEmbedUrl(
+      { platform, channel },
+      true,
+      platform === 'kick' ? { autoplay: true } : undefined,
+    );
+  }
+}
+
+export function bindTabVisibilityPlayers(container: HTMLElement): void {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      freezeStreamPlayers(container);
+    } else {
+      resumeStreamPlayers(container);
+    }
+  });
 }
 
 export function syncStreamGrid(container: HTMLElement, store: StreamStore): void {
