@@ -9,9 +9,10 @@ import type { StreamStore } from '../state/streams';
  * than that — so Kick iframes are rendered at ≥769px and CSS-scaled down into
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  *
- * Headers-hidden matches MultistreamGrid: video fills the card alone; name /
- * focus / drag appear as on-video hover chrome (opacity only). Chrome may still
- * pause Twitch while overlays are visible — mouseleave remounts the embed.
+ * Twitch Requirement 1.3: never obscure the embed. Headers-hidden keeps the
+ * video alone at rest; on card hover the player shrinks and a toolbar opens
+ * BELOW the iframe (not over it). No mouseleave remount — entering the iframe
+ * fires leave on the parent and would reload mute controls in a loop.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
@@ -62,7 +63,7 @@ function streamIframe(card: HTMLElement): HTMLIFrameElement | null {
   return card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
 }
 
-function mountTwitchIframe(card: HTMLElement, muted: boolean, force = false): void {
+function mountTwitchIframe(card: HTMLElement, muted: boolean): void {
   const iframe = streamIframe(card);
   const channel = card.dataset.channel;
   if (!iframe || !channel) return;
@@ -74,7 +75,7 @@ function mountTwitchIframe(card: HTMLElement, muted: boolean, force = false): vo
   iframe.dataset.embedMuted = muted ? '1' : '0';
   card.dataset.embedMuted = muted ? '1' : '0';
 
-  if (!force && !isBlankIframeSrc(iframe.src)) {
+  if (!isBlankIframeSrc(iframe.src)) {
     try {
       if (new URL(iframe.src).href === new URL(nextSrc).href) {
         return;
@@ -421,6 +422,10 @@ function createPlayerElement(
     player.append(iframe);
   }
 
+  // Toolbar is a sibling BELOW the player — never stacked over the iframe.
+  const toolbar = document.createElement('div');
+  toolbar.className = 'stream-card__toolbar';
+
   const nameBadge = document.createElement('div');
   nameBadge.className = 'stream-card__name-badge';
 
@@ -441,27 +446,19 @@ function createPlayerElement(
   const overlayControls = document.createElement('div');
   overlayControls.className = 'stream-card__overlay-controls';
 
-  const overlayFocus = document.createElement('div');
+  const overlayFocus = document.createElement('button');
+  overlayFocus.type = 'button';
   overlayFocus.className = 'stream-card__overlay-focus';
   overlayFocus.title = 'Focus stream';
-  overlayFocus.setAttribute('role', 'button');
-  overlayFocus.setAttribute('tabindex', '0');
   overlayFocus.setAttribute('aria-label', 'Focus stream in browser window');
   overlayFocus.setAttribute('aria-pressed', 'false');
   overlayFocus.textContent = '🔍';
   overlayFocus.addEventListener('click', () => toggleStreamFocus(container, stream.id));
-  overlayFocus.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      toggleStreamFocus(container, stream.id);
-    }
-  });
 
-  const overlayRemove = document.createElement('div');
+  const overlayRemove = document.createElement('button');
+  overlayRemove.type = 'button';
   overlayRemove.className = 'stream-card__overlay-remove';
   overlayRemove.title = 'Remove stream';
-  overlayRemove.setAttribute('role', 'button');
-  overlayRemove.setAttribute('tabindex', '0');
   overlayRemove.setAttribute('aria-label', 'Remove stream');
   overlayRemove.textContent = '×';
   overlayRemove.addEventListener('click', () => {
@@ -471,16 +468,6 @@ function createPlayerElement(
     }
     store.removeStream(stream.id);
   });
-  overlayRemove.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      if (focusedStreamId === stream.id) {
-        setFocusedStream(container, null);
-        return;
-      }
-      store.removeStream(stream.id);
-    }
-  });
 
   overlayControls.append(overlayFocus, overlayRemove);
 
@@ -488,46 +475,15 @@ function createPlayerElement(
   dragHandle.className = 'stream-card__drag-handle';
   dragHandle.title = 'Drag to reorder';
   dragHandle.setAttribute('aria-label', 'Drag to reorder');
-  dragHandle.textContent = '⠿ drag to reorder';
+  dragHandle.textContent = '⠿ drag';
 
-  // MultistreamGrid: overlays are siblings of the iframe inside the cell.
-  // Mount embed first, then append chrome (iframe already has src for Twitch).
-  card.append(header, player);
+  toolbar.append(nameBadge, dragHandle, overlayControls);
+  card.append(header, player, toolbar);
 
   if (document.hidden) {
     card.dataset.tabFrozen = '1';
-  } else if (stream.platform === 'twitch') {
-    // Always start muted — hover remount must not reintroduce audio.
-    iframe.src = buildEmbedUrl(
-      { platform: 'twitch', channel: stream.channel },
-      true,
-      { autoplay: true },
-    );
-    iframe.dataset.embedMuted = '1';
-    card.dataset.embedMuted = '1';
   } else {
     mountStreamMedia(card, true);
-  }
-
-  player.append(nameBadge, overlayControls, dragHandle);
-
-  // Chrome may pause Twitch while on-video chrome is visible; remount on leave.
-  // Always remount muted — never restore sound from hover recovery.
-  if (stream.platform === 'twitch') {
-    let recoverTimer = 0;
-    player.addEventListener('mouseleave', () => {
-      window.clearTimeout(recoverTimer);
-      recoverTimer = window.setTimeout(() => {
-        if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
-        // Focused stream is intentionally unmuted; leave it alone.
-        if (focusedStreamId === stream.id) return;
-        card.dataset.embedMuted = '1';
-        mountTwitchIframe(card, true, true);
-      }, 120);
-    });
-    player.addEventListener('mouseenter', () => {
-      window.clearTimeout(recoverTimer);
-    });
   }
 
   return card;

@@ -14,9 +14,9 @@ Watch Twitch and Kick on one page. This guide covers the features and how to use
 | Username dropdown | Type a name (or `@name`) and choose Twitch or Kick |
 | Share link | Copy the current lineup URL from the toolbar |
 | Clear all | Remove every stream (with confirmation) |
-| Hide headers | Compact grid; hover video for focus, remove, and drag |
-| Drag reorder | Drag card headers — or the on-video drag handle when headers are hidden |
-| Focus (headers hidden) | Magnifying glass on video hover (distinct from embed fullscreen) |
+| Hide headers | Compact grid; hover a card to reveal controls below the video (never over it) |
+| Drag reorder | Drag card headers — or the drag handle in the hover toolbar when headers are hidden |
+| Focus (headers hidden) | Magnifying glass in the hover toolbar |
 | Session restore | Last lineup saved in `localStorage`; share URLs in the path take priority |
 | Focus mode | Expand one stream, unmute it, open Twitch chat when available |
 | Twitch chat | Docked sidebar on desktop/tablet (Kick has no official chat embed) |
@@ -49,15 +49,14 @@ Leading `@` is stripped automatically.
 - Click the expand (focus) control on a card (header button, or magnifying glass in no-header mode).
 - That stream fills the area below the toolbar and reloads **unmuted**.
 - Twitch chat opens automatically for focused Twitch streams.
-- In no-header mode, the focused stream’s **header bar reappears** so you can × minimize — hover overlays are hidden during focus so playback is not interrupted.
+- In no-header mode, the focused stream’s **header bar reappears** so you can × minimize.
 - Press **Escape** or × / focus again to exit. Twitch remounts muted.
 
 ### Hide headers
 
 - Toolbar **Hide headers** collapses card top bars for a denser view (preference is remembered).
-- Hover a video for MultistreamGrid-style controls: name badge, magnifying-glass **Focus**, **×** remove, and a bottom **drag to reorder** handle.
-- Chrome may pause Twitch while those overlays are visible; moving the mouse away remounts the embed so playback resumes.
-- Live viewer counts beside names are planned for a future update (Twitch requires a server-side API proxy).
+- At rest the card is **video only**. Hover the card and the player shrinks slightly so a control strip appears **below** the iframe (name, drag, focus, remove) — never stacked over the embed (Twitch requirement 1.3).
+- This avoids Chrome pause-on-overlay and the mute-control refresh loop from remounting embeds.
 
 ---
 
