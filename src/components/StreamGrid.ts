@@ -9,52 +9,15 @@ import type { StreamStore } from '../state/streams';
  * than that — so Kick iframes are rendered at ≥769px and CSS-scaled down into
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  *
- * flat-dom experiment (branch flat-dom): Twitch uses MultistreamGrid stream-box DOM —
- * iframe + hover overlays as direct children of .stream-card (no player wrapper).
- * Iframe src is set before overlay siblings mount; overlays always display:flex/block
- * with opacity 0. Headers-hidden grid uses count classes + explicit container height.
+ * Chrome pauses Twitch when anything with opacity > 0 stacks over the iframe.
+ * Headers-hidden controls live in a gutter BELOW the player (never on-video).
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
-
-const MSG_GRID_COUNT_CLASSES = [
-  'count-0',
-  'count-1',
-  'count-2',
-  'count-3',
-  'count-4',
-  'count-5',
-  'count-6',
-  'count-7',
-  'count-8',
-  'count-many',
-] as const;
-
-function syncMsgGridCountClass(container: HTMLElement, count: number): void {
-  for (const className of MSG_GRID_COUNT_CLASSES) {
-    container.classList.remove(className);
-  }
-  container.classList.add(count > 8 ? 'count-many' : `count-${count}`);
-}
-
-function updateMsgGridLayout(container: HTMLElement): void {
-  clearLayoutVars(container);
-  const streamArea = container.closest('.stream-area');
-  if (streamArea instanceof HTMLElement) {
-    // MultistreamGrid updateGridClass: pin grid height to the streams pane.
-    container.style.height = `${streamArea.clientHeight}px`;
-  } else {
-    container.style.removeProperty('height');
-  }
-}
-
-function usesMsgCssGrid(): boolean {
-  return (
-    document.documentElement.classList.contains('headers-hidden') && focusedStreamId === null
-  );
-}
+/** Slim control strip below the embed when headers are hidden. */
+const CARD_GUTTER_HEIGHT = 40;
 
 type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
 
@@ -445,7 +408,23 @@ function createPlayerElement(
   controls.append(focusButton, removeButton);
   header.append(badge, title, controls);
 
+  const player = document.createElement('div');
+  player.className = 'stream-card__player';
+
   const iframe = createStreamIframe(stream, adapter);
+
+  if (stream.platform === 'kick') {
+    const kickFrame = document.createElement('div');
+    kickFrame.className = 'stream-card__kick-frame';
+    kickFrame.append(iframe);
+    player.append(kickFrame);
+  } else {
+    player.append(iframe);
+  }
+
+  // Gutter sits BELOW the player — never stacked over the iframe (Chrome occlusion).
+  const gutter = document.createElement('div');
+  gutter.className = 'stream-card__gutter';
 
   const nameBadge = document.createElement('div');
   nameBadge.className = 'stream-card__name-badge';
@@ -467,21 +446,14 @@ function createPlayerElement(
   const overlayControls = document.createElement('div');
   overlayControls.className = 'stream-card__overlay-controls';
 
-  const overlayFocus = document.createElement('div');
+  const overlayFocus = document.createElement('button');
+  overlayFocus.type = 'button';
   overlayFocus.className = 'stream-card__overlay-focus';
   overlayFocus.title = 'Focus stream';
-  overlayFocus.setAttribute('role', 'button');
-  overlayFocus.setAttribute('tabindex', '0');
   overlayFocus.setAttribute('aria-label', 'Focus stream in browser window');
   overlayFocus.setAttribute('aria-pressed', 'false');
   overlayFocus.textContent = '🔍';
   overlayFocus.addEventListener('click', () => toggleStreamFocus(container, stream.id));
-  overlayFocus.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      toggleStreamFocus(container, stream.id);
-    }
-  });
 
   overlayControls.append(overlayFocus);
 
@@ -489,41 +461,18 @@ function createPlayerElement(
   dragHandle.className = 'stream-card__drag-handle';
   dragHandle.title = 'Drag to reorder';
   dragHandle.setAttribute('aria-label', 'Drag to reorder');
-  dragHandle.textContent = '⠿ drag to reorder';
+  dragHandle.textContent = '⠿ drag';
 
-  card.append(header);
+  gutter.append(nameBadge, dragHandle, overlayControls);
+  card.append(header, player, gutter);
 
-  const existingCount = container.querySelectorAll('.stream-card').length;
-  const isFirst = existingCount === 0;
-  const embedMuted = stream.platform === 'kick' ? true : !isFirst;
-
-  if (stream.platform === 'kick') {
-    const player = document.createElement('div');
-    player.className = 'stream-card__player';
-    const kickFrame = document.createElement('div');
-    kickFrame.className = 'stream-card__kick-frame';
-    kickFrame.append(iframe);
-    player.append(kickFrame, nameBadge, overlayControls, dragHandle);
-    card.append(player);
-    if (!document.hidden) {
-      mountStreamMedia(card, true);
-    } else {
-      card.dataset.tabFrozen = '1';
-    }
+  if (document.hidden) {
+    card.dataset.tabFrozen = '1';
   } else {
-    // MultistreamGrid stream-box: iframe + overlay siblings on the cell (no player wrapper).
-    if (!document.hidden) {
-      iframe.src = buildEmbedUrl(
-        { platform: 'twitch', channel: stream.channel },
-        embedMuted,
-        { autoplay: true },
-      );
-      iframe.dataset.embedMuted = embedMuted ? '1' : '0';
-      card.dataset.embedMuted = embedMuted ? '1' : '0';
-    } else {
-      card.dataset.tabFrozen = '1';
-    }
-    card.append(iframe, nameBadge, overlayControls, dragHandle);
+    const existingCount = container.querySelectorAll('.stream-card').length;
+    const isFirst = existingCount === 0;
+    const embedMuted = stream.platform === 'kick' ? true : !isFirst;
+    mountStreamMedia(card, embedMuted);
   }
 
   return card;
@@ -559,9 +508,14 @@ export function resumeStreamPlayers(container: HTMLElement): void {
   }
 }
 
-export function bindTabVisibilityPlayers(_container: HTMLElement): void {
-  // flat-dom: tab-freeze (about:blank on visibilitychange) disabled — MSG does not
-  // reload embeds on tab switch; remounting can interact badly with Chrome visibility.
+export function bindTabVisibilityPlayers(container: HTMLElement): void {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      freezeStreamPlayers(container);
+    } else {
+      resumeStreamPlayers(container);
+    }
+  });
 }
 
 export function bindStreamFocus(handler: FocusChangeHandler): void {
@@ -617,7 +571,6 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
     ? '1'
     : '0';
 
-  syncMsgGridCountClass(container, streams.length);
   syncFocusDom(container);
 }
 
@@ -630,15 +583,7 @@ export function updateGridLayout(container: HTMLElement): void {
   const totalCount = Number(container.dataset.count ?? '0');
   if (totalCount === 0) {
     clearLayoutVars(container);
-    syncMsgGridCountClass(container, 0);
-    return;
-  }
-
-  syncMsgGridCountClass(container, totalCount);
-
-  // flat-dom: headers-hidden uses MultistreamGrid grid (count classes + explicit height).
-  if (usesMsgCssGrid()) {
-    updateMsgGridLayout(container);
+    container.style.removeProperty('height');
     return;
   }
 
@@ -689,14 +634,18 @@ export function updateGridLayout(container: HTMLElement): void {
   let bestHeight = 0;
 
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
-  const headerHeight =
-    !headersHidden || focusedStreamId ? CARD_HEADER_HEIGHT : 0;
+  // Header bar OR gutter strip (never both in the same mode, except focused keep header).
+  const chromeHeight = focusedStreamId
+    ? CARD_HEADER_HEIGHT
+    : headersHidden
+      ? CARD_GUTTER_HEIGHT
+      : CARD_HEADER_HEIGHT;
 
   for (let columns = 1; columns <= Math.min(count, 4); columns += 1) {
     const rows = Math.ceil(count / columns);
     let maxWidth = Math.floor((areaWidth - GRID_GAP * (columns - 1)) / columns);
     let maxHeight =
-      Math.floor((areaHeight - GRID_GAP * (rows - 1)) / rows) - headerHeight;
+      Math.floor((areaHeight - GRID_GAP * (rows - 1)) / rows) - chromeHeight;
 
     if (maxWidth <= 0 || maxHeight <= 0) {
       continue;

@@ -39,7 +39,8 @@ const mainLayoutEl = mainLayout;
  * Quiet ResizeObserver briefly after mounts so mid-bootstrap size thrash
  * cannot stall Twitch embeds.
  *
- * flat-dom: ResizeObserver is skipped while headers are hidden (CSS grid only).
+ * Twitch refuses muted autoplay when the embed is obscured. Headers-hidden
+ * mode keeps controls in a gutter below each player (never over the iframe).
  */
 let suppressLayout = false;
 let suppressLayoutTimer = 0;

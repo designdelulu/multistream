@@ -721,121 +721,45 @@ html.headers-hidden .stream-card__header {
   display: none;
 }
 
-/* MultistreamGrid #stream-container + .stream-box when headers are hidden. */
-html.headers-hidden .stream-grid:not([data-focus-id]) {
-  gap: 4px;
-  padding: 4px;
-  align-content: start;
-  grid-template-columns: 1fr;
-}
-
-html.headers-hidden .stream-grid.count-1:not([data-focus-id]) {
-  grid-template-columns: 1fr;
-  grid-template-rows: 1fr;
-}
-
-html.headers-hidden .stream-grid.count-2:not([data-focus-id]) {
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr;
-}
-
-html.headers-hidden .stream-grid.count-3:not([data-focus-id]) {
-  grid-template-columns: 1fr 1fr 1fr;
-  grid-template-rows: 1fr;
-}
-
-html.headers-hidden .stream-grid.count-4:not([data-focus-id]) {
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-html.headers-hidden .stream-grid.count-5:not([data-focus-id]) {
-  grid-template-columns: 1fr 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-html.headers-hidden .stream-grid.count-6:not([data-focus-id]) {
-  grid-template-columns: 1fr 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-html.headers-hidden .stream-grid.count-7:not([data-focus-id]) {
-  grid-template-columns: 1fr 1fr 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-html.headers-hidden .stream-grid.count-8:not([data-focus-id]) {
-  grid-template-columns: 1fr 1fr 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-html.headers-hidden .stream-grid.count-many:not([data-focus-id]) {
-  grid-template-columns: repeat(4, 1fr);
-}
-
-html.headers-hidden .stream-grid:not([data-focus-id]) .stream-card--twitch {
-  position: relative;
-  overflow: hidden;
-  min-height: 0;
-  background: #111;
-}
-
-html.headers-hidden .stream-card--twitch .stream-card__iframe {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
-}
-
-html.headers-hidden .stream-card--kick .stream-card__player {
-  position: absolute;
-  inset: 0;
-  height: 100%;
-  aspect-ratio: unset;
-}
-
-html.headers-hidden .stream-card--kick {
-  position: relative;
-  overflow: hidden;
-  min-height: 0;
-  background: #111;
-}
-
-/* Headers visible: Twitch iframe sits in flex column with JS-sized 16:9 height. */
-html:not(.headers-hidden) .stream-card--twitch .stream-card__iframe {
-  position: relative;
-  display: block;
-  width: 100%;
-  height: var(--player-height, auto);
-  aspect-ratio: 16 / 9;
-}
-
 /* Focused stream keeps a header for × minimize — never rely on video overlays. */
 html.headers-hidden.stream-focused .stream-card.is-focused .stream-card__header {
   display: flex;
 }
 
-html.stream-focused .stream-card__overlay-controls,
-html.stream-focused .stream-card__name-badge {
+html.stream-focused .stream-card__gutter {
   display: none !important;
 }
 
-/* MultistreamGrid parity: overlays always in layout (display:flex/block), opacity-only hover. */
-.stream-card__name-badge {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 10;
+/*
+ * Gutter chrome: sits BELOW the iframe, never stacked over it.
+ * Chrome MediaVideoVisibilityTracker treats on-video opacity>0 overlays as
+ * occlusion and pauses Twitch; a sibling strip under the player does not.
+ */
+.stream-card__gutter {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, black);
+}
+
+html.headers-hidden .stream-card__gutter {
   display: flex;
+}
+
+.stream-card__name-badge {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px 4px 6px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(4px);
-  opacity: 0;
-  transition: opacity 0.2s;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  opacity: 1;
 }
 
 .stream-card__name-badge-dot {
@@ -870,13 +794,18 @@ html.stream-focused .stream-card__name-badge {
 }
 
 .stream-card__name-badge-channel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.78rem;
   font-weight: 700;
-  color: white;
+  color: var(--text);
   letter-spacing: 0.2px;
 }
 
 .stream-card__name-badge-platform {
+  flex: 0 0 auto;
   font-size: 0.6rem;
   font-weight: 800;
   padding: 2px 5px;
@@ -895,17 +824,14 @@ html.stream-focused .stream-card__name-badge {
 }
 
 .stream-card__drag-handle {
-  position: absolute;
-  bottom: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: block;
+  flex: 0 0 auto;
+  display: none;
   margin: 0;
-  padding: 3px 10px;
+  padding: 4px 8px;
   border: 0;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #ccc;
+  background: transparent;
+  color: var(--muted);
   font: inherit;
   font-size: 0.68rem;
   font-weight: 600;
@@ -914,20 +840,11 @@ html.stream-focused .stream-card__name-badge {
   cursor: grab;
   user-select: none;
   touch-action: none;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-html.headers-hidden .stream-card--twitch:hover .stream-card__name-badge,
-html.headers-hidden .stream-card--twitch:hover .stream-card__overlay-controls,
-html.headers-hidden .stream-card--twitch:hover .stream-card__drag-handle {
   opacity: 1;
 }
 
-html.headers-hidden.stream-focused .stream-card--twitch:hover .stream-card__name-badge,
-html.headers-hidden.stream-focused .stream-card--twitch:hover .stream-card__overlay-controls,
-html.headers-hidden.stream-focused .stream-card--twitch:hover .stream-card__drag-handle {
-  opacity: 1;
+html.headers-hidden .stream-card__drag-handle {
+  display: inline-flex;
 }
 
 .stream-card__drag-handle:active {
@@ -943,47 +860,44 @@ html.stream-focused .stream-card__drag-handle {
 }
 
 .stream-card__overlay-controls {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 10;
-  display: flex;
+  flex: 0 0 auto;
+  display: none;
   gap: 6px;
-  opacity: 0;
-  transition: opacity 0.2s;
+  opacity: 1;
+}
+
+html.headers-hidden .stream-card__overlay-controls {
+  display: flex;
 }
 
 .stream-card__overlay-focus {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: 32px;
+  height: 32px;
   margin: 0;
   padding: 0;
-  border: 1.5px solid rgba(255, 255, 255, 0.25);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.82);
-  color: white;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
   font: inherit;
-  font-size: 1.2rem;
+  font-size: 1rem;
   line-height: 1;
   cursor: pointer;
   touch-action: manipulation;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
 }
 
 .stream-card__overlay-focus:hover,
 .stream-card__overlay-focus:focus-visible {
-  background: rgba(0, 0, 0, 0.97);
-  border-color: rgba(255, 255, 255, 0.5);
-  transform: scale(1.08);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   outline: none;
 }
 
 .stream-card__overlay-focus[aria-pressed='true'] {
   border-color: color-mix(in srgb, var(--accent) 55%, white);
-  background: color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.9));
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .stream-grid:not(:empty) .stream-card__player {
