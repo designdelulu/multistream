@@ -159,13 +159,11 @@ phoneQuery.addEventListener('change', handleViewportChange);
 window.visualViewport?.addEventListener('resize', handleViewportChange);
 
 const resizeObserver = new ResizeObserver(() => {
-  if (document.documentElement.classList.contains('headers-hidden')) return;
   if (suppressLayout) return;
   window.clearTimeout(resizeDebounceTimer);
   resizeDebounceTimer = window.setTimeout(() => {
     resizeDebounceTimer = 0;
     if (suppressLayout) return;
-    if (document.documentElement.classList.contains('headers-hidden')) return;
     updateGridLayout(gridEl);
   }, 120);
 });

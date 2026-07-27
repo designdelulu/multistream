@@ -721,23 +721,11 @@ html.headers-hidden .stream-card__header {
   display: none;
 }
 
-/* flat-dom: card acts like MultistreamGrid .stream-box when headers are hidden. */
-html.headers-hidden .stream-card {
-  display: block;
-}
-
-/* flat-dom step 5: MultistreamGrid count-based CSS grid — no JS --player-height. */
-html.headers-hidden .stream-area {
-  min-height: 0;
-}
-
+/* MultistreamGrid #stream-container + .stream-box when headers are hidden. */
 html.headers-hidden .stream-grid:not([data-focus-id]) {
-  flex: 1;
-  min-height: 0;
-  height: 100%;
   gap: 4px;
   padding: 4px;
-  align-content: stretch;
+  align-content: start;
   grid-template-columns: 1fr;
 }
 
@@ -785,24 +773,42 @@ html.headers-hidden .stream-grid.count-many:not([data-focus-id]) {
   grid-template-columns: repeat(4, 1fr);
 }
 
-html.headers-hidden .stream-grid:not([data-focus-id]) .stream-card {
+html.headers-hidden .stream-grid:not([data-focus-id]) .stream-card--twitch {
   position: relative;
   overflow: hidden;
   min-height: 0;
+  background: #111;
 }
 
-/* MSG .stream-box > iframe { absolute inset 0 } — player fills the grid cell. */
-html.headers-hidden .stream-grid:not([data-focus-id]) .stream-card__player {
+html.headers-hidden .stream-card--twitch .stream-card__iframe {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  aspect-ratio: unset;
-  min-height: 0;
+  border: 0;
 }
 
-html.headers-hidden .stream-grid:not(:empty):not([data-focus-id]) .stream-card__player {
+html.headers-hidden .stream-card--kick .stream-card__player {
+  position: absolute;
+  inset: 0;
   height: 100%;
+  aspect-ratio: unset;
+}
+
+html.headers-hidden .stream-card--kick {
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  background: #111;
+}
+
+/* Headers visible: Twitch iframe sits in flex column with JS-sized 16:9 height. */
+html:not(.headers-hidden) .stream-card--twitch .stream-card__iframe {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: var(--player-height, auto);
+  aspect-ratio: 16 / 9;
 }
 
 /* Focused stream keeps a header for × minimize — never rely on video overlays. */
@@ -912,15 +918,15 @@ html.stream-focused .stream-card__name-badge {
   transition: opacity 0.2s;
 }
 
-html.headers-hidden .stream-card__player:hover .stream-card__name-badge,
-html.headers-hidden .stream-card__player:hover .stream-card__overlay-controls,
-html.headers-hidden .stream-card__player:hover .stream-card__drag-handle {
+html.headers-hidden .stream-card--twitch:hover .stream-card__name-badge,
+html.headers-hidden .stream-card--twitch:hover .stream-card__overlay-controls,
+html.headers-hidden .stream-card--twitch:hover .stream-card__drag-handle {
   opacity: 1;
 }
 
-html.headers-hidden.stream-focused .stream-card__player:hover .stream-card__name-badge,
-html.headers-hidden.stream-focused .stream-card__player:hover .stream-card__overlay-controls,
-html.headers-hidden.stream-focused .stream-card__player:hover .stream-card__drag-handle {
+html.headers-hidden.stream-focused .stream-card--twitch:hover .stream-card__name-badge,
+html.headers-hidden.stream-focused .stream-card--twitch:hover .stream-card__overlay-controls,
+html.headers-hidden.stream-focused .stream-card--twitch:hover .stream-card__drag-handle {
   opacity: 1;
 }
 

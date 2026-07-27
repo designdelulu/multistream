@@ -9,10 +9,10 @@ import type { StreamStore } from '../state/streams';
  * than that — so Kick iframes are rendered at ≥769px and CSS-scaled down into
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  *
- * Twitch flat-dom experiment (branch flat-dom): iframe + hover overlays are
- * direct siblings inside .stream-card__player (MultistreamGrid .stream-box pattern).
- * Iframe src is set before overlay nodes mount; overlays always display:flex/block
- * with opacity 0 — never display:none.
+ * flat-dom experiment (branch flat-dom): Twitch uses MultistreamGrid stream-box DOM —
+ * iframe + hover overlays as direct children of .stream-card (no player wrapper).
+ * Iframe src is set before overlay siblings mount; overlays always display:flex/block
+ * with opacity 0. Headers-hidden grid uses count classes + explicit container height.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
@@ -37,6 +37,17 @@ function syncMsgGridCountClass(container: HTMLElement, count: number): void {
     container.classList.remove(className);
   }
   container.classList.add(count > 8 ? 'count-many' : `count-${count}`);
+}
+
+function updateMsgGridLayout(container: HTMLElement): void {
+  clearLayoutVars(container);
+  const streamArea = container.closest('.stream-area');
+  if (streamArea instanceof HTMLElement) {
+    // MultistreamGrid updateGridClass: pin grid height to the streams pane.
+    container.style.height = `${streamArea.clientHeight}px`;
+  } else {
+    container.style.removeProperty('height');
+  }
 }
 
 function usesMsgCssGrid(): boolean {
@@ -434,9 +445,6 @@ function createPlayerElement(
   controls.append(focusButton, removeButton);
   header.append(badge, title, controls);
 
-  const player = document.createElement('div');
-  player.className = 'stream-card__player';
-
   const iframe = createStreamIframe(stream, adapter);
 
   const nameBadge = document.createElement('div');
@@ -483,24 +491,27 @@ function createPlayerElement(
   dragHandle.setAttribute('aria-label', 'Drag to reorder');
   dragHandle.textContent = '⠿ drag to reorder';
 
-  card.append(header, player);
+  card.append(header);
 
   const existingCount = container.querySelectorAll('.stream-card').length;
   const isFirst = existingCount === 0;
   const embedMuted = stream.platform === 'kick' ? true : !isFirst;
 
   if (stream.platform === 'kick') {
+    const player = document.createElement('div');
+    player.className = 'stream-card__player';
     const kickFrame = document.createElement('div');
     kickFrame.className = 'stream-card__kick-frame';
     kickFrame.append(iframe);
     player.append(kickFrame, nameBadge, overlayControls, dragHandle);
+    card.append(player);
     if (!document.hidden) {
       mountStreamMedia(card, true);
     } else {
       card.dataset.tabFrozen = '1';
     }
   } else {
-    // MultistreamGrid: iframe src + overlay siblings in one mount (innerHTML equivalent).
+    // MultistreamGrid stream-box: iframe + overlay siblings on the cell (no player wrapper).
     if (!document.hidden) {
       iframe.src = buildEmbedUrl(
         { platform: 'twitch', channel: stream.channel },
@@ -512,7 +523,7 @@ function createPlayerElement(
     } else {
       card.dataset.tabFrozen = '1';
     }
-    player.append(iframe, nameBadge, overlayControls, dragHandle);
+    card.append(iframe, nameBadge, overlayControls, dragHandle);
   }
 
   return card;
@@ -625,11 +636,13 @@ export function updateGridLayout(container: HTMLElement): void {
 
   syncMsgGridCountClass(container, totalCount);
 
-  // flat-dom: headers-hidden uses MultistreamGrid pure CSS grid (no JS pixel sizing).
+  // flat-dom: headers-hidden uses MultistreamGrid grid (count classes + explicit height).
   if (usesMsgCssGrid()) {
-    clearLayoutVars(container);
+    updateMsgGridLayout(container);
     return;
   }
+
+  container.style.removeProperty('height');
 
   const streamArea = container.closest('.stream-area');
   if (!streamArea) {
