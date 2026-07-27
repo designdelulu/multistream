@@ -10,8 +10,8 @@ import type { StreamStore } from '../state/streams';
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  *
  * Twitch uses plain player.twitch.tv iframes (like MultistreamGrid), not the
- * Twitch.Player JS API — bare iframes tolerate small hover overlays; the API
- * pauses when anything covers the embed.
+ * Twitch.Player JS API. Hover controls are direct siblings of the iframe inside
+ * .stream-card__player — same flat stream-box pattern as MultistreamGrid.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
@@ -346,6 +346,10 @@ function createStreamIframe(
     }
   } else {
     iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
+    iframe.setAttribute(
+      'sandbox',
+      'allow-scripts allow-same-origin allow-popups allow-presentation allow-modals',
+    );
   }
 
   return iframe;
@@ -420,16 +424,22 @@ function createPlayerElement(
     player.append(iframe);
   }
 
-  const media = document.createElement('div');
-  media.className = 'stream-card__media';
-  media.append(player);
+  const nameBadge = document.createElement('div');
+  nameBadge.className = 'stream-card__name-badge';
 
-  const dragHandle = document.createElement('button');
-  dragHandle.type = 'button';
-  dragHandle.className = 'stream-card__drag-handle';
-  dragHandle.title = 'Drag to reorder';
-  dragHandle.setAttribute('aria-label', 'Drag to reorder');
-  dragHandle.innerHTML = '<span aria-hidden="true">⠿</span> drag to reorder';
+  const liveDot = document.createElement('span');
+  liveDot.className = 'stream-card__name-badge-dot';
+  liveDot.setAttribute('aria-hidden', 'true');
+
+  const badgeName = document.createElement('span');
+  badgeName.className = 'stream-card__name-badge-channel';
+  badgeName.textContent = adapter.displayName(stream);
+
+  const badgePlatform = document.createElement('span');
+  badgePlatform.className = `stream-card__name-badge-platform stream-card__name-badge-platform--${stream.platform}`;
+  badgePlatform.textContent = stream.platform === 'twitch' ? 'TWITCH' : 'KICK';
+
+  nameBadge.append(liveDot, badgeName, badgePlatform);
 
   const overlayControls = document.createElement('div');
   overlayControls.className = 'stream-card__overlay-controls';
@@ -444,9 +454,17 @@ function createPlayerElement(
   overlayFocus.addEventListener('click', () => toggleStreamFocus(container, stream.id));
 
   overlayControls.append(overlayFocus);
-  media.append(dragHandle, overlayControls);
 
-  card.append(header, media);
+  const dragHandle = document.createElement('div');
+  dragHandle.className = 'stream-card__drag-handle';
+  dragHandle.title = 'Drag to reorder';
+  dragHandle.setAttribute('role', 'button');
+  dragHandle.setAttribute('aria-label', 'Drag to reorder');
+  dragHandle.textContent = '⠿ drag to reorder';
+
+  player.append(nameBadge, overlayControls, dragHandle);
+
+  card.append(header, player);
 
   if (document.hidden) {
     card.dataset.tabFrozen = '1';

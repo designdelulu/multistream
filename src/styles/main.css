@@ -327,10 +327,6 @@ body {
   min-height: 0;
 }
 
-html.headers-hidden .stream-area {
-  overflow: visible;
-}
-
 .stream-area:has(#empty-state:not([hidden])) {
   min-height: clamp(220px, 45vh, 640px);
 }
@@ -347,12 +343,6 @@ html.headers-hidden .stream-area {
   min-height: 0;
   width: 100%;
   overflow: hidden;
-}
-
-html.headers-hidden .stream-grid {
-  /* Room for hover controls that sit in the grid gutters, not over embeds. */
-  overflow: visible;
-  padding: 20px 16px;
 }
 
 .stream-grid[data-focus-id] {
@@ -420,6 +410,11 @@ html.headers-hidden .stream-grid {
 
 .watching-panel__item:active {
   cursor: grabbing;
+}
+
+/* Focus mode — hide Watching sidebar (CSS only; no JS layout churn). */
+html.stream-focused .watching-panel {
+  display: none !important;
 }
 
 /* Focus / fullscreen mode — no reorder dragging. */
@@ -722,15 +717,6 @@ html.stream-focused .stream-card__header {
   overflow: hidden;
 }
 
-.stream-card__media {
-  position: relative;
-  width: 100%;
-}
-
-html.headers-hidden .stream-card__media {
-  overflow: visible;
-}
-
 html.headers-hidden .stream-card__header {
   display: none;
 }
@@ -740,19 +726,95 @@ html.headers-hidden.stream-focused .stream-card.is-focused .stream-card__header 
   display: flex;
 }
 
-html.stream-focused .stream-card__overlay-controls {
+html.stream-focused .stream-card__overlay-controls,
+html.stream-focused .stream-card__name-badge {
   display: none !important;
+}
+
+/* MultistreamGrid-style hover chrome — opacity only, never toggle pointer-events. */
+.stream-card__name-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.stream-card__name-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
+  animation: stream-card-live-pulse 2s infinite;
+}
+
+.stream-card__name-badge-dot,
+.stream-card--twitch .stream-card__name-badge-dot {
+  background: #ff4444;
+  color: #ff4444;
+}
+
+.stream-card--kick .stream-card__name-badge-dot {
+  background: var(--kick);
+  color: var(--kick);
+}
+
+@keyframes stream-card-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.stream-card__name-badge-channel {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: white;
+  letter-spacing: 0.2px;
+}
+
+.stream-card__name-badge-platform {
+  font-size: 0.6rem;
+  font-weight: 800;
+  padding: 2px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.stream-card__name-badge-platform--twitch {
+  background: var(--accent);
+  color: white;
+}
+
+.stream-card__name-badge-platform--kick {
+  background: var(--kick);
+  color: #000;
+}
+
+html.headers-hidden .stream-card__name-badge {
+  display: flex;
 }
 
 .stream-card__drag-handle {
   position: absolute;
-  bottom: 0;
+  bottom: 8px;
   left: 50%;
-  z-index: 2;
-  transform: translate(-50%, calc(100% + 5px));
+  z-index: 10;
+  transform: translateX(-50%);
   display: none;
-  align-items: center;
-  gap: 4px;
   margin: 0;
   padding: 3px 10px;
   border: 0;
@@ -768,17 +830,17 @@ html.stream-focused .stream-card__overlay-controls {
   user-select: none;
   touch-action: none;
   opacity: 0;
-  pointer-events: none;
   transition: opacity 0.2s;
 }
 
 html.headers-hidden .stream-card__drag-handle {
-  display: inline-flex;
+  display: block;
 }
 
+html.headers-hidden .stream-card:hover .stream-card__name-badge,
+html.headers-hidden .stream-card:hover .stream-card__overlay-controls,
 html.headers-hidden .stream-card:hover .stream-card__drag-handle {
   opacity: 1;
-  pointer-events: auto;
 }
 
 .stream-card__drag-handle:active {
@@ -795,24 +857,17 @@ html.stream-focused .stream-card__drag-handle {
 
 .stream-card__overlay-controls {
   position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 3;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
   display: none;
   gap: 6px;
-  transform: translate(calc(100% + 5px), 0);
   opacity: 0;
-  pointer-events: none;
   transition: opacity 0.2s;
 }
 
 html.headers-hidden .stream-card__overlay-controls {
   display: flex;
-}
-
-html.headers-hidden .stream-card:hover .stream-card__overlay-controls {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .stream-card__overlay-focus {
