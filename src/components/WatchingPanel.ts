@@ -1,20 +1,14 @@
 import { getAdapter } from '../platforms';
-import {
-  getFocusedStreamId,
-  toggleStreamFocus,
-} from './StreamGrid';
+import { getFocusedStreamId } from './StreamGrid';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
-
-const FOCUS_ICON =
-  '<span aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 5V1.5H5M9 1.5H12.5V5M12.5 9V12.5H9M5 12.5H1.5V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
 
 export function bindWatchingPanel(
   panel: HTMLElement,
   list: HTMLElement,
   store: StreamStore,
   headersStore: HeadersStore,
-  grid: HTMLElement,
+  _grid: HTMLElement,
   onLayout?: () => void,
 ): { sync: () => void } {
   function sync(): void {
@@ -44,25 +38,10 @@ export function bindWatchingPanel(
       accent.className = 'watching-panel__accent';
       accent.setAttribute('aria-hidden', 'true');
 
-      const nameButton = document.createElement('button');
-      nameButton.type = 'button';
-      nameButton.className = 'watching-panel__name';
-      nameButton.textContent = adapter.displayName(stream);
-      nameButton.title = `Drag to reorder · click to focus ${adapter.displayName(stream)}`;
-      nameButton.addEventListener('click', () => {
-        toggleStreamFocus(grid, stream.id);
-      });
-
-      const focusButton = document.createElement('button');
-      focusButton.type = 'button';
-      focusButton.className = 'watching-panel__focus';
-      focusButton.title = 'Focus stream';
-      focusButton.setAttribute('aria-label', `Focus ${adapter.displayName(stream)}`);
-      focusButton.setAttribute('aria-pressed', focusedId === stream.id ? 'true' : 'false');
-      focusButton.innerHTML = FOCUS_ICON;
-      focusButton.addEventListener('click', () => {
-        toggleStreamFocus(grid, stream.id);
-      });
+      const name = document.createElement('span');
+      name.className = 'watching-panel__name';
+      name.textContent = adapter.displayName(stream);
+      name.title = `Drag to reorder · ${adapter.displayName(stream)}`;
 
       const removeButton = document.createElement('button');
       removeButton.type = 'button';
@@ -74,7 +53,7 @@ export function bindWatchingPanel(
         store.removeStream(stream.id);
       });
 
-      item.append(accent, nameButton, focusButton, removeButton);
+      item.append(accent, name, removeButton);
       list.append(item);
     }
 

@@ -272,6 +272,12 @@ body {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+.toolbar__icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .toolbar__icon {
   flex: 0 0 auto;
   display: block;
@@ -321,6 +327,10 @@ body {
   min-height: 0;
 }
 
+html.headers-hidden .stream-area {
+  overflow: visible;
+}
+
 .stream-area:has(#empty-state:not([hidden])) {
   min-height: clamp(220px, 45vh, 640px);
 }
@@ -337,6 +347,12 @@ body {
   min-height: 0;
   width: 100%;
   overflow: hidden;
+}
+
+html.headers-hidden .stream-grid {
+  /* Room for hover controls that sit in the grid gutters, not over embeds. */
+  overflow: visible;
+  padding: 20px 16px;
 }
 
 .stream-grid[data-focus-id] {
@@ -446,11 +462,7 @@ html.stream-focused .stream-card__header {
 .watching-panel__name {
   flex: 1;
   min-width: 0;
-  margin: 0;
   padding: 4px 2px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
   color: var(--text);
   font: inherit;
   font-weight: 600;
@@ -459,15 +471,9 @@ html.stream-focused .stream-card__header {
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: grab;
+  user-select: none;
 }
 
-.watching-panel__name:hover,
-.watching-panel__name:focus-visible {
-  color: color-mix(in srgb, var(--accent) 70%, white);
-  outline: none;
-}
-
-.watching-panel__focus,
 .watching-panel__remove {
   flex: 0 0 auto;
   display: inline-flex;
@@ -480,34 +486,19 @@ html.stream-focused .stream-card__header {
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: var(--muted);
   font: inherit;
+  font-size: 1.15rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--danger) 75%, var(--muted));
   cursor: pointer;
   touch-action: manipulation;
 }
 
-.watching-panel__focus:hover,
 .watching-panel__remove:hover,
-.watching-panel__focus:focus-visible,
 .watching-panel__remove:focus-visible {
-  color: var(--text);
+  color: var(--danger);
   background: color-mix(in srgb, var(--text) 8%, transparent);
   outline: none;
-}
-
-.watching-panel__focus[aria-pressed='true'] {
-  color: #e6d4ff;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-.watching-panel__remove {
-  font-size: 1.15rem;
-  line-height: 1;
-  color: color-mix(in srgb, var(--danger) 75%, var(--muted));
-}
-
-.watching-panel__remove:hover {
-  color: var(--danger);
 }
 
 .chat-panel {
@@ -731,16 +722,34 @@ html.stream-focused .stream-card__header {
   overflow: hidden;
 }
 
+.stream-card__media {
+  position: relative;
+  width: 100%;
+}
+
+html.headers-hidden .stream-card__media {
+  overflow: visible;
+}
+
 html.headers-hidden .stream-card__header {
   display: none;
 }
 
+/* Focused stream keeps a header for × minimize — never rely on video overlays. */
+html.headers-hidden.stream-focused .stream-card.is-focused .stream-card__header {
+  display: flex;
+}
+
+html.stream-focused .stream-card__overlay-controls {
+  display: none !important;
+}
+
 .stream-card__drag-handle {
   position: absolute;
-  bottom: 8px;
+  bottom: 0;
   left: 50%;
   z-index: 2;
-  transform: translateX(-50%);
+  transform: translate(-50%, calc(100% + 5px));
   display: none;
   align-items: center;
   gap: 4px;
@@ -784,6 +793,63 @@ html.stream-focused .stream-card__drag-handle {
   display: none !important;
 }
 
+.stream-card__overlay-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 3;
+  display: none;
+  gap: 6px;
+  transform: translate(calc(100% + 5px), 0);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+html.headers-hidden .stream-card__overlay-controls {
+  display: flex;
+}
+
+html.headers-hidden .stream-card:hover .stream-card__overlay-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.stream-card__overlay-focus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.82);
+  color: white;
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.stream-card__overlay-focus:hover,
+.stream-card__overlay-focus:focus-visible {
+  background: rgba(0, 0, 0, 0.97);
+  border-color: rgba(255, 255, 255, 0.5);
+  transform: scale(1.08);
+  outline: none;
+}
+
+.stream-card__overlay-focus[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--accent) 55%, white);
+  background: color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.9));
+}
+
+.stream-card__overlay-focus svg {
+  display: block;
+}
+
 .stream-grid:not(:empty) .stream-card__player {
   aspect-ratio: unset;
   height: var(--player-height, auto);
@@ -808,21 +874,6 @@ html.stream-focused .stream-card__drag-handle {
   width: 100%;
   height: var(--player-height, auto);
   min-height: 0;
-}
-
-.stream-card__twitch-host {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.stream-card__twitch-host iframe {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
 }
 
 .stream-card__iframe {

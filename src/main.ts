@@ -2,7 +2,6 @@ import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
   bindStreamFocus,
   bindTabVisibilityPlayers,
-  remountTwitchPlayers,
   syncStreamGrid,
   updateGridLayout,
 } from './components/StreamGrid';
@@ -40,9 +39,8 @@ const mainLayoutEl = mainLayout;
  * Quiet ResizeObserver briefly after mounts so mid-bootstrap size thrash
  * cannot stall Twitch embeds.
  *
- * Twitch refuses muted autoplay when the embed is obscured — avoid full-video
- * overlays. Headers hidden uses a small bottom drag handle (hover-only) or the
- * Watching list instead.
+ * Twitch refuses muted autoplay when the embed is obscured. We use plain
+ * player.twitch.tv iframes (like MultistreamGrid) so small hover overlays work.
  */
 let suppressLayout = false;
 let suppressLayoutTimer = 0;
@@ -83,7 +81,6 @@ function afterHeadersToggle(): void {
   reorder.sync();
   afterLayoutPaint(() => {
     measureAndLayout();
-    remountTwitchPlayers(gridEl);
     quietLayout(2500);
   });
 }
@@ -100,7 +97,7 @@ function renderStreams(): void {
 let chatSnapshotBeforeFocus: { visible: boolean; selectedId: string | null } | null = null;
 
 bindWelcomeModal();
-bindStreamToolbar(store, headersStore);
+const toolbar = bindStreamToolbar(store, headersStore);
 const reorder = bindStreamReorder(gridEl, store, headersStore, watchingListEl);
 reorder.sync();
 const watching = bindWatchingPanel(
@@ -115,6 +112,7 @@ bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);
 bindStreamFocus((focused, streamId) => {
+  toolbar.sync();
   watching.sync();
   reorder.sync();
 

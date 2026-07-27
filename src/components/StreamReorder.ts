@@ -27,7 +27,7 @@ export function bindStreamReorder(
     ghostClass: 'stream-card--ghost',
     chosenClass: 'stream-card--chosen',
     dragClass: 'stream-card--drag',
-    filter: '.stream-card__focus, .stream-card__close, a, input, select, textarea',
+    filter: '.stream-card__focus, .stream-card__close, .stream-card__overlay-focus, a, input, select, textarea',
     preventOnFilter: false,
     disabled: isStreamFocused(),
     onEnd: () => {
@@ -41,8 +41,8 @@ export function bindStreamReorder(
     ghostClass: 'watching-panel__item--ghost',
     chosenClass: 'watching-panel__item--chosen',
     dragClass: 'watching-panel__item--drag',
-    // Keep focus / remove clickable; drag from the rest of the row.
-    filter: '.watching-panel__focus, .watching-panel__remove',
+    // Keep remove clickable; drag from the rest of the row.
+    filter: '.watching-panel__remove',
     preventOnFilter: true,
     disabled: !headersStore.isHidden() || isStreamFocused(),
     onEnd: () => {

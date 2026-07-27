@@ -14,8 +14,9 @@ Watch Twitch and Kick on one page. This guide covers the features and how to use
 | Username dropdown | Type a name (or `@name`) and choose Twitch or Kick |
 | Share link | Copy the current lineup URL from the toolbar |
 | Clear all | Remove every stream (with confirmation) |
-| Hide headers | Compact grid; **Watching** sidebar for focus and remove |
+| Hide headers | Compact grid; **Watching** sidebar for remove and reorder |
 | Drag reorder | Drag card headers — or a bottom handle / Watching list rows when headers are hidden |
+| Focus (headers hidden) | Magnifying glass on video hover (distinct from embed fullscreen) |
 | Session restore | Last lineup saved in `localStorage`; share URLs in the path take priority |
 | Focus mode | Expand one stream, unmute it, open Twitch chat when available |
 | Twitch chat | Docked sidebar on desktop/tablet (Kick has no official chat embed) |
@@ -27,7 +28,7 @@ Watch Twitch and Kick on one page. This guide covers the features and how to use
 
 1. Click the username field in the toolbar.
 2. Type a channel name. A dropdown offers **Twitch** and **Kick**.
-3. Click a row to add that platform, or press **Enter** to use your last-chosen platform.
+3. Click a row to add that platform. **Enter** only works for URLs and `t:` / `k:` prefixes — plain usernames require picking Twitch or Kick from the list.
 4. You can also paste a Twitch/Kick URL or use `t:username` / `k:username`.
 
 Leading `@` is stripped automatically.
@@ -45,17 +46,18 @@ Leading `@` is stripped automatically.
 
 ### Focus
 
-- Click the expand (focus) control on a card.
-- That stream fills the area below the toolbar and remounts **unmuted**.
+- Click the expand (focus) control on a card (header button, or magnifying glass in no-header mode).
+- That stream fills the area below the toolbar and reloads **unmuted**.
 - Twitch chat opens automatically for focused Twitch streams.
-- Press **Escape** or use × / focus again to exit. The stream remounts muted.
+- In no-header mode, the focused stream’s **header bar reappears** so you can × minimize — hover overlays are hidden during focus so playback is not interrupted.
+- Press **Escape** or × / focus again to exit. Twitch remounts muted.
 
 ### Hide headers
 
 - Toolbar **Hide headers** collapses card top bars for a denser view (preference is remembered).
-- A **Watching** list appears on the left with color accents (purple = Twitch, green = Kick).
-- From Watching: click a name or focus icon to focus; use **×** to remove.
-- With headers hidden, hover a video for the bottom **drag to reorder** handle, or drag rows in the **Watching** list. The handle is a small pill at the bottom edge (visible on hover only) — not a full overlay over the player.
+- A **Watching** list appears on the left with color accents (purple = Twitch, green = Kick) and **×** to remove each stream.
+- Hover a video for a magnifying-glass **Focus** button (top-right) and a bottom **drag to reorder** handle — same pattern as [MultistreamGrid](https://multistreamgrid.com). You can also reorder from the Watching list.
+- Live viewer counts beside names are planned for a future update (Twitch requires a server-side API proxy).
 
 On phones, Watching becomes a wrapping strip above the grid.
 

@@ -1,4 +1,5 @@
 import { parseStreamInput } from '../platforms';
+import { isStreamFocused } from './StreamGrid';
 import type { Platform } from '../types';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
@@ -99,7 +100,10 @@ function tryAddStream(
   return true;
 }
 
-export function bindStreamToolbar(store: StreamStore, headersStore: HeadersStore): void {
+export function bindStreamToolbar(
+  store: StreamStore,
+  headersStore: HeadersStore,
+): { sync: () => void } {
   const form = document.querySelector<HTMLFormElement>('#add-stream-form');
   const input = document.querySelector<HTMLInputElement>('#stream-input');
   const suggestions = document.querySelector<HTMLElement>('#add-stream-suggestions');
@@ -178,6 +182,15 @@ export function bindStreamToolbar(store: StreamStore, headersStore: HeadersStore
     const value = stripAtPrefix(inputEl.value);
     if (!value) return;
 
+    const candidate = plainUsernameCandidate(inputEl.value);
+    if (candidate && !suggestionsEl.hidden) {
+      // Plain username — require an explicit Twitch or Kick pick from the dropdown.
+      inputEl.classList.add('toolbar__input--error');
+      inputEl.setAttribute('aria-invalid', 'platform-required');
+      syncSuggestions();
+      return;
+    }
+
     const resolved = resolveAddInput(value, selectedPlatform);
     if (tryAddStream(store, inputEl, resolved)) {
       hideSuggestions();
@@ -216,9 +229,15 @@ export function bindStreamToolbar(store: StreamStore, headersStore: HeadersStore
   function syncHeadersButton(): void {
     if (!headersButton) return;
     const hidden = headersStore.isHidden();
+    const focused = isStreamFocused();
     const label = hidden ? 'Show headers' : 'Hide headers';
     setIconButtonLabel(headersButton, label);
     headersButton.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+    headersButton.disabled = focused;
+    if (focused) {
+      headersButton.title = 'Exit focus to show or hide headers';
+      headersButton.setAttribute('aria-label', 'Exit focus to show or hide headers');
+    }
   }
 
   shareButton?.addEventListener('click', async () => {
@@ -245,14 +264,21 @@ export function bindStreamToolbar(store: StreamStore, headersStore: HeadersStore
   });
 
   headersButton?.addEventListener('click', () => {
+    if (isStreamFocused()) return;
     headersStore.toggle();
   });
 
+  function sync(): void {
+    syncActionButtons();
+    syncHeadersButton();
+  }
+
   store.subscribe(syncActionButtons);
   headersStore.subscribe(syncHeadersButton);
-  syncActionButtons();
-  syncHeadersButton();
+  sync();
   hideSuggestions();
+
+  return { sync };
 }
 
 export function updateEmptyState(store: StreamStore): void {

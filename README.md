@@ -17,12 +17,12 @@ Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](http
 
 MultiStream.cc is a lightweight browser viewer for multi-stream watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
 
-- **Twitch + Kick** on the same page via Twitch’s JS Player API and Kick’s official iframe
+- **Twitch + Kick** on the same page via plain embed iframes (same approach as [MultistreamGrid](https://multistreamgrid.com))
 - **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
 - **Username dropdown** — type a name (or `@name`) and pick Twitch or Kick; Enter uses your last-chosen platform
 - **Share link / Clear all** in the toolbar
-- **Hide headers** — optional compact mode (remembered in `localStorage`); a left **Watching** sidebar lists color-coded channels with focus, remove, and drag-to-reorder
+- **Hide headers** — optional compact mode (remembered in `localStorage`); a left **Watching** sidebar lists color-coded channels with × remove and drag-to-reorder; focus via magnifying glass on each video
 - **Drag to reorder** stream cards (drag the card header, or a bottom handle / Watching list rows when headers are hidden); URL updates without remounting players
 - **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
 - **Shareable path URLs** like `/t:username/k:username`
@@ -116,7 +116,7 @@ Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:use
 
 Use **Share link** in the toolbar to copy the current URL. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Clear, Headers, Chat) are icons that expand their labels on hover.
 
-**Hide headers** collapses each card’s top bar for a denser grid. A **Watching** list appears on the left (Twitch/Kick color accents, focus, and × remove). Hover a video for a bottom **drag to reorder** handle, or drag rows in the Watching list — a small hover-only pill, not a full overlay (Twitch blocks autoplay if the player is covered).
+**Hide headers** collapses each card’s top bar for a denser grid. A **Watching** list appears on the left (Twitch/Kick color accents and × remove). Hover a video for a magnifying-glass **Focus** control (top-right) and a bottom **drag to reorder** handle — same hover-only pattern as [MultistreamGrid](https://multistreamgrid.com). Live viewer counts beside names are planned for a follow-up.
 
 ### Add streams from the toolbar
 
@@ -165,7 +165,7 @@ Adding a third platform later means adding one adapter file and registering it �
 - **Kick** uses the official iframe embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
 - **Layout packing** follows MultiTwitch’s `optimize_size` idea: pick the column count and 16:9 size that fits *every* stream in the streams pane. Chat docks beside the grid and triggers a reflow — it does not cover players (Twitch pauses embeds that are clipped or scrolled off-screen).
 - **Kick volume / control size:** Kick’s embed switches UI by **iframe layout width**. Below **769px** it uses mobile/tablet chrome (tiny overlays, often no volume). At **769px+** it uses desktop chrome with a speaker icon — hover the video, then the speaker, for the volume slider. When the packed cell is narrower than 769px, MultiStream still renders the Kick iframe at ≥769px and **CSS-scales** it into the cell so desktop chrome (including volume) stays available while the grid fits on-screen.
-- **Mute on load:** Twitch boots muted via `Twitch.Player`; Kick boots with `muted=true`. Focus unmutes Twitch through the Player API (volume ~50%); exit remounts muted so playback resumes. Tab hide / focus-hide destroys Twitch players (and blanks Kick) and remounts muted on resume.
+- **Mute on load:** Both platforms boot muted. Focus reloads the focused stream unmuted (user click); exit remounts Twitch muted. Tab hide / focus-hide blanks background iframes and remounts muted on resume.
 - **Chat** is Twitch-only (Kick has no official chat embed). Hidden on phones.
 
 ---
