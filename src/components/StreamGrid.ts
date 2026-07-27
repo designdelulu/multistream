@@ -494,20 +494,17 @@ function createPlayerElement(
   // Mount embed first, then append chrome (iframe already has src for Twitch).
   card.append(header, player);
 
-  const existingCount = container.querySelectorAll('.stream-card').length;
-  const isFirst = existingCount === 0;
-  const embedMuted = stream.platform === 'kick' ? true : !isFirst;
-
   if (document.hidden) {
     card.dataset.tabFrozen = '1';
   } else if (stream.platform === 'twitch') {
+    // Always start muted — hover remount must not reintroduce audio.
     iframe.src = buildEmbedUrl(
       { platform: 'twitch', channel: stream.channel },
-      embedMuted,
+      true,
       { autoplay: true },
     );
-    iframe.dataset.embedMuted = embedMuted ? '1' : '0';
-    card.dataset.embedMuted = embedMuted ? '1' : '0';
+    iframe.dataset.embedMuted = '1';
+    card.dataset.embedMuted = '1';
   } else {
     mountStreamMedia(card, true);
   }
@@ -515,14 +512,17 @@ function createPlayerElement(
   player.append(nameBadge, overlayControls, dragHandle);
 
   // Chrome may pause Twitch while on-video chrome is visible; remount on leave.
+  // Always remount muted — never restore sound from hover recovery.
   if (stream.platform === 'twitch') {
     let recoverTimer = 0;
     player.addEventListener('mouseleave', () => {
       window.clearTimeout(recoverTimer);
       recoverTimer = window.setTimeout(() => {
         if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
-        const muted = card.dataset.embedMuted !== '0';
-        mountTwitchIframe(card, muted, true);
+        // Focused stream is intentionally unmuted; leave it alone.
+        if (focusedStreamId === stream.id) return;
+        card.dataset.embedMuted = '1';
+        mountTwitchIframe(card, true, true);
       }, 120);
     });
     player.addEventListener('mouseenter', () => {
