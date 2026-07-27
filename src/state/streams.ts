@@ -4,9 +4,11 @@ import {
   streamsFromPathname,
   streamsFromSearch,
 } from '../platforms';
-import type { StreamRef } from '../types';
+import type { Platform, StreamRef } from '../types';
 
 type Listener = () => void;
+
+const STORAGE_KEY = 'multistream:streams';
 
 function createId(platform: string, channel: string): string {
   return `${platform}:${channel}`;
@@ -18,6 +20,48 @@ function toStreamRefs(items: Omit<StreamRef, 'id' | 'muted'>[]): StreamRef[] {
     id: createId(item.platform, item.channel),
     muted: true,
   }));
+}
+
+function loadFromStorage(): Omit<StreamRef, 'id' | 'muted'>[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is { platform: Platform; channel: string } =>
+        Boolean(
+          item &&
+            typeof item === 'object' &&
+            ((item as { platform?: string }).platform === 'twitch' ||
+              (item as { platform?: string }).platform === 'kick') &&
+            typeof (item as { channel?: string }).channel === 'string',
+        ),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function persistStreams(streams: StreamRef[]): void {
+  try {
+    if (streams.length === 0) {
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(streams.map(({ platform, channel }) => ({ platform, channel }))),
+    );
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function loadInitialStreams(): StreamRef[] {
+  const fromUrl = loadFromUrl();
+  if (fromUrl.length > 0) return fromUrl;
+  return toStreamRefs(loadFromStorage());
 }
 
 function loadFromUrl(): StreamRef[] {
@@ -42,10 +86,11 @@ function syncUrl(streams: StreamRef[]): void {
 }
 
 export function createStreamStore() {
-  let streams = dedupeStreams(loadFromUrl());
+  let streams = dedupeStreams(loadInitialStreams());
   const listeners = new Set<Listener>();
 
   syncUrl(streams);
+  persistStreams(streams);
 
   function notify(): void {
     for (const listener of listeners) {
@@ -56,6 +101,7 @@ export function createStreamStore() {
   function setStreams(next: StreamRef[]): void {
     streams = dedupeStreams(next);
     syncUrl(streams);
+    persistStreams(streams);
     notify();
   }
 

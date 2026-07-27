@@ -1,6 +1,13 @@
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
-import type { Platform, StreamRef } from '../types';
+import {
+  createTwitchPlayer,
+  destroyTwitchPlayer,
+  hostElementId,
+  setTwitchPlayerMuted,
+  type TwitchPlayerInstance,
+} from '../platforms/twitchPlayer';
+import type { StreamRef } from '../types';
 import type { StreamStore } from '../state/streams';
 
 /**
@@ -10,6 +17,9 @@ import type { StreamStore } from '../state/streams';
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
+/** Twitch docs: embedded windows must be at least 400×300 for reliable autoplay. */
+const MIN_TWITCH_WIDTH = 400;
+const MIN_TWITCH_HEIGHT = 300;
 const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
@@ -23,6 +33,9 @@ let escapeBound = false;
 let layoutFrame = 0;
 let layoutRetries = 0;
 const MAX_LAYOUT_RETRIES = 8;
+
+const twitchPlayers = new Map<string, TwitchPlayerInstance>();
+const twitchMountInFlight = new Set<string>();
 
 function clearLayoutVars(container: HTMLElement): void {
   container.style.removeProperty('--grid-columns');
@@ -45,43 +58,104 @@ function isBlankIframeSrc(src: string): boolean {
   return !src || src === 'about:blank' || src.endsWith('about:blank');
 }
 
-function applyIframeAllowPolicy(
-  iframe: HTMLIFrameElement,
-  platform: Platform,
-  muted: boolean,
-): void {
-  // Twitch: always allow autoplay (muted grid boot / unmuted focus remount).
-  // Kick: omit allow=autoplay when muted so the browser blocks unmuted audio;
-  // add it on focus unmute after a user gesture.
-  if (platform === 'twitch') {
-    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
-    return;
-  }
+function applyKickAllowPolicy(iframe: HTMLIFrameElement, muted: boolean): void {
+  // Unmuted Kick needs allow=autoplay after a user gesture (focus click).
+  // Muted Kick omits it so the browser blocks accidental unmuted audio.
   iframe.setAttribute(
     'allow',
     muted ? 'fullscreen; picture-in-picture' : 'autoplay; fullscreen; picture-in-picture',
   );
 }
 
-function cardIframe(card: HTMLElement): HTMLIFrameElement | null {
+function twitchHost(card: HTMLElement): HTMLElement | null {
+  return card.querySelector<HTMLElement>('.stream-card__twitch-host');
+}
+
+function kickIframe(card: HTMLElement): HTMLIFrameElement | null {
   return card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
 }
 
-function mountStreamIframe(card: HTMLElement, muted: boolean): void {
-  const iframe = cardIframe(card);
-  const platform = card.dataset.platform as Platform | undefined;
+function destroyTwitchCardPlayer(card: HTMLElement): void {
+  const streamId = card.dataset.streamId;
+  if (!streamId) return;
+  twitchPlayers.delete(streamId);
+  twitchMountInFlight.delete(streamId);
+  const host = twitchHost(card);
+  if (host) {
+    destroyTwitchPlayer(host);
+  }
+}
+
+async function mountTwitchCard(card: HTMLElement, muted: boolean): Promise<void> {
+  const streamId = card.dataset.streamId;
   const channel = card.dataset.channel;
-  if (!iframe || !platform || !channel) return;
+  const host = twitchHost(card);
+  if (!streamId || !channel || !host) return;
+  if (card.dataset.tabFrozen === '1') return;
+  if (twitchMountInFlight.has(streamId)) return;
+
+  const existing = twitchPlayers.get(streamId);
+  if (existing) {
+    setTwitchPlayerMuted(existing, muted);
+    card.dataset.embedMuted = muted ? '1' : '0';
+    delete card.dataset.focusFrozen;
+    return;
+  }
+
+  const rect = host.getBoundingClientRect();
+  // Wait until layout has given the host real size (avoids Twitch autoplay
+  // failing on a 0×0 first paint). Prefer docs minimum; still mount if smaller
+  // once width/height are non-zero so chat-open grids keep working.
+  if (rect.width <= 0 || rect.height <= 0) {
+    card.dataset.twitchPending = '1';
+    return;
+  }
+
+  card.dataset.twitchPending = '1';
+  twitchMountInFlight.add(streamId);
+
+  try {
+    // Remounts assign a unique id; first mounts use the stable host id.
+    if (!host.id) {
+      host.id = hostElementId(streamId);
+    }
+    const player = await createTwitchPlayer(host, channel, muted);
+    if (!player) return;
+    // Card may have been removed while the script loaded.
+    if (!card.isConnected || card.dataset.streamId !== streamId) {
+      destroyTwitchPlayer(host);
+      return;
+    }
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') {
+      destroyTwitchPlayer(host);
+      return;
+    }
+    twitchPlayers.set(streamId, player);
+    card.dataset.embedMuted = muted ? '1' : '0';
+    delete card.dataset.focusFrozen;
+    delete card.dataset.twitchPending;
+  } finally {
+    twitchMountInFlight.delete(streamId);
+  }
+}
+
+function mountKickIframe(card: HTMLElement, muted: boolean): void {
+  const iframe = kickIframe(card);
+  const channel = card.dataset.channel;
+  if (!iframe || !channel) return;
   if (iframe.dataset.tabFrozen === '1') return;
 
-  applyIframeAllowPolicy(iframe, platform, muted);
+  applyKickAllowPolicy(iframe, muted);
 
-  const nextSrc = buildEmbedUrl({ platform, channel }, muted, { autoplay: true });
+  const nextSrc = buildEmbedUrl(
+    { platform: 'kick', channel },
+    muted,
+    { autoplay: true },
+  );
 
   delete iframe.dataset.focusFrozen;
   iframe.dataset.embedMuted = muted ? '1' : '0';
   card.dataset.embedMuted = muted ? '1' : '0';
-  delete card.dataset.focusFrozen;
 
   if (!isBlankIframeSrc(iframe.src)) {
     try {
@@ -96,20 +170,58 @@ function mountStreamIframe(card: HTMLElement, muted: boolean): void {
   iframe.src = nextSrc;
 }
 
+function mountStreamMedia(card: HTMLElement, muted: boolean): void {
+  if (card.dataset.platform === 'twitch') {
+    void mountTwitchCard(card, muted);
+    return;
+  }
+  if (card.dataset.platform === 'kick') {
+    mountKickIframe(card, muted);
+  }
+}
+
+/** After grid sizing settles, mount any Twitch hosts that were waiting for dimensions. */
+function mountPendingTwitchPlayers(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card[data-platform="twitch"]')) {
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+    const streamId = card.dataset.streamId;
+    if (!streamId || twitchPlayers.has(streamId) || twitchMountInFlight.has(streamId)) continue;
+
+    const host = twitchHost(card);
+    if (!host) continue;
+    const rect = host.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+
+    const muted = card.dataset.embedMuted !== '0';
+    const meetsDocsMin =
+      rect.width >= MIN_TWITCH_WIDTH && rect.height >= MIN_TWITCH_HEIGHT;
+    // Mount when docs minimum is met, or when we already marked pending after layout.
+    if (meetsDocsMin || card.dataset.twitchPending === '1' || rect.width >= 200) {
+      void mountTwitchCard(card, muted);
+    } else {
+      card.dataset.twitchPending = '1';
+    }
+  }
+}
+
 /** Unload streams hidden by focus mode (Twitch pauses; Kick keeps playing audio). */
 function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
     if (card.dataset.streamId === focusedId) continue;
+    if (card.dataset.focusFrozen === '1') continue;
 
-    const iframe = cardIframe(card);
-    if (!iframe || iframe.dataset.tabFrozen === '1' || iframe.dataset.focusFrozen === '1') {
+    card.dataset.focusFrozen = '1';
+    card.dataset.embedMuted = '1';
+
+    if (card.dataset.platform === 'twitch') {
+      destroyTwitchCardPlayer(card);
       continue;
     }
 
+    const iframe = kickIframe(card);
+    if (!iframe || iframe.dataset.tabFrozen === '1') continue;
     iframe.dataset.focusFrozen = '1';
     iframe.dataset.embedMuted = '1';
-    card.dataset.focusFrozen = '1';
-    card.dataset.embedMuted = '1';
     iframe.src = 'about:blank';
   }
 }
@@ -117,10 +229,12 @@ function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): vo
 /** Reload streams that were unloaded while another stream was focused. */
 function resumeFocusHiddenPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    const iframe = cardIframe(card);
-    if (!iframe || iframe.dataset.focusFrozen !== '1') continue;
+    if (card.dataset.focusFrozen !== '1') continue;
     delete card.dataset.focusFrozen;
-    mountStreamIframe(card, true);
+    if (card.dataset.platform === 'twitch') {
+      card.dataset.twitchPending = '1';
+    }
+    mountStreamMedia(card, true);
   }
 }
 
@@ -131,9 +245,16 @@ function syncFocusPlayers(container: HTMLElement, prevFocusedId: string | null):
     const focusedCard = container.querySelector<HTMLElement>(
       `.stream-card[data-stream-id="${CSS.escape(focusedStreamId)}"]`,
     );
-    // Focus click is a user gesture — remount unmuted (iframe has no volume API).
+    // Focus click is a user gesture — unmute via API when possible.
     if (focusedCard) {
-      mountStreamIframe(focusedCard, false);
+      const streamId = focusedCard.dataset.streamId;
+      const twitch = streamId ? twitchPlayers.get(streamId) : undefined;
+      if (twitch) {
+        setTwitchPlayerMuted(twitch, false);
+        focusedCard.dataset.embedMuted = '0';
+      } else {
+        mountStreamMedia(focusedCard, false);
+      }
     }
     freezeFocusHiddenPlayers(container, focusedStreamId);
     return;
@@ -146,12 +267,17 @@ function syncFocusPlayers(container: HTMLElement, prevFocusedId: string | null):
   focusSessionActive = false;
   resumeFocusHiddenPlayers(container);
 
-  // Remount previously focused stream muted so Twitch starts again after unmute.
+  // Remount muted so Twitch starts again after an unmuted focus session.
+  // setMuted(true) alone often leaves the player paused.
   const prevFocusedCard = container.querySelector<HTMLElement>(
     `.stream-card[data-stream-id="${CSS.escape(prevFocusedId)}"]`,
   );
   if (prevFocusedCard) {
-    mountStreamIframe(prevFocusedCard, true);
+    if (prevFocusedCard.dataset.platform === 'twitch') {
+      destroyTwitchCardPlayer(prevFocusedCard);
+      prevFocusedCard.dataset.twitchPending = '1';
+    }
+    mountStreamMedia(prevFocusedCard, true);
   }
 }
 
@@ -162,6 +288,7 @@ function syncFocusDom(container: HTMLElement): void {
   } else {
     delete container.dataset.focusId;
   }
+  document.documentElement.classList.toggle('stream-focused', focusedStreamId !== null);
 
   for (const card of cards) {
     const isFocused = card.dataset.streamId === focusedStreamId;
@@ -184,6 +311,11 @@ function syncFocusDom(container: HTMLElement): void {
         closeButton.title = 'Remove stream';
         closeButton.setAttribute('aria-label', 'Remove stream');
       }
+    }
+
+    const dragHandle = card.querySelector<HTMLButtonElement>('.stream-card__drag-handle');
+    if (dragHandle) {
+      dragHandle.hidden = focusedStreamId !== null;
     }
   }
 }
@@ -212,7 +344,7 @@ function notifyFocusChange(prevFocusedId: string | null): void {
   }
 }
 
-function setFocusedStream(container: HTMLElement, streamId: string | null): void {
+export function setFocusedStream(container: HTMLElement, streamId: string | null): void {
   const prevFocusedId = focusedStreamId;
   focusedStreamId = streamId;
   syncFocusDom(container);
@@ -229,12 +361,16 @@ function setFocusedStream(container: HTMLElement, streamId: string | null): void
   scheduleGridLayout(container);
 }
 
-function toggleStreamFocus(container: HTMLElement, streamId: string): void {
+export function toggleStreamFocus(container: HTMLElement, streamId: string): void {
   if (focusedStreamId === streamId) {
     setFocusedStream(container, null);
     return;
   }
   setFocusedStream(container, streamId);
+}
+
+export function getFocusedStreamId(): string | null {
+  return focusedStreamId;
 }
 
 function handleFocusEscape(event: KeyboardEvent): void {
@@ -308,14 +444,16 @@ function createPlayerElement(
   const player = document.createElement('div');
   player.className = 'stream-card__player';
 
-  const iframe = document.createElement('iframe');
-  iframe.className = 'stream-card__iframe';
-  iframe.allowFullscreen = true;
-  iframe.title = `${adapter.label} stream: ${stream.channel}`;
-  iframe.referrerPolicy = 'no-referrer-when-downgrade';
-
   if (stream.platform === 'kick') {
-    applyIframeAllowPolicy(iframe, 'kick', true);
+    const iframe = document.createElement('iframe');
+    iframe.className = 'stream-card__iframe';
+    iframe.allowFullscreen = true;
+    iframe.title = `${adapter.label} stream: ${stream.channel}`;
+    iframe.referrerPolicy = 'no-referrer-when-downgrade';
+    // Kick ignores muted=true once the page has autoplay permission. Omit
+    // allow=autoplay so the browser blocks unmuted audio. credentialless
+    // avoids Kick restoring a prior unmuted volume from iframe storage.
+    applyKickAllowPolicy(iframe, true);
     iframe.setAttribute('credentialless', '');
     try {
       (iframe as HTMLIFrameElement & { credentialless?: boolean }).credentialless = true;
@@ -328,30 +466,114 @@ function createPlayerElement(
     kickFrame.append(iframe);
     player.append(kickFrame);
   } else {
-    applyIframeAllowPolicy(iframe, 'twitch', true);
-    player.append(iframe);
+    const host = document.createElement('div');
+    host.className = 'stream-card__twitch-host';
+    host.id = hostElementId(stream.id);
+    host.dataset.twitchHost = '1';
+    player.append(host);
+    card.dataset.twitchPending = '1';
   }
+
+  const dragHandle = document.createElement('button');
+  dragHandle.type = 'button';
+  dragHandle.className = 'stream-card__drag-handle';
+  dragHandle.title = 'Drag to reorder';
+  dragHandle.setAttribute('aria-label', 'Drag to reorder');
+  dragHandle.innerHTML =
+    '<span aria-hidden="true">⠿</span> drag to reorder';
+  player.append(dragHandle);
 
   card.append(header, player);
 
   if (document.hidden) {
-    iframe.dataset.tabFrozen = '1';
     card.dataset.tabFrozen = '1';
-    iframe.src = 'about:blank';
-  } else {
-    mountStreamIframe(card, true);
+  } else if (stream.platform === 'kick') {
+    mountKickIframe(card, true);
   }
+  // Twitch mounts after updateGridLayout once the host has real dimensions.
 
   return card;
+}
+
+function recreateTwitchHost(card: HTMLElement): HTMLElement | null {
+  const previous = twitchHost(card);
+  const player = card.querySelector('.stream-card__player');
+  if (!player) return null;
+
+  const host = document.createElement('div');
+  host.className = 'stream-card__twitch-host';
+  host.dataset.twitchHost = '1';
+
+  if (previous) {
+    previous.replaceWith(host);
+  } else {
+    player.append(host);
+  }
+  return host;
+}
+
+/**
+ * Nudge play() on mounted Twitch players, or mount if missing.
+ * Used when hiding headers so we don't destroy living playback.
+ */
+export function nudgeTwitchPlay(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card[data-platform="twitch"]')) {
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+    const streamId = card.dataset.streamId;
+    if (!streamId) continue;
+    const shouldUnmute = focusedStreamId !== null && streamId === focusedStreamId;
+    const existing = twitchPlayers.get(streamId);
+    if (existing) {
+      setTwitchPlayerMuted(existing, !shouldUnmute);
+      card.dataset.embedMuted = shouldUnmute ? '0' : '1';
+      continue;
+    }
+    card.dataset.twitchPending = '1';
+    card.dataset.embedMuted = shouldUnmute ? '0' : '1';
+    void mountTwitchCard(card, !shouldUnmute);
+  }
+}
+
+/**
+ * Destroy and remount every visible Twitch player.
+ * Used after header toggles / full-width boots so muted autoplay can succeed.
+ */
+export function remountTwitchPlayers(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card[data-platform="twitch"]')) {
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+
+    const streamId = card.dataset.streamId;
+    if (!streamId) continue;
+
+    const shouldUnmute = focusedStreamId !== null && streamId === focusedStreamId;
+
+    destroyTwitchCardPlayer(card);
+    const host = recreateTwitchHost(card);
+    if (!host) continue;
+
+    host.id = `${hostElementId(streamId)}-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 7)}`;
+    card.dataset.twitchPending = '1';
+    card.dataset.embedMuted = shouldUnmute ? '0' : '1';
+    void mountTwitchCard(card, !shouldUnmute);
+  }
 }
 
 /** Stop all stream embeds (Kick ignores tab backgrounding and keeps playing audio). */
 export function freezeStreamPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    const iframe = cardIframe(card);
-    if (!iframe || iframe.dataset.tabFrozen === '1') continue;
-    iframe.dataset.tabFrozen = '1';
+    if (card.dataset.tabFrozen === '1') continue;
     card.dataset.tabFrozen = '1';
+
+    if (card.dataset.platform === 'twitch') {
+      destroyTwitchCardPlayer(card);
+      continue;
+    }
+
+    const iframe = kickIframe(card);
+    if (!iframe) continue;
+    iframe.dataset.tabFrozen = '1';
     iframe.src = 'about:blank';
   }
 }
@@ -359,15 +581,20 @@ export function freezeStreamPlayers(container: HTMLElement): void {
 /** Reload muted embeds after the tab is visible again. */
 export function resumeStreamPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    const iframe = cardIframe(card);
-    if (!iframe || iframe.dataset.tabFrozen !== '1') continue;
-
-    delete iframe.dataset.tabFrozen;
+    if (card.dataset.tabFrozen !== '1') continue;
     delete card.dataset.tabFrozen;
+
+    const iframe = kickIframe(card);
+    if (iframe) {
+      delete iframe.dataset.tabFrozen;
+    }
 
     const shouldUnmute =
       focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
-    mountStreamIframe(card, !shouldUnmute);
+    if (card.dataset.platform === 'twitch') {
+      card.dataset.twitchPending = '1';
+    }
+    mountStreamMedia(card, !shouldUnmute);
   }
 }
 
@@ -398,6 +625,9 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
   for (const card of [...container.querySelectorAll<HTMLElement>('.stream-card')]) {
     const id = card.dataset.streamId ?? '';
     if (!id || !nextIds.has(id) || seenIds.has(id)) {
+      if (card.dataset.platform === 'twitch') {
+        destroyTwitchCardPlayer(card);
+      }
       card.remove();
       continue;
     }
@@ -440,7 +670,7 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
 /**
  * Port of MultiTwitch optimize_size: choose columns/size so every player
  * fits in the streams pane at the largest possible 16:9 size. Resize only —
- * do not remount iframes (keeps Twitch playing across chat toggles).
+ * do not remount players (keeps Twitch playing across chat toggles).
  */
 export function updateGridLayout(container: HTMLElement): void {
   const totalCount = Number(container.dataset.count ?? '0');
@@ -474,6 +704,7 @@ export function updateGridLayout(container: HTMLElement): void {
       container.style.removeProperty('--kick-render-width');
       container.style.removeProperty('--kick-scale');
     }
+    mountPendingTwitchPlayers(container);
     return;
   }
 
@@ -493,11 +724,15 @@ export function updateGridLayout(container: HTMLElement): void {
   let bestWidth = 0;
   let bestHeight = 0;
 
+  const headerHeight = document.documentElement.classList.contains('headers-hidden')
+    ? 0
+    : CARD_HEADER_HEIGHT;
+
   for (let columns = 1; columns <= Math.min(count, 4); columns += 1) {
     const rows = Math.ceil(count / columns);
     let maxWidth = Math.floor((areaWidth - GRID_GAP * (columns - 1)) / columns);
     let maxHeight =
-      Math.floor((areaHeight - GRID_GAP * (rows - 1)) / rows) - CARD_HEADER_HEIGHT;
+      Math.floor((areaHeight - GRID_GAP * (rows - 1)) / rows) - headerHeight;
 
     if (maxWidth <= 0 || maxHeight <= 0) {
       continue;
@@ -520,6 +755,7 @@ export function updateGridLayout(container: HTMLElement): void {
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
     container.style.removeProperty('--player-width');
+    mountPendingTwitchPlayers(container);
     return;
   }
 
@@ -534,4 +770,6 @@ export function updateGridLayout(container: HTMLElement): void {
     container.style.removeProperty('--kick-render-width');
     container.style.removeProperty('--kick-scale');
   }
+
+  mountPendingTwitchPlayers(container);
 }

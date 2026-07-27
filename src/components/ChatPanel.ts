@@ -21,6 +21,15 @@ export function bindChatToggle(chatStore: ChatStore): void {
 
   const toggleButton = button;
 
+  function setLabel(text: string): void {
+    const label = toggleButton.querySelector<HTMLElement>('.toolbar__icon-btn-label');
+    if (label) {
+      label.textContent = text;
+    }
+    toggleButton.title = text;
+    toggleButton.setAttribute('aria-label', text);
+  }
+
   function updateButton(): void {
     const hasStreams = chatStore.hasAnyStreams();
     const onMobile = isChatHiddenByViewport();
@@ -31,7 +40,7 @@ export function bindChatToggle(chatStore: ChatStore): void {
     }
 
     const visible = chatStore.isVisible();
-    toggleButton.textContent = visible ? 'Hide chat' : 'Show chat';
+    setLabel(visible ? 'Hide chat' : 'Show chat');
     toggleButton.setAttribute('aria-pressed', visible ? 'true' : 'false');
   }
 

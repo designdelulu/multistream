@@ -92,8 +92,12 @@
         if (!localStorage.getItem('multistream:welcome-dismissed')) {
           document.documentElement.classList.add('show-welcome');
         }
+        if (localStorage.getItem('multistream:headers-hidden') === '1') {
+          document.documentElement.classList.add('headers-hidden');
+        }
       } catch (e) {}
     </script>
+    <script src="https://player.twitch.tv/js/embed/v1.js"></script>
     <link rel="stylesheet" href="/src/styles/main.css" />
   </head>
   <body>
@@ -133,58 +137,30 @@
       <div class="welcome-modal__backdrop" aria-hidden="true"></div>
       <div class="welcome-modal__panel">
         <section class="site-intro" aria-labelledby="intro-heading">
-          <h2 id="intro-heading">Watch Twitch and Kick streams online</h2>
+          <h2 id="intro-heading">Welcome to MultiStream.cc</h2>
           <p>
-            MultiStream.cc lets you watch Twitch and Kick streams online on a single page — as many
-            as your computer can comfortably handle. Add channels from the toolbar, or open a link
-            with your lineup already in the URL.
+            Watch Twitch and Kick side by side in one responsive grid. Add channels from the
+            toolbar, rearrange them however you like, and share your lineup with friends.
           </p>
-          <p>
-            MultiStream arranges players in a responsive grid and scales each stream as large as
-            possible while keeping a clean 16:9 aspect ratio. On phones and tablets, streams stack
-            vertically so you can scroll through your lineup one player at a time.
-          </p>
+
+          <h3>Quick start</h3>
+          <ul class="site-intro__list">
+            <li>Type a username and pick <strong>Twitch</strong> or <strong>Kick</strong> from the dropdown.</li>
+            <li>Use <strong>Focus</strong> on a stream to expand it and turn sound on.</li>
+            <li>
+              Hover the toolbar icons to <strong>Share</strong>, <strong>Clear</strong>, hide
+              headers, or open Twitch chat.
+            </li>
+            <li>
+              Prefer a denser grid? Hide headers — a left <strong>Watching</strong> list appears so
+              you can still focus or remove streams.
+            </li>
+          </ul>
+
           <p class="site-intro__mobile-limit">
             On phones and tablets you can keep several streams in the page, but the browser usually
             plays only one at a time due to platform restrictions.
           </p>
-
-          <h3>Share a layout with a link</h3>
-          <p>
-            Add streams to the URL path, separated by slashes. Use <code>t:</code> for Twitch and
-            <code>k:</code> for Kick:
-          </p>
-          <p class="site-intro__example">
-            <a href="/t:username/t:username/t:username/k:username/k:username/k:username"
-              >multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username</a
-            >
-          </p>
-
-          <h3>How to add streams</h3>
-          <div class="usage-table-wrap">
-            <table class="usage-table">
-              <thead>
-                <tr>
-                  <th scope="col">You enter</th>
-                  <th scope="col">Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>Type a username, then pick <strong>Twitch</strong> or <strong>Kick</strong> from the dropdown</td>
-                  <td>That platform</td>
-                </tr>
-                <tr>
-                  <td><code>t:username</code> / <code>k:username</code></td>
-                  <td>Adds immediately</td>
-                </tr>
-                <tr>
-                  <td><code>twitch.tv/…</code> / <code>kick.com/…</code></td>
-                  <td>From URL</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
         </section>
 
         <button type="button" id="welcome-enter" class="welcome-modal__enter">Enter</button>
@@ -218,19 +194,79 @@
             </div>
             <button type="submit">Add Stream</button>
           </form>
-          <button type="button" id="share-link" class="toolbar__action" hidden>
-            Share link
-          </button>
-          <button type="button" id="clear-streams" class="toolbar__action" hidden>
-            Clear all
-          </button>
-          <button type="button" id="chat-toggle" class="toolbar__chat-toggle" hidden>
-            Hide chat
-          </button>
+          <div class="toolbar__actions">
+            <button
+              type="button"
+              id="share-link"
+              class="toolbar__icon-btn"
+              hidden
+              title="Share link"
+              aria-label="Share link"
+            >
+              <svg class="toolbar__icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <path
+                  d="M7.5 10.5 10.5 7.5M8.25 5.25l1.06-1.06a3 3 0 1 1 4.24 4.24L12.5 9.25M5.5 8.75l-1.06 1.06a3 3 0 1 0 4.24 4.24L9.75 12.75"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <span class="toolbar__icon-btn-label">Share link</span>
+            </button>
+            <button
+              type="button"
+              id="clear-streams"
+              class="toolbar__icon-btn"
+              hidden
+              title="Clear all"
+              aria-label="Clear all streams"
+            >
+              <svg class="toolbar__icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <path
+                  d="M3.5 5.5h11M7 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M14 5.5l-.7 8.4a1.5 1.5 0 0 1-1.5 1.35H6.2a1.5 1.5 0 0 1-1.5-1.35L4 5.5"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <span class="toolbar__icon-btn-label">Clear all</span>
+            </button>
+            <button
+              type="button"
+              id="headers-toggle"
+              class="toolbar__icon-btn"
+              title="Hide headers"
+              aria-label="Hide stream headers"
+              aria-pressed="false"
+            >
+              <svg class="toolbar__icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <rect x="2.5" y="3.5" width="13" height="11" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+                <path d="M2.5 7h13" stroke="currentColor" stroke-width="1.5" />
+              </svg>
+              <span class="toolbar__icon-btn-label">Hide headers</span>
+            </button>
+            <button
+              type="button"
+              id="chat-toggle"
+              class="toolbar__icon-btn"
+              hidden
+              title="Hide chat"
+              aria-label="Hide chat"
+              aria-pressed="false"
+            >
+              <svg class="toolbar__icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <path
+                  d="M3.5 4.5h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-2.5 2v-2h-1a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <span class="toolbar__icon-btn-label">Hide chat</span>
+            </button>
+          </div>
         </div>
-        <p class="toolbar__hint" id="toolbar-hint">
-          multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username
-        </p>
         <p class="toolbar__mobile-note">
           On mobile you can add multiple streams, but only one plays at a time due to browser
           restrictions.
@@ -238,6 +274,10 @@
       </header>
 
       <div class="main-layout">
+        <aside id="watching-panel" class="watching-panel" aria-label="Watching" hidden>
+          <div class="watching-panel__header">Watching</div>
+          <ul id="watching-list" class="watching-panel__list"></ul>
+        </aside>
         <div class="main-layout__streams">
           <div class="stream-area">
             <main id="stream-grid" class="stream-grid" aria-live="polite"></main>

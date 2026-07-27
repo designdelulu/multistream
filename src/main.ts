@@ -2,55 +2,122 @@ import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
   bindStreamFocus,
   bindTabVisibilityPlayers,
+  remountTwitchPlayers,
   syncStreamGrid,
   updateGridLayout,
 } from './components/StreamGrid';
 import { bindStreamReorder } from './components/StreamReorder';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
+import { bindWatchingPanel } from './components/WatchingPanel';
 import { bindWelcomeModal } from './components/WelcomeModal';
 import { phoneMediaQuery } from './lib/viewport';
 import { createChatStore } from './state/chat';
+import { createHeadersStore } from './state/headers';
 import { createStreamStore } from './state/streams';
 
 const store = createStreamStore();
 const chatStore = createChatStore(store);
+const headersStore = createHeadersStore();
 const grid = document.querySelector<HTMLElement>('#stream-grid');
 const chatPanel = document.querySelector<HTMLElement>('#chat-panel');
+const watchingPanel = document.querySelector<HTMLElement>('#watching-panel');
+const watchingList = document.querySelector<HTMLElement>('#watching-list');
 const streamArea = document.querySelector<HTMLElement>('.stream-area');
 const mainLayout = document.querySelector<HTMLElement>('.main-layout');
 
-if (!grid || !chatPanel || !streamArea || !mainLayout) {
+if (!grid || !chatPanel || !watchingPanel || !watchingList || !streamArea || !mainLayout) {
   throw new Error('Required layout elements not found');
 }
 
 const gridEl = grid;
 const chatPanelEl = chatPanel;
+const watchingPanelEl = watchingPanel;
+const watchingListEl = watchingList;
+const streamAreaEl = streamArea;
+const mainLayoutEl = mainLayout;
+
+/**
+ * Quiet ResizeObserver briefly after mounts so mid-bootstrap size thrash
+ * cannot stall Twitch embeds.
+ *
+ * Twitch refuses muted autoplay when the embed is obscured — avoid full-video
+ * overlays. Headers hidden uses a small bottom drag handle (hover-only) or the
+ * Watching list instead.
+ */
+let suppressLayout = false;
+let suppressLayoutTimer = 0;
+let resizeDebounceTimer = 0;
+
+function quietLayout(ms = 1500): void {
+  suppressLayout = true;
+  window.clearTimeout(suppressLayoutTimer);
+  suppressLayoutTimer = window.setTimeout(() => {
+    suppressLayoutTimer = 0;
+    suppressLayout = false;
+  }, ms);
+}
+
+function measureAndLayout(): void {
+  void watchingPanelEl.offsetWidth;
+  void streamAreaEl.offsetWidth;
+  updateGridLayout(gridEl);
+}
 
 function updateLayout(): void {
-  // Double rAF so flex has applied chat show/hide before measuring (MultiTwitch
-  // called optimize_size after show/hide synchronously on settled layout).
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
+      if (suppressLayout) return;
       updateGridLayout(gridEl);
     });
   });
 }
 
+function afterLayoutPaint(fn: () => void): void {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(fn);
+  });
+}
+
+function afterHeadersToggle(): void {
+  quietLayout(2500);
+  reorder.sync();
+  afterLayoutPaint(() => {
+    measureAndLayout();
+    remountTwitchPlayers(gridEl);
+    quietLayout(2500);
+  });
+}
+
 function renderStreams(): void {
+  quietLayout(2000);
   syncStreamGrid(gridEl, store);
   updateEmptyState(store);
-  updateLayout();
+  afterLayoutPaint(() => {
+    measureAndLayout();
+  });
 }
 
 let chatSnapshotBeforeFocus: { visible: boolean; selectedId: string | null } | null = null;
 
 bindWelcomeModal();
-bindStreamToolbar(store);
-bindStreamReorder(gridEl, store);
+bindStreamToolbar(store, headersStore);
+const reorder = bindStreamReorder(gridEl, store, headersStore, watchingListEl);
+reorder.sync();
+const watching = bindWatchingPanel(
+  watchingPanelEl,
+  watchingListEl,
+  store,
+  headersStore,
+  gridEl,
+  updateLayout,
+);
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);
 bindStreamFocus((focused, streamId) => {
+  watching.sync();
+  reorder.sync();
+
   if (focused && streamId) {
     if (!chatSnapshotBeforeFocus) {
       chatSnapshotBeforeFocus = {
@@ -82,6 +149,7 @@ bindStreamFocus((focused, streamId) => {
 });
 store.subscribe(renderStreams);
 chatStore.subscribe(updateLayout);
+headersStore.subscribe(afterHeadersToggle);
 
 const phoneQuery = phoneMediaQuery();
 
@@ -94,9 +162,16 @@ phoneQuery.addEventListener('change', handleViewportChange);
 window.visualViewport?.addEventListener('resize', handleViewportChange);
 
 const resizeObserver = new ResizeObserver(() => {
-  updateGridLayout(gridEl);
+  if (suppressLayout) return;
+  window.clearTimeout(resizeDebounceTimer);
+  resizeDebounceTimer = window.setTimeout(() => {
+    resizeDebounceTimer = 0;
+    if (suppressLayout) return;
+    updateGridLayout(gridEl);
+  }, 120);
 });
-resizeObserver.observe(mainLayout);
-resizeObserver.observe(streamArea);
+resizeObserver.observe(mainLayoutEl);
+resizeObserver.observe(streamAreaEl);
+resizeObserver.observe(watchingPanelEl);
 
 renderStreams();

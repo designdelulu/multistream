@@ -1,5 +1,6 @@
 import { parseStreamInput } from '../platforms';
 import type { Platform } from '../types';
+import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
 
 const PLATFORM_STORAGE_KEY = 'multistream:add-platform';
@@ -59,6 +60,19 @@ export function resolveAddInput(raw: string, platform: Platform): string {
   return platform === 'kick' ? `k:${value}` : value;
 }
 
+function iconButtonLabel(button: HTMLButtonElement): HTMLElement | null {
+  return button.querySelector<HTMLElement>('.toolbar__icon-btn-label');
+}
+
+function setIconButtonLabel(button: HTMLButtonElement, text: string): void {
+  const label = iconButtonLabel(button);
+  if (label) {
+    label.textContent = text;
+  }
+  button.title = text;
+  button.setAttribute('aria-label', text);
+}
+
 function tryAddStream(
   store: StreamStore,
   inputEl: HTMLInputElement,
@@ -85,12 +99,13 @@ function tryAddStream(
   return true;
 }
 
-export function bindStreamToolbar(store: StreamStore): void {
+export function bindStreamToolbar(store: StreamStore, headersStore: HeadersStore): void {
   const form = document.querySelector<HTMLFormElement>('#add-stream-form');
   const input = document.querySelector<HTMLInputElement>('#stream-input');
   const suggestions = document.querySelector<HTMLElement>('#add-stream-suggestions');
   const shareButton = document.querySelector<HTMLButtonElement>('#share-link');
   const clearButton = document.querySelector<HTMLButtonElement>('#clear-streams');
+  const headersButton = document.querySelector<HTMLButtonElement>('#headers-toggle');
 
   if (!form || !input || !suggestions) {
     throw new Error('Stream toolbar elements not found');
@@ -198,6 +213,14 @@ export function bindStreamToolbar(store: StreamStore): void {
     if (clearButton) clearButton.hidden = !hasStreams;
   }
 
+  function syncHeadersButton(): void {
+    if (!headersButton) return;
+    const hidden = headersStore.isHidden();
+    const label = hidden ? 'Show headers' : 'Hide headers';
+    setIconButtonLabel(headersButton, label);
+    headersButton.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+  }
+
   shareButton?.addEventListener('click', async () => {
     const url = window.location.href;
     try {
@@ -206,11 +229,11 @@ export function bindStreamToolbar(store: StreamStore): void {
       window.prompt('Copy this link:', url);
       return;
     }
-    const previous = shareButton.textContent;
-    shareButton.textContent = 'Copied!';
+    const previous = iconButtonLabel(shareButton)?.textContent ?? 'Share link';
+    setIconButtonLabel(shareButton, 'Copied!');
     window.clearTimeout(shareResetTimer);
     shareResetTimer = window.setTimeout(() => {
-      shareButton.textContent = previous;
+      setIconButtonLabel(shareButton, previous === 'Copied!' ? 'Share link' : previous);
     }, 1600);
   });
 
@@ -221,8 +244,14 @@ export function bindStreamToolbar(store: StreamStore): void {
     store.clearStreams();
   });
 
+  headersButton?.addEventListener('click', () => {
+    headersStore.toggle();
+  });
+
   store.subscribe(syncActionButtons);
+  headersStore.subscribe(syncHeadersButton);
   syncActionButtons();
+  syncHeadersButton();
   hideSuggestions();
 }
 

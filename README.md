@@ -9,23 +9,27 @@ Watch **Twitch** and **Kick** streams online on one page — a responsive grid t
 
 Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](https://designdelulu.com).
 
+**User guide:** [docs/USER-GUIDE.md](./docs/USER-GUIDE.md) — features and how to use the site.
+
 ---
 
 ## What it does
 
 MultiStream.cc is a lightweight browser viewer for multi-stream watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
 
-- **Twitch + Kick** on the same page via official player iframes
+- **Twitch + Kick** on the same page via Twitch’s JS Player API and Kick’s official iframe
 - **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
 - **Username dropdown** — type a name (or `@name`) and pick Twitch or Kick; Enter uses your last-chosen platform
 - **Share link / Clear all** in the toolbar
-- **Drag to reorder** stream cards (drag the card header); URL updates without remounting players
+- **Hide headers** — optional compact mode (remembered in `localStorage`); a left **Watching** sidebar lists color-coded channels with focus, remove, and drag-to-reorder
+- **Drag to reorder** stream cards (drag the card header, or a bottom handle / Watching list rows when headers are hidden); URL updates without remounting players
+- **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
 - **Shareable path URLs** like `/t:username/k:username`
 - **× close** and **focus** controls per stream — focus fills the area below the toolbar, opens that stream’s Twitch chat, and remounts unmuted (Kick has no chat panel)
 - **Twitch chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
 - **Streams always boot muted** — unmute on focus or from the Twitch/Kick player chrome
-- **No backend required** — static deploy, iframe embeds only
+- **No backend required** — static deploy, official embeds only
 
 Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) project, rebuilt for modern platforms and maintainability.
 
@@ -110,7 +114,9 @@ https://multistream.cc/t:username/t:username/t:username/k:username/k:username/k:
 
 Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:username`) still work.
 
-Use **Share link** in the toolbar to copy the current URL. **Clear all** removes every stream (with confirmation).
+Use **Share link** in the toolbar to copy the current URL. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Clear, Headers, Chat) are icons that expand their labels on hover.
+
+**Hide headers** collapses each card’s top bar for a denser grid. A **Watching** list appears on the left (Twitch/Kick color accents, focus, and × remove). Hover a video for a bottom **drag to reorder** handle, or drag rows in the Watching list — a small hover-only pill, not a full overlay (Twitch blocks autoplay if the player is covered).
 
 ### Add streams from the toolbar
 
@@ -123,10 +129,9 @@ Type a username to open a Twitch / Kick dropdown (leading `@` is stripped). Ente
 | `t:username` / `k:username` | That platform |
 | `twitch.tv/username` / `kick.com/username` | Platform from URL |
 
-Drag a card’s **header** to reorder streams; the path URL updates and players keep playing (DOM move only).
+Drag a card’s **header** to reorder streams (or the bottom handle / Watching list rows when headers are hidden); the path URL updates and players keep playing (DOM move only).
 
-The gray hint under the toolbar shows an example multi-stream path:
-`multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username`.
+When you return to the site without a share URL in the path, your last lineup is restored from `localStorage`. Opening a link like `/t:username` always uses that URL instead.
 
 ---
 
@@ -137,8 +142,8 @@ Vanilla **TypeScript + Vite** — no React, no server.
 ```
 src/
 ├── platforms/     # Twitch & Kick adapters (parse input, build embed URLs)
-├── state/         # Stream list, chat visibility, URL sync
-├── components/    # Grid, toolbar, chat panel, reorder, player cards
+├── state/         # Stream list, chat visibility, headers mode, URL sync
+├── components/    # Grid, toolbar, chat, watching, reorder, player cards
 ├── lib/           # Viewport helpers
 └── styles/        # Layout and UI
 ```
@@ -155,14 +160,12 @@ Adding a third platform later means adding one adapter file and registering it �
 ## Embed notes
 
 - Players must be served over **HTTP(S)** — `file://` will not work.
-- **Twitch** and **Kick** both use official player iframes (MultistreamGrid-style Twitch mount: `player.twitch.tv/?channel&parent&autoplay&muted`). There is no Twitch JS Player bootstrap (`embed/v1.js`).
+- **Twitch** uses the interactive embed (`player.twitch.tv/js/embed/v1.js` → `Twitch.Player`) so muted autoplay and focus unmute can call `play()` / `setMuted()` / `setVolume()`. Mount waits until the host has real layout size (≥400×300 when possible).
 - **Twitch** embeds require a matching `parent` domain (injected automatically from `window.location.hostname`).
-- **Kick** has one official embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
+- **Kick** uses the official iframe embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
 - **Layout packing** follows MultiTwitch’s `optimize_size` idea: pick the column count and 16:9 size that fits *every* stream in the streams pane. Chat docks beside the grid and triggers a reflow — it does not cover players (Twitch pauses embeds that are clipped or scrolled off-screen).
 - **Kick volume / control size:** Kick’s embed switches UI by **iframe layout width**. Below **769px** it uses mobile/tablet chrome (tiny overlays, often no volume). At **769px+** it uses desktop chrome with a speaker icon — hover the video, then the speaker, for the volume slider. When the packed cell is narrower than 769px, MultiStream still renders the Kick iframe at ≥769px and **CSS-scales** it into the cell so desktop chrome (including volume) stays available while the grid fits on-screen.
-- **Mute on load:** every embed boots with `muted=true`. Focus remounts the focused stream unmuted; exit remounts muted. Tab hide / focus-hide freezes players to `about:blank` and remounts muted on resume where possible.
-- Cross-origin iframes do not expose volume APIs to the parent page (no programmatic 50% volume on bare iframes).
-- **Competitor note:** MultistreamGrid also uses bare iframes + SortableJS; a hard refresh there often leaves Twitch paused until the user clicks play. MultiStream remounts muted on tab/focus resume to recover playback more reliably within iframe limits.
+- **Mute on load:** Twitch boots muted via `Twitch.Player`; Kick boots with `muted=true`. Focus unmutes Twitch through the Player API (volume ~50%); exit remounts muted so playback resumes. Tab hide / focus-hide destroys Twitch players (and blanks Kick) and remounts muted on resume.
 - **Chat** is Twitch-only (Kick has no official chat embed). Hidden on phones.
 
 ---
