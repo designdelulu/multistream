@@ -568,7 +568,25 @@ html.show-welcome .welcome-modal {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
   background: var(--surface);
-  padding: 14px 18px;
+  padding: 8px 14px;
+}
+
+.site-footer__line {
+  margin: 0 auto;
+  max-width: 100%;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.site-footer__line a {
+  color: color-mix(in srgb, var(--text) 88%, var(--accent));
+  text-decoration: none;
+}
+
+.site-footer__line a:hover {
+  text-decoration: underline;
 }
 
 .site-intro {
@@ -622,44 +640,6 @@ html.show-welcome .welcome-modal {
 .site-intro__example a {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.88rem;
-}
-
-.site-footer__source {
-  max-width: 720px;
-  margin: 0 auto 10px;
-  text-align: center;
-  color: var(--muted);
-  font-size: 0.88rem;
-}
-
-.site-footer__source a {
-  color: color-mix(in srgb, var(--text) 88%, var(--accent));
-  text-decoration: none;
-}
-
-.site-footer__source a:hover {
-  text-decoration: underline;
-}
-
-.site-credits {
-  max-width: 720px;
-  margin: 0 auto;
-  text-align: center;
-}
-
-.site-credits p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.88rem;
-}
-
-.site-credits a {
-  color: color-mix(in srgb, var(--text) 88%, var(--accent));
-  text-decoration: none;
-}
-
-.site-credits a:hover {
-  text-decoration: underline;
 }
 
 .usage-table-wrap {
@@ -822,8 +802,13 @@ html.show-welcome .welcome-modal {
   }
 
   .site-footer {
-    padding: 12px max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom))
-      max(16px, env(safe-area-inset-left));
+    padding: 6px max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
+
+  .site-footer__line {
+    font-size: 0.68rem;
+    line-height: 1.3;
   }
 
   .welcome-modal {
