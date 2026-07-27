@@ -171,12 +171,12 @@
               </thead>
               <tbody>
                 <tr>
-                  <td>Select <strong>Twitch</strong> or <strong>Kick</strong>, then a username</td>
+                  <td>Type a username, then pick <strong>Twitch</strong> or <strong>Kick</strong> from the dropdown</td>
                   <td>That platform</td>
                 </tr>
                 <tr>
                   <td><code>t:username</code> / <code>k:username</code></td>
-                  <td>Overrides the toggle</td>
+                  <td>Adds immediately</td>
                 </tr>
                 <tr>
                   <td><code>twitch.tv/…</code> / <code>kick.com/…</code></td>
@@ -198,37 +198,32 @@
             <a href="/" class="toolbar__brand">MultiStream.cc</a>
           </h1>
           <form id="add-stream-form" class="toolbar__form">
-            <div
-              class="toolbar__platform"
-              role="group"
-              aria-label="Stream platform"
-            >
-              <button
-                type="button"
-                class="toolbar__platform-btn is-active"
-                data-platform="twitch"
-                aria-pressed="true"
-              >
-                Twitch
-              </button>
-              <button
-                type="button"
-                class="toolbar__platform-btn"
-                data-platform="kick"
-                aria-pressed="false"
-              >
-                Kick
-              </button>
+            <div class="toolbar__input-wrap">
+              <input
+                id="stream-input"
+                type="text"
+                placeholder="Username or URL"
+                autocomplete="off"
+                spellcheck="false"
+                aria-autocomplete="list"
+                aria-controls="add-stream-suggestions"
+                aria-expanded="false"
+              />
+              <div
+                id="add-stream-suggestions"
+                class="toolbar__suggestions"
+                role="listbox"
+                hidden
+              ></div>
             </div>
-            <input
-              id="stream-input"
-              type="text"
-              placeholder="Username or URL"
-              autocomplete="off"
-              spellcheck="false"
-            />
             <button type="submit">Add Stream</button>
           </form>
+          <button type="button" id="share-link" class="toolbar__action" hidden>
+            Share link
+          </button>
+          <button type="button" id="clear-streams" class="toolbar__action" hidden>
+            Clear all
+          </button>
           <button type="button" id="chat-toggle" class="toolbar__chat-toggle" hidden>
             Hide chat
           </button>

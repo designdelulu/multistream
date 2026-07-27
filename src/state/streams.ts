@@ -88,6 +88,26 @@ export function createStreamStore() {
       setStreams(streams.filter((stream) => stream.id !== id));
     },
 
+    clearStreams(): void {
+      setStreams([]);
+    },
+
+    reorderStreams(ids: string[]): void {
+      const byId = new Map(streams.map((stream) => [stream.id, stream]));
+      const next: StreamRef[] = [];
+      for (const id of ids) {
+        const stream = byId.get(id);
+        if (stream) {
+          next.push(stream);
+          byId.delete(id);
+        }
+      }
+      for (const stream of byId.values()) {
+        next.push(stream);
+      }
+      setStreams(next);
+    },
+
     subscribe(listener: Listener): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);

@@ -45,67 +45,43 @@ function isBlankIframeSrc(src: string): boolean {
   return !src || src === 'about:blank' || src.endsWith('about:blank');
 }
 
-function applyKickAllowPolicy(iframe: HTMLIFrameElement, muted: boolean): void {
-  // Unmuted Kick needs allow=autoplay after a user gesture (focus click).
-  // Muted Kick omits it so the browser blocks accidental unmuted audio.
+function applyIframeAllowPolicy(
+  iframe: HTMLIFrameElement,
+  platform: Platform,
+  muted: boolean,
+): void {
+  // Twitch: always allow autoplay (muted grid boot / unmuted focus remount).
+  // Kick: omit allow=autoplay when muted so the browser blocks unmuted audio;
+  // add it on focus unmute after a user gesture.
+  if (platform === 'twitch') {
+    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
+    return;
+  }
   iframe.setAttribute(
     'allow',
     muted ? 'fullscreen; picture-in-picture' : 'autoplay; fullscreen; picture-in-picture',
   );
 }
 
-/** Nudge Twitch embeds to start muted playback (reduces stuck click-to-play overlays). */
-function nudgeTwitchAutoplay(iframe: HTMLIFrameElement): void {
-  const win = iframe.contentWindow;
-  if (!win) return;
-
-  const payloads = [
-    { namespace: 'twitch-embed-player-proxy', eventName: 'play', params: {} },
-    { eventName: 'playVideo', params: {} },
-    { event: 'play' },
-  ];
-
-  for (const payload of payloads) {
-    try {
-      win.postMessage(JSON.stringify(payload), 'https://player.twitch.tv');
-    } catch {
-      // Cross-origin / unsupported message formats are fine to ignore.
-    }
-  }
-}
-
-function bindTwitchAutoplayNudge(iframe: HTMLIFrameElement): void {
-  if (iframe.dataset.autoplayNudgeBound === '1') return;
-  iframe.dataset.autoplayNudgeBound = '1';
-
-  iframe.addEventListener('load', () => {
-    if (iframe.dataset.tabFrozen === '1' || iframe.dataset.focusFrozen === '1') return;
-    if (isBlankIframeSrc(iframe.src)) return;
-    // Short delays cover Twitch player bootstrap after the iframe load event.
-    window.setTimeout(() => nudgeTwitchAutoplay(iframe), 250);
-    window.setTimeout(() => nudgeTwitchAutoplay(iframe), 1000);
-  });
+function cardIframe(card: HTMLElement): HTMLIFrameElement | null {
+  return card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
 }
 
 function mountStreamIframe(card: HTMLElement, muted: boolean): void {
-  const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
+  const iframe = cardIframe(card);
   const platform = card.dataset.platform as Platform | undefined;
   const channel = card.dataset.channel;
   if (!iframe || !platform || !channel) return;
   if (iframe.dataset.tabFrozen === '1') return;
 
-  if (platform === 'kick') {
-    applyKickAllowPolicy(iframe, muted);
-  }
+  applyIframeAllowPolicy(iframe, platform, muted);
 
-  const nextSrc = buildEmbedUrl(
-    { platform, channel },
-    muted,
-    platform === 'kick' ? { autoplay: true } : { autoplay: true },
-  );
+  const nextSrc = buildEmbedUrl({ platform, channel }, muted, { autoplay: true });
 
   delete iframe.dataset.focusFrozen;
   iframe.dataset.embedMuted = muted ? '1' : '0';
+  card.dataset.embedMuted = muted ? '1' : '0';
+  delete card.dataset.focusFrozen;
 
   if (!isBlankIframeSrc(iframe.src)) {
     try {
@@ -125,11 +101,15 @@ function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): vo
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
     if (card.dataset.streamId === focusedId) continue;
 
-    const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
-    if (!iframe || iframe.dataset.tabFrozen === '1' || iframe.dataset.focusFrozen === '1') continue;
+    const iframe = cardIframe(card);
+    if (!iframe || iframe.dataset.tabFrozen === '1' || iframe.dataset.focusFrozen === '1') {
+      continue;
+    }
 
     iframe.dataset.focusFrozen = '1';
     iframe.dataset.embedMuted = '1';
+    card.dataset.focusFrozen = '1';
+    card.dataset.embedMuted = '1';
     iframe.src = 'about:blank';
   }
 }
@@ -137,8 +117,9 @@ function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): vo
 /** Reload streams that were unloaded while another stream was focused. */
 function resumeFocusHiddenPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
+    const iframe = cardIframe(card);
     if (!iframe || iframe.dataset.focusFrozen !== '1') continue;
+    delete card.dataset.focusFrozen;
     mountStreamIframe(card, true);
   }
 }
@@ -150,7 +131,7 @@ function syncFocusPlayers(container: HTMLElement, prevFocusedId: string | null):
     const focusedCard = container.querySelector<HTMLElement>(
       `.stream-card[data-stream-id="${CSS.escape(focusedStreamId)}"]`,
     );
-    // Focus click is a user gesture — remount unmuted so volume turns on.
+    // Focus click is a user gesture — remount unmuted (iframe has no volume API).
     if (focusedCard) {
       mountStreamIframe(focusedCard, false);
     }
@@ -165,7 +146,7 @@ function syncFocusPlayers(container: HTMLElement, prevFocusedId: string | null):
   focusSessionActive = false;
   resumeFocusHiddenPlayers(container);
 
-  // Remute the stream that was focused (it was unmuted in focus mode).
+  // Remount previously focused stream muted so Twitch starts again after unmute.
   const prevFocusedCard = container.querySelector<HTMLElement>(
     `.stream-card[data-stream-id="${CSS.escape(prevFocusedId)}"]`,
   );
@@ -281,6 +262,7 @@ function createPlayerElement(
   card.dataset.streamId = stream.id;
   card.dataset.platform = stream.platform;
   card.dataset.channel = stream.channel;
+  card.dataset.embedMuted = '1';
 
   const header = document.createElement('div');
   header.className = 'stream-card__header';
@@ -333,11 +315,7 @@ function createPlayerElement(
   iframe.referrerPolicy = 'no-referrer-when-downgrade';
 
   if (stream.platform === 'kick') {
-    // Kick ignores muted=true once the page has autoplay permission. Omit
-    // allow=autoplay so the browser blocks unmuted audio. credentialless
-    // avoids Kick restoring a prior unmuted volume from iframe storage.
-    // Focus mode temporarily adds allow=autoplay when remounting unmuted.
-    applyKickAllowPolicy(iframe, true);
+    applyIframeAllowPolicy(iframe, 'kick', true);
     iframe.setAttribute('credentialless', '');
     try {
       (iframe as HTMLIFrameElement & { credentialless?: boolean }).credentialless = true;
@@ -350,17 +328,15 @@ function createPlayerElement(
     kickFrame.append(iframe);
     player.append(kickFrame);
   } else {
-    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
-    bindTwitchAutoplayNudge(iframe);
+    applyIframeAllowPolicy(iframe, 'twitch', true);
     player.append(iframe);
   }
 
-  // Kick keeps playing in background tabs; unload while hidden (Twitch pauses itself).
   card.append(header, player);
 
   if (document.hidden) {
     iframe.dataset.tabFrozen = '1';
-    iframe.dataset.embedMuted = '1';
+    card.dataset.tabFrozen = '1';
     iframe.src = 'about:blank';
   } else {
     mountStreamIframe(card, true);
@@ -371,9 +347,11 @@ function createPlayerElement(
 
 /** Stop all stream embeds (Kick ignores tab backgrounding and keeps playing audio). */
 export function freezeStreamPlayers(container: HTMLElement): void {
-  for (const iframe of container.querySelectorAll<HTMLIFrameElement>('.stream-card__iframe')) {
-    if (iframe.dataset.tabFrozen === '1') continue;
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    const iframe = cardIframe(card);
+    if (!iframe || iframe.dataset.tabFrozen === '1') continue;
     iframe.dataset.tabFrozen = '1';
+    card.dataset.tabFrozen = '1';
     iframe.src = 'about:blank';
   }
 }
@@ -381,11 +359,12 @@ export function freezeStreamPlayers(container: HTMLElement): void {
 /** Reload muted embeds after the tab is visible again. */
 export function resumeStreamPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
-    if (!iframe) continue;
-    if (iframe.dataset.tabFrozen !== '1') continue;
+    const iframe = cardIframe(card);
+    if (!iframe || iframe.dataset.tabFrozen !== '1') continue;
 
     delete iframe.dataset.tabFrozen;
+    delete card.dataset.tabFrozen;
+
     const shouldUnmute =
       focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
     mountStreamIframe(card, !shouldUnmute);
@@ -415,7 +394,6 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
   const streams = store.getStreams();
   const nextIds = new Set(streams.map((stream) => stream.id));
 
-  // Drop stale/duplicate cards so hidden focus-mode streams cannot orphan in the DOM.
   const seenIds = new Set<string>();
   for (const card of [...container.querySelectorAll<HTMLElement>('.stream-card')]) {
     const id = card.dataset.streamId ?? '';
@@ -486,7 +464,6 @@ export function updateGridLayout(container: HTMLElement): void {
   const areaWidth = streamArea.clientWidth - GRID_PADDING;
 
   if (isStackedStreamLayout() && !focusedStreamId) {
-    // Phone: natural 16:9 stack (CSS). Still set Kick scale from column width.
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
     container.style.removeProperty('--player-width');

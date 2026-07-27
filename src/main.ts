@@ -5,6 +5,7 @@ import {
   syncStreamGrid,
   updateGridLayout,
 } from './components/StreamGrid';
+import { bindStreamReorder } from './components/StreamReorder';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
 import { bindWelcomeModal } from './components/WelcomeModal';
 import { phoneMediaQuery } from './lib/viewport';
@@ -45,6 +46,7 @@ let chatSnapshotBeforeFocus: { visible: boolean; selectedId: string | null } | n
 
 bindWelcomeModal();
 bindStreamToolbar(store);
+bindStreamReorder(gridEl, store);
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);

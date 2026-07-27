@@ -26,5 +26,7 @@ export interface StreamState {
   streams: StreamRef[];
   addStream(input: string): boolean;
   removeStream(id: string): void;
+  clearStreams(): void;
+  reorderStreams(ids: string[]): void;
   subscribe(listener: () => void): () => void;
 }

@@ -96,44 +96,81 @@ body {
   align-items: center;
 }
 
-.toolbar__platform {
-  display: inline-flex;
-  flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--bg);
+.toolbar__input-wrap {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.toolbar__platform-btn {
+.toolbar__suggestions {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: min(280px, 72vw);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 96%, black);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+
+.toolbar__suggestions[hidden] {
+  display: none;
+}
+
+.toolbar__suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin: 0;
-  padding: 9px 12px;
+  padding: 9px 10px;
   border: 0;
-  border-radius: 0;
+  border-radius: 8px;
   background: transparent;
-  color: var(--muted);
+  color: var(--text);
   font: inherit;
-  font-weight: 650;
-  font-size: 0.82rem;
+  text-align: left;
   cursor: pointer;
+}
+
+.toolbar__suggestion:hover,
+.toolbar__suggestion:focus-visible {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  outline: none;
+}
+
+.toolbar__suggestion-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.toolbar__platform-btn + .toolbar__platform-btn {
-  border-left: 1px solid var(--border);
+.toolbar__suggestion-label strong {
+  font-weight: 700;
 }
 
-.toolbar__platform-btn:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 6%, transparent);
+.toolbar__suggestion-platform {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
 }
 
-.toolbar__platform-btn.is-active[data-platform='twitch'] {
+.toolbar__suggestion-platform--twitch {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
   color: #e6d4ff;
 }
 
-.toolbar__platform-btn.is-active[data-platform='kick'] {
+.toolbar__suggestion-platform--kick {
   background: color-mix(in srgb, var(--kick) 22%, transparent);
   color: #c8ffb0;
 }
@@ -161,7 +198,8 @@ body {
 }
 
 .toolbar__form input {
-  flex: 0 1 auto;
+  display: block;
+  box-sizing: border-box;
   width: min(260px, 36vw);
   max-width: 280px;
   min-width: 0;
@@ -198,9 +236,9 @@ body {
   filter: brightness(1.08);
 }
 
+.toolbar__action,
 .toolbar__chat-toggle {
   flex: 0 0 auto;
-  margin-left: auto;
   padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -212,8 +250,18 @@ body {
   white-space: nowrap;
 }
 
+.toolbar__action:hover,
 .toolbar__chat-toggle:hover {
   background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.toolbar__chat-toggle,
+#share-link:not([hidden]) {
+  margin-left: auto;
+}
+
+#share-link:not([hidden]) ~ .toolbar__chat-toggle {
+  margin-left: 0;
 }
 
 .main-layout {
@@ -373,6 +421,25 @@ body {
   gap: 8px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.stream-card__header:active {
+  cursor: grabbing;
+}
+
+.stream-card--ghost {
+  opacity: 0.45;
+}
+
+.stream-card--chosen {
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.stream-card--drag {
+  opacity: 0.92;
 }
 
 .stream-card__badge {
@@ -849,21 +916,19 @@ html.show-welcome .welcome-modal {
     gap: 6px;
   }
 
-  .toolbar__platform {
-    grid-column: 1 / -1;
-    width: 100%;
+  .toolbar__input-wrap {
+    min-width: 0;
   }
 
-  .toolbar__platform-btn {
-    flex: 1;
-    min-height: 0;
-    padding: 8px 10px;
-    font-size: 0.82rem;
+  .toolbar__suggestions {
+    min-width: 0;
+    right: 0;
   }
 
   /* Comfortable height, not a tall slab; 16px keeps iOS from zooming. */
   .toolbar__form input {
     width: 100%;
+    max-width: none;
     min-width: 0;
     min-height: 0;
     padding: 8px 10px;
@@ -881,11 +946,18 @@ html.show-welcome .welcome-modal {
     white-space: nowrap;
   }
 
+  .toolbar__action,
   .toolbar__chat-toggle {
     width: 100%;
+    margin-left: 0;
     min-height: 0;
     padding: 8px 12px;
     font-size: 0.84rem;
+  }
+
+  #share-link:not([hidden]),
+  #share-link:not([hidden]) ~ .toolbar__chat-toggle {
+    margin-left: 0;
   }
 
   .toolbar__hint,
@@ -1008,8 +1080,8 @@ html.show-welcome .welcome-modal {
 
   .toolbar__form input,
   .toolbar__form > button[type='submit'],
-  .toolbar__chat-toggle,
-  .toolbar__platform-btn {
+  .toolbar__action,
+  .toolbar__chat-toggle {
     min-height: 40px;
   }
 }
