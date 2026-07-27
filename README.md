@@ -18,7 +18,7 @@ MultiStream.cc is a lightweight browser viewer for multi-stream watch parties, c
 - **Twitch + Kick** on the same page
 - **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
 - **Shareable path URLs** like `/t:username/k:username`
-- **× close** and **focus** controls per stream — focus fills the browser window below the toolbar and opens that stream’s Twitch chat (Kick has no chat panel)
+- **× close** and **focus** controls per stream — focus fills the browser window below the toolbar, opens that stream’s Twitch chat, and turns volume on (Kick has no chat panel)
 - **Twitch chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
 - **Streams always boot muted** — unmute from the Twitch/Kick player chrome
 - **No backend required** — static deploy, iframe embeds only

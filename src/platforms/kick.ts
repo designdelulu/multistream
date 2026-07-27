@@ -35,11 +35,12 @@ export const kickAdapter: PlatformAdapter = {
 
   buildEmbedUrl(ref, opts) {
     // Official params: muted + autoplay (+ parent on some embed paths).
-    // Always request muted. Do not cache-bust — remounts make Kick likelier to
-    // restore a remembered unmuted volume (unlike Twitch, which honors muted).
+    // Prefer muted embeds in the grid. Focus mode may remount unmuted after a
+    // user click. Do not cache-bust — remounts make Kick likelier to restore a
+    // remembered unmuted volume when muted=true is ignored.
     const autoplay = opts.autoplay ?? true;
     const params = new URLSearchParams({
-      muted: 'true',
+      muted: opts.muted ? 'true' : 'false',
       autoplay: autoplay ? 'true' : 'false',
       playsinline: 'true',
     });
