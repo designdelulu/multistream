@@ -11,7 +11,7 @@ function streamIdsFrom(container: HTMLElement, itemSelector: string): string[] {
 
 /**
  * Headers visible → drag card headers on the grid.
- * Headers hidden → drag bottom handle on each card.
+ * Headers hidden → drag handle in the hover toolbar below each card.
  * Focus mode → dragging disabled entirely.
  */
 export function bindStreamReorder(

@@ -41,8 +41,8 @@ Leading `@` is stripped automatically.
 
 - Streams fill a responsive grid that keeps every player as large as possible.
 - Each card shows a platform badge and username on the header (by default).
-- Drag a card’s **header** to reorder. Playback continues — players are not remounted.
-- Use **×** to remove a stream. In focus mode, × minimizes back to the grid first.
+- Drag a card’s **header** to reorder (or the **drag** handle in the hover toolbar when headers are hidden). Playback continues — players are not remounted.
+- Use **×** to remove a stream (header button, or **×** in the hover toolbar). In focus mode, × minimizes back to the grid first.
 
 ### Focus
 
@@ -106,7 +106,7 @@ Performance depends on how many live embeds are open. Fewer streams = smoother p
 
 - Start muted — browsers block unmuted autoplay.
 - Focus a stream when you want sound quickly.
-- Hide headers for tournaments or dense watch parties; manage streams via hover controls.
+- Hide headers for tournaments or dense watch parties; hover a card for the toolbar below each video (focus, remove, drag).
 - Clear all when starting a fresh layout.
 - Kick’s volume UI needs a wide player; MultiStream scales Kick embeds so desktop chrome stays available when cells are narrow.
 
