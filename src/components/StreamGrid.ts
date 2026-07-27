@@ -9,15 +9,14 @@ import type { StreamStore } from '../state/streams';
  * than that — so Kick iframes are rendered at ≥769px and CSS-scaled down into
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  *
- * Chrome pauses Twitch when anything with opacity > 0 stacks over the iframe.
- * Headers-hidden controls live in a gutter BELOW the player (never on-video).
+ * Headers-hidden matches MultistreamGrid: video fills the card alone; name /
+ * focus / drag appear as on-video hover chrome (opacity only). Chrome may still
+ * pause Twitch while overlays are visible — mouseleave remounts the embed.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
-/** Slim control strip below the embed when headers are hidden. */
-const CARD_GUTTER_HEIGHT = 40;
 
 type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
 
@@ -63,7 +62,7 @@ function streamIframe(card: HTMLElement): HTMLIFrameElement | null {
   return card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
 }
 
-function mountTwitchIframe(card: HTMLElement, muted: boolean): void {
+function mountTwitchIframe(card: HTMLElement, muted: boolean, force = false): void {
   const iframe = streamIframe(card);
   const channel = card.dataset.channel;
   if (!iframe || !channel) return;
@@ -75,7 +74,7 @@ function mountTwitchIframe(card: HTMLElement, muted: boolean): void {
   iframe.dataset.embedMuted = muted ? '1' : '0';
   card.dataset.embedMuted = muted ? '1' : '0';
 
-  if (!isBlankIframeSrc(iframe.src)) {
+  if (!force && !isBlankIframeSrc(iframe.src)) {
     try {
       if (new URL(iframe.src).href === new URL(nextSrc).href) {
         return;
@@ -422,10 +421,6 @@ function createPlayerElement(
     player.append(iframe);
   }
 
-  // Gutter sits BELOW the player — never stacked over the iframe (Chrome occlusion).
-  const gutter = document.createElement('div');
-  gutter.className = 'stream-card__gutter';
-
   const nameBadge = document.createElement('div');
   nameBadge.className = 'stream-card__name-badge';
 
@@ -446,14 +441,21 @@ function createPlayerElement(
   const overlayControls = document.createElement('div');
   overlayControls.className = 'stream-card__overlay-controls';
 
-  const overlayFocus = document.createElement('button');
-  overlayFocus.type = 'button';
+  const overlayFocus = document.createElement('div');
   overlayFocus.className = 'stream-card__overlay-focus';
   overlayFocus.title = 'Focus stream';
+  overlayFocus.setAttribute('role', 'button');
+  overlayFocus.setAttribute('tabindex', '0');
   overlayFocus.setAttribute('aria-label', 'Focus stream in browser window');
   overlayFocus.setAttribute('aria-pressed', 'false');
   overlayFocus.textContent = '🔍';
   overlayFocus.addEventListener('click', () => toggleStreamFocus(container, stream.id));
+  overlayFocus.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggleStreamFocus(container, stream.id);
+    }
+  });
 
   overlayControls.append(overlayFocus);
 
@@ -461,18 +463,46 @@ function createPlayerElement(
   dragHandle.className = 'stream-card__drag-handle';
   dragHandle.title = 'Drag to reorder';
   dragHandle.setAttribute('aria-label', 'Drag to reorder');
-  dragHandle.textContent = '⠿ drag';
+  dragHandle.textContent = '⠿ drag to reorder';
 
-  gutter.append(nameBadge, dragHandle, overlayControls);
-  card.append(header, player, gutter);
+  // MultistreamGrid: overlays are siblings of the iframe inside the cell.
+  // Mount embed first, then append chrome (iframe already has src for Twitch).
+  card.append(header, player);
+
+  const existingCount = container.querySelectorAll('.stream-card').length;
+  const isFirst = existingCount === 0;
+  const embedMuted = stream.platform === 'kick' ? true : !isFirst;
 
   if (document.hidden) {
     card.dataset.tabFrozen = '1';
+  } else if (stream.platform === 'twitch') {
+    iframe.src = buildEmbedUrl(
+      { platform: 'twitch', channel: stream.channel },
+      embedMuted,
+      { autoplay: true },
+    );
+    iframe.dataset.embedMuted = embedMuted ? '1' : '0';
+    card.dataset.embedMuted = embedMuted ? '1' : '0';
   } else {
-    const existingCount = container.querySelectorAll('.stream-card').length;
-    const isFirst = existingCount === 0;
-    const embedMuted = stream.platform === 'kick' ? true : !isFirst;
-    mountStreamMedia(card, embedMuted);
+    mountStreamMedia(card, true);
+  }
+
+  player.append(nameBadge, overlayControls, dragHandle);
+
+  // Chrome may pause Twitch while on-video chrome is visible; remount on leave.
+  if (stream.platform === 'twitch') {
+    let recoverTimer = 0;
+    player.addEventListener('mouseleave', () => {
+      window.clearTimeout(recoverTimer);
+      recoverTimer = window.setTimeout(() => {
+        if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
+        const muted = card.dataset.embedMuted !== '0';
+        mountTwitchIframe(card, muted, true);
+      }, 120);
+    });
+    player.addEventListener('mouseenter', () => {
+      window.clearTimeout(recoverTimer);
+    });
   }
 
   return card;
@@ -634,12 +664,9 @@ export function updateGridLayout(container: HTMLElement): void {
   let bestHeight = 0;
 
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
-  // Header bar OR gutter strip (never both in the same mode, except focused keep header).
-  const chromeHeight = focusedStreamId
-    ? CARD_HEADER_HEIGHT
-    : headersHidden
-      ? CARD_GUTTER_HEIGHT
-      : CARD_HEADER_HEIGHT;
+  // Headers-hidden: video alone (no chrome height). Focused keeps header for ×.
+  const chromeHeight =
+    !headersHidden || focusedStreamId ? CARD_HEADER_HEIGHT : 0;
 
   for (let columns = 1; columns <= Math.min(count, 4); columns += 1) {
     const rows = Math.ceil(count / columns);
