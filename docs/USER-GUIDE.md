@@ -1,6 +1,6 @@
 # MultiStream.cc — User guide
 
-Watch Twitch and Kick on one page. This guide covers the features and how to use them.
+Watch Twitch and Kick on one page. MultiStream.cc is a modern multi-stream viewer — this guide covers the features and how to use them.
 
 **Live site:** [multistream.cc](https://multistream.cc)
 
@@ -40,7 +40,7 @@ Leading `@` is stripped automatically.
 ## Watching the grid
 
 - Streams fill a responsive grid that keeps every player as large as possible.
-- Each card shows a platform badge and username on the header (by default).
+- Each card shows a platform badge and username on the header (or in the hover toolbar when headers are hidden — the default).
 - Drag a card’s **header** to reorder (or the **drag** handle in the hover toolbar when headers are hidden). Playback continues — players are not remounted.
 - Use **×** to remove a stream (header button, or **×** in the hover toolbar). In focus mode, × minimizes back to the grid first.
 
@@ -54,7 +54,7 @@ Leading `@` is stripped automatically.
 
 ### Hide headers
 
-- Toolbar **Hide headers** collapses card top bars for a denser view (preference is remembered).
+- Toolbar **Show headers** / **Hide headers** toggles card top bars (preference is remembered; headers hidden by default).
 - At rest the card is **video only**. Hover the card and the player shrinks slightly so a control strip appears **below** the iframe (name, drag, focus, remove) — never stacked over the embed (Twitch requirement 1.3).
 - This avoids Chrome pause-on-overlay and the mute-control refresh loop from remounting embeds.
 

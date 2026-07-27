@@ -23,11 +23,11 @@
     <title>Watch Twitch &amp; Kick Streams Online | MultiStream.cc</title>
     <meta
       name="description"
-      content="Watch Twitch and Kick streams online on one page. MultiStream.cc builds a responsive multi-stream grid and a shareable URL for your lineup."
+      content="Watch Twitch and Kick streams online on one page. MultiStream.cc is a modern multi-stream viewer with a responsive grid and shareable lineup URLs."
     />
     <meta
       name="keywords"
-      content="watch twitch and kick streams online, watch twitch and kick together, multistream, MultiStream, Twitch, Kick, multi stream viewer, watch multiple streams online, live stream grid, Twitch and Kick multistream"
+      content="watch twitch and kick streams online, watch twitch and kick together, multistream, MultiStream, Twitch, Kick, modern multi stream viewer, multi stream viewer, watch multiple streams online, live stream grid, Twitch and Kick multistream"
     />
     <meta name="author" content="Eric Barker" />
     <meta name="robots" content="index, follow" />
@@ -38,7 +38,7 @@
     <meta property="og:title" content="Watch Twitch &amp; Kick Streams Online | MultiStream.cc" />
     <meta
       property="og:description"
-      content="Watch Twitch and Kick streams online on one page. Share your layout with a URL and let MultiStream optimize the grid for you."
+      content="Watch Twitch and Kick streams online on one page. MultiStream.cc is a modern multi-stream viewer — share your layout with a URL."
     />
     <meta property="og:site_name" content="MultiStream.cc" />
     <meta property="og:image" content="https://multistream.cc/og-image.png" />
@@ -54,7 +54,7 @@
     <meta name="twitter:title" content="Watch Twitch &amp; Kick Streams Online | MultiStream.cc" />
     <meta
       name="twitter:description"
-      content="Watch Twitch and Kick streams online on one page. Share your layout with a URL."
+      content="Watch Twitch and Kick streams online on one page. A modern multi-stream viewer with shareable lineup URLs."
     />
     <meta name="twitter:image" content="https://multistream.cc/og-image.png" />
     <meta
@@ -68,7 +68,7 @@
         "name": "MultiStream.cc",
         "alternateName": ["MultiStream", "multistream.cc"],
         "url": "https://multistream.cc/",
-        "description": "Watch Twitch and Kick streams online on one page in a shareable, responsive grid layout.",
+        "description": "A modern multi-stream viewer to watch Twitch and Kick streams online on one page in a shareable, responsive grid layout.",
         "applicationCategory": "EntertainmentApplication",
         "operatingSystem": "Web",
         "featureList": [
@@ -95,7 +95,7 @@
         if (!localStorage.getItem('multistream:welcome-dismissed')) {
           document.documentElement.classList.add('show-welcome');
         }
-        if (localStorage.getItem('multistream:headers-hidden') === '1') {
+        if (localStorage.getItem('multistream:headers-hidden') !== '0') {
           document.documentElement.classList.add('headers-hidden');
         }
       } catch (e) {}
@@ -106,14 +106,14 @@
   <body>
     <noscript>
       <p>
-        MultiStream.cc lets you watch Twitch and Kick streams online on one page — add channels
+        MultiStream.cc is a modern multi-stream viewer for Twitch and Kick — add channels
         from the toolbar or open a shareable URL with your lineup.
       </p>
     </noscript>
     <section class="seo-landing" aria-label="About MultiStream.cc">
       <h1>Watch Twitch and Kick streams online</h1>
       <p>
-        MultiStream.cc is a free multi-stream viewer for Twitch and Kick. Add channels from the
+        MultiStream.cc is a modern multi-stream viewer for Twitch and Kick. Add channels from the
         toolbar or open a shareable URL with your lineup already configured.
       </p>
       <p>
@@ -142,8 +142,9 @@
         <section class="site-intro" aria-labelledby="intro-heading">
           <h2 id="intro-heading">Welcome to MultiStream.cc</h2>
           <p>
-            Watch Twitch and Kick side by side in one responsive grid. Add channels from the
-            toolbar, rearrange them however you like, and share your lineup with friends.
+            Watch Twitch and Kick side by side in one responsive grid — a modern multi-stream
+            viewer with minimal friction. Add channels from the toolbar, rearrange them however
+            you like, and share your lineup with friends.
           </p>
 
           <h3>Quick start</h3>

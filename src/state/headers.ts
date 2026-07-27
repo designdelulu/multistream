@@ -4,19 +4,17 @@ const STORAGE_KEY = 'multistream:headers-hidden';
 
 function loadHidden(): boolean {
   try {
-    return localStorage.getItem(STORAGE_KEY) === '1';
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored === null) return true;
+    return stored === '1';
   } catch {
-    return false;
+    return true;
   }
 }
 
 function persistHidden(hidden: boolean): void {
   try {
-    if (hidden) {
-      localStorage.setItem(STORAGE_KEY, '1');
-    } else {
-      localStorage.removeItem(STORAGE_KEY);
-    }
+    localStorage.setItem(STORAGE_KEY, hidden ? '1' : '0');
   } catch {
     // Ignore storage failures.
   }

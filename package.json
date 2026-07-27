@@ -1,7 +1,7 @@
 {
   "name": "multistream",
   "version": "0.1.0",
-  "description": "Watch Twitch and Kick streams online on one page — MultiStream.cc",
+  "description": "A modern multi-stream viewer — watch Twitch and Kick streams online on one page.",
   "type": "module",
   "author": "Eric Barker (https://ericbarker.co)",
   "license": "MIT",
@@ -21,6 +21,7 @@
     "watch kick online",
     "live-stream",
     "multi-stream-viewer",
+    "modern multi-stream viewer",
     "watch streams together"
   ],
   "scripts": {

@@ -15,14 +15,14 @@ Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](http
 
 ## What it does
 
-MultiStream.cc is a lightweight browser viewer for multi-stream watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
+MultiStream.cc is a modern multi-stream viewer for Twitch and Kick — watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
 
 - **Twitch + Kick** on the same page via plain embed iframes (same approach as [MultistreamGrid](https://multistreamgrid.com))
 - **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
 - **Username dropdown** — type a name (or `@name`) and pick Twitch or Kick; Enter uses your last-chosen platform
 - **Share link / Clear all** in the toolbar
-- **Hide headers** — optional compact mode (remembered in `localStorage`); at rest each card is video-only; hover a card and a toolbar opens **below** the embed (name, drag, focus, remove) so Twitch is never obscured
+- **Hide headers** — compact mode is **on by default** (remembered in `localStorage`); at rest each card is video-only; hover a card and a toolbar opens **below** the embed (name, drag, focus, remove) so Twitch is never obscured
 - **Drag to reorder** stream cards (drag the card header, or the drag handle in the hover toolbar when headers are hidden); URL updates without remounting players
 - **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
 - **Shareable path URLs** like `/t:username/k:username`
