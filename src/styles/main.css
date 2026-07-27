@@ -724,19 +724,20 @@ html.headers-hidden .stream-card__header {
 /* flat-dom: card acts like MultistreamGrid .stream-box when headers are hidden. */
 html.headers-hidden .stream-card {
   display: block;
-  position: relative;
-}
-
-html.headers-hidden .stream-card__player {
-  position: relative;
-  overflow: hidden;
 }
 
 /* flat-dom step 5: MultistreamGrid count-based CSS grid — no JS --player-height. */
+html.headers-hidden .stream-area {
+  min-height: 0;
+}
+
 html.headers-hidden .stream-grid:not([data-focus-id]) {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
   gap: 4px;
   padding: 4px;
-  align-content: start;
+  align-content: stretch;
   grid-template-columns: 1fr;
 }
 
@@ -785,14 +786,23 @@ html.headers-hidden .stream-grid.count-many:not([data-focus-id]) {
 }
 
 html.headers-hidden .stream-grid:not([data-focus-id]) .stream-card {
+  position: relative;
+  overflow: hidden;
   min-height: 0;
-  height: 100%;
 }
 
+/* MSG .stream-box > iframe { absolute inset 0 } — player fills the grid cell. */
 html.headers-hidden .stream-grid:not([data-focus-id]) .stream-card__player {
-  aspect-ratio: unset;
+  position: absolute;
+  inset: 0;
+  width: 100%;
   height: 100%;
+  aspect-ratio: unset;
   min-height: 0;
+}
+
+html.headers-hidden .stream-grid:not(:empty):not([data-focus-id]) .stream-card__player {
+  height: 100%;
 }
 
 /* Focused stream keeps a header for × minimize — never rely on video overlays. */
