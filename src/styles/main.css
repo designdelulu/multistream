@@ -721,6 +721,17 @@ html.headers-hidden .stream-card__header {
   display: none;
 }
 
+/* flat-dom: card acts like MultistreamGrid .stream-box when headers are hidden. */
+html.headers-hidden .stream-card {
+  display: block;
+  position: relative;
+}
+
+html.headers-hidden .stream-card__player {
+  position: relative;
+  overflow: hidden;
+}
+
 /* Focused stream keeps a header for × minimize — never rely on video overlays. */
 html.headers-hidden.stream-focused .stream-card.is-focused .stream-card__header {
   display: flex;
@@ -731,13 +742,13 @@ html.stream-focused .stream-card__name-badge {
   display: none !important;
 }
 
-/* MultistreamGrid-style hover chrome — opacity only, never toggle pointer-events. */
+/* MultistreamGrid parity: overlays always in layout (display:flex/block), opacity-only hover. */
 .stream-card__name-badge {
   position: absolute;
   top: 10px;
   left: 10px;
   z-index: 10;
-  display: none;
+  display: flex;
   align-items: center;
   gap: 6px;
   padding: 4px 8px 4px 6px;
@@ -804,17 +815,12 @@ html.stream-focused .stream-card__name-badge {
   color: #000;
 }
 
-html.headers-hidden .stream-card__name-badge {
-  display: flex;
-}
-
 .stream-card__drag-handle {
   position: absolute;
   bottom: 8px;
   left: 50%;
-  z-index: 10;
   transform: translateX(-50%);
-  display: none;
+  display: block;
   margin: 0;
   padding: 3px 10px;
   border: 0;
@@ -833,13 +839,15 @@ html.headers-hidden .stream-card__name-badge {
   transition: opacity 0.2s;
 }
 
-html.headers-hidden .stream-card__drag-handle {
-  display: block;
+html.headers-hidden .stream-card__player:hover .stream-card__name-badge,
+html.headers-hidden .stream-card__player:hover .stream-card__overlay-controls,
+html.headers-hidden .stream-card__player:hover .stream-card__drag-handle {
+  opacity: 1;
 }
 
-html.headers-hidden .stream-card:hover .stream-card__name-badge,
-html.headers-hidden .stream-card:hover .stream-card__overlay-controls,
-html.headers-hidden .stream-card:hover .stream-card__drag-handle {
+html.headers-hidden.stream-focused .stream-card__player:hover .stream-card__name-badge,
+html.headers-hidden.stream-focused .stream-card__player:hover .stream-card__overlay-controls,
+html.headers-hidden.stream-focused .stream-card__player:hover .stream-card__drag-handle {
   opacity: 1;
 }
 
@@ -860,18 +868,14 @@ html.stream-focused .stream-card__drag-handle {
   top: 10px;
   right: 10px;
   z-index: 10;
-  display: none;
+  display: flex;
   gap: 6px;
   opacity: 0;
   transition: opacity 0.2s;
 }
 
-html.headers-hidden .stream-card__overlay-controls {
-  display: flex;
-}
-
 .stream-card__overlay-focus {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 42px;
@@ -883,6 +887,8 @@ html.headers-hidden .stream-card__overlay-controls {
   background: rgba(0, 0, 0, 0.82);
   color: white;
   font: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
   cursor: pointer;
   touch-action: manipulation;
   transition: background 0.15s, border-color 0.15s, transform 0.1s;
@@ -899,10 +905,6 @@ html.headers-hidden .stream-card__overlay-controls {
 .stream-card__overlay-focus[aria-pressed='true'] {
   border-color: color-mix(in srgb, var(--accent) 55%, white);
   background: color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.9));
-}
-
-.stream-card__overlay-focus svg {
-  display: block;
 }
 
 .stream-grid:not(:empty) .stream-card__player {

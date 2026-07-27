@@ -9,9 +9,10 @@ import type { StreamStore } from '../state/streams';
  * than that — so Kick iframes are rendered at ≥769px and CSS-scaled down into
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  *
- * Twitch uses plain player.twitch.tv iframes (like MultistreamGrid), not the
- * Twitch.Player JS API. Hover controls are direct siblings of the iframe inside
- * .stream-card__player — same flat stream-box pattern as MultistreamGrid.
+ * Twitch flat-dom experiment (branch flat-dom): iframe + hover overlays are
+ * direct siblings inside .stream-card__player (MultistreamGrid .stream-box pattern).
+ * Iframe src is set before overlay nodes mount; overlays always display:flex/block
+ * with opacity 0 — never display:none.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
@@ -27,9 +28,6 @@ let escapeBound = false;
 let layoutFrame = 0;
 let layoutRetries = 0;
 const MAX_LAYOUT_RETRIES = 8;
-
-const OVERLAY_FOCUS_ICON =
-  '<span aria-hidden="true"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="7.5" cy="7.5" r="4.75" stroke="currentColor" stroke-width="1.5"/><path d="M11 11L15 15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>';
 
 function clearLayoutVars(container: HTMLElement): void {
   container.style.removeProperty('--grid-columns');
@@ -415,15 +413,6 @@ function createPlayerElement(
 
   const iframe = createStreamIframe(stream, adapter);
 
-  if (stream.platform === 'kick') {
-    const kickFrame = document.createElement('div');
-    kickFrame.className = 'stream-card__kick-frame';
-    kickFrame.append(iframe);
-    player.append(kickFrame);
-  } else {
-    player.append(iframe);
-  }
-
   const nameBadge = document.createElement('div');
   nameBadge.className = 'stream-card__name-badge';
 
@@ -451,7 +440,7 @@ function createPlayerElement(
   overlayFocus.setAttribute('tabindex', '0');
   overlayFocus.setAttribute('aria-label', 'Focus stream in browser window');
   overlayFocus.setAttribute('aria-pressed', 'false');
-  overlayFocus.innerHTML = OVERLAY_FOCUS_ICON;
+  overlayFocus.textContent = '🔍';
   overlayFocus.addEventListener('click', () => toggleStreamFocus(container, stream.id));
   overlayFocus.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -465,20 +454,40 @@ function createPlayerElement(
   const dragHandle = document.createElement('div');
   dragHandle.className = 'stream-card__drag-handle';
   dragHandle.title = 'Drag to reorder';
-  dragHandle.setAttribute('role', 'button');
   dragHandle.setAttribute('aria-label', 'Drag to reorder');
   dragHandle.textContent = '⠿ drag to reorder';
 
   card.append(header, player);
 
-  if (document.hidden) {
-    card.dataset.tabFrozen = '1';
-  } else {
-    // Load embed before overlay siblings (MultistreamGrid sets iframe src in markup first).
-    mountStreamMedia(card, true);
-  }
+  const existingCount = container.querySelectorAll('.stream-card').length;
+  const isFirst = existingCount === 0;
+  const embedMuted = stream.platform === 'kick' ? true : !isFirst;
 
-  player.append(nameBadge, overlayControls, dragHandle);
+  if (stream.platform === 'kick') {
+    const kickFrame = document.createElement('div');
+    kickFrame.className = 'stream-card__kick-frame';
+    kickFrame.append(iframe);
+    player.append(kickFrame, nameBadge, overlayControls, dragHandle);
+    if (!document.hidden) {
+      mountStreamMedia(card, true);
+    } else {
+      card.dataset.tabFrozen = '1';
+    }
+  } else {
+    // MultistreamGrid: iframe src + overlay siblings in one mount (innerHTML equivalent).
+    if (!document.hidden) {
+      iframe.src = buildEmbedUrl(
+        { platform: 'twitch', channel: stream.channel },
+        embedMuted,
+        { autoplay: true },
+      );
+      iframe.dataset.embedMuted = embedMuted ? '1' : '0';
+      card.dataset.embedMuted = embedMuted ? '1' : '0';
+    } else {
+      card.dataset.tabFrozen = '1';
+    }
+    player.append(iframe, nameBadge, overlayControls, dragHandle);
+  }
 
   return card;
 }
