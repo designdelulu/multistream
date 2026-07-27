@@ -55,29 +55,25 @@ export const twitchAdapter: PlatformAdapter = {
     const params = new URLSearchParams({
       channel: ref.channel,
       muted: String(opts.muted),
-      // Helps some browsers start muted playback without a click-to-play overlay.
-      playsinline: 'true',
     });
     if (opts.autoplay !== false) {
       params.set('autoplay', 'true');
     }
-    params.append('parent', opts.parent);
-    // Twitch requires an exact parent match; Vite may use localhost or 127.0.0.1.
+    // MultistreamGrid: parent = current hostname only (dual localhost pair for dev).
+    params.set('parent', opts.parent);
     if (opts.parent === 'localhost' || opts.parent === '127.0.0.1') {
       params.append('parent', opts.parent === 'localhost' ? '127.0.0.1' : 'localhost');
-    } else {
-      params.append('parent', '127.0.0.1');
     }
     return `https://player.twitch.tv/?${params.toString()}`;
   },
 
   buildChatEmbedUrl(ref, opts) {
     const params = new URLSearchParams();
-    params.append('parent', opts.parent);
-    if (opts.parent !== 'localhost') {
-      params.append('parent', '127.0.0.1');
+    params.set('parent', opts.parent);
+    if (opts.parent === 'localhost' || opts.parent === '127.0.0.1') {
+      params.append('parent', opts.parent === 'localhost' ? '127.0.0.1' : 'localhost');
     }
-    return `https://www.twitch.tv/embed/${encodeURIComponent(ref.channel)}/chat?${params.toString()}`;
+    return `https://www.twitch.tv/embed/${encodeURIComponent(ref.channel)}/chat?${params.toString()}&darkpopout`;
   },
 
   displayName(ref) {

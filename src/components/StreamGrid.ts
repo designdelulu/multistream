@@ -236,7 +236,7 @@ function syncFocusDom(container: HTMLElement): void {
       dragHandle.hidden = focusedStreamId !== null;
     }
 
-    const overlayFocus = card.querySelector<HTMLButtonElement>('.stream-card__overlay-focus');
+    const overlayFocus = card.querySelector<HTMLElement>('.stream-card__overlay-focus');
     if (overlayFocus) {
       overlayFocus.setAttribute('aria-pressed', isFocused ? 'true' : 'false');
       if (isFocused) {
@@ -444,14 +444,21 @@ function createPlayerElement(
   const overlayControls = document.createElement('div');
   overlayControls.className = 'stream-card__overlay-controls';
 
-  const overlayFocus = document.createElement('button');
-  overlayFocus.type = 'button';
+  const overlayFocus = document.createElement('div');
   overlayFocus.className = 'stream-card__overlay-focus';
   overlayFocus.title = 'Focus stream';
+  overlayFocus.setAttribute('role', 'button');
+  overlayFocus.setAttribute('tabindex', '0');
   overlayFocus.setAttribute('aria-label', 'Focus stream in browser window');
   overlayFocus.setAttribute('aria-pressed', 'false');
   overlayFocus.innerHTML = OVERLAY_FOCUS_ICON;
   overlayFocus.addEventListener('click', () => toggleStreamFocus(container, stream.id));
+  overlayFocus.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggleStreamFocus(container, stream.id);
+    }
+  });
 
   overlayControls.append(overlayFocus);
 
@@ -462,15 +469,16 @@ function createPlayerElement(
   dragHandle.setAttribute('aria-label', 'Drag to reorder');
   dragHandle.textContent = '⠿ drag to reorder';
 
-  player.append(nameBadge, overlayControls, dragHandle);
-
   card.append(header, player);
 
   if (document.hidden) {
     card.dataset.tabFrozen = '1';
   } else {
+    // Load embed before overlay siblings (MultistreamGrid sets iframe src in markup first).
     mountStreamMedia(card, true);
   }
+
+  player.append(nameBadge, overlayControls, dragHandle);
 
   return card;
 }
