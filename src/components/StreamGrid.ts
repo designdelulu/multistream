@@ -14,6 +14,15 @@ const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
 
+type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
+
+let focusedStreamId: string | null = null;
+let focusChangeHandler: FocusChangeHandler | null = null;
+let escapeBound = false;
+let layoutFrame = 0;
+let layoutRetries = 0;
+const MAX_LAYOUT_RETRIES = 8;
+
 function clearLayoutVars(container: HTMLElement): void {
   container.style.removeProperty('--grid-columns');
   container.style.removeProperty('--player-height');
@@ -31,7 +40,168 @@ function setKickScaleVars(container: HTMLElement, cellWidth: number): void {
   container.style.setProperty('--kick-col-min', `${Math.floor(cellWidth)}px`);
 }
 
-function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement {
+function reloadStreamIframe(card: HTMLElement): void {
+  const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
+  const platform = card.dataset.platform as Platform | undefined;
+  const channel = card.dataset.channel;
+  if (!iframe || !platform || !channel) return;
+  if (iframe.dataset.tabFrozen === '1') return;
+
+  delete iframe.dataset.focusFrozen;
+  iframe.src = buildEmbedUrl(
+    { platform, channel },
+    true,
+    platform === 'kick' ? { autoplay: true } : undefined,
+  );
+}
+
+/** Unload streams hidden by focus mode (Twitch pauses; Kick keeps playing audio). */
+function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (card.dataset.streamId === focusedId) continue;
+
+    const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
+    if (!iframe || iframe.dataset.tabFrozen === '1' || iframe.dataset.focusFrozen === '1') continue;
+
+    iframe.dataset.focusFrozen = '1';
+    iframe.src = 'about:blank';
+  }
+}
+
+/** Reload streams that were unloaded while another stream was focused. */
+function resumeFocusHiddenPlayers(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__iframe');
+    if (!iframe || iframe.dataset.focusFrozen !== '1') continue;
+    reloadStreamIframe(card);
+  }
+}
+
+function syncFocusPlayers(container: HTMLElement, prevFocusedId: string | null): void {
+  if (focusedStreamId) {
+    const focusedCard = container.querySelector<HTMLElement>(
+      `.stream-card[data-stream-id="${CSS.escape(focusedStreamId)}"]`,
+    );
+    const focusedIframe = focusedCard?.querySelector<HTMLIFrameElement>('.stream-card__iframe');
+    if (focusedCard && focusedIframe?.dataset.focusFrozen === '1') {
+      reloadStreamIframe(focusedCard);
+    }
+    freezeFocusHiddenPlayers(container, focusedStreamId);
+    return;
+  }
+
+  if (prevFocusedId === null) return;
+
+  resumeFocusHiddenPlayers(container);
+
+  const prevFocusedCard = container.querySelector<HTMLElement>(
+    `.stream-card[data-stream-id="${CSS.escape(prevFocusedId)}"]`,
+  );
+  if (prevFocusedCard?.dataset.platform === 'twitch') {
+    reloadStreamIframe(prevFocusedCard);
+  }
+}
+
+function syncFocusDom(container: HTMLElement): void {
+  const cards = container.querySelectorAll<HTMLElement>('.stream-card');
+  if (focusedStreamId) {
+    container.dataset.focusId = focusedStreamId;
+  } else {
+    delete container.dataset.focusId;
+  }
+
+  for (const card of cards) {
+    const isFocused = card.dataset.streamId === focusedStreamId;
+    card.classList.toggle('is-focused', isFocused);
+
+    const focusButton = card.querySelector<HTMLButtonElement>('.stream-card__focus');
+    if (focusButton) {
+      focusButton.hidden = isFocused;
+      focusButton.setAttribute('aria-pressed', isFocused ? 'true' : 'false');
+      focusButton.title = 'Focus stream';
+      focusButton.setAttribute('aria-label', 'Focus stream in browser window');
+    }
+
+    const closeButton = card.querySelector<HTMLButtonElement>('.stream-card__close');
+    if (closeButton) {
+      if (isFocused) {
+        closeButton.title = 'Minimize';
+        closeButton.setAttribute('aria-label', 'Minimize focused stream');
+      } else {
+        closeButton.title = 'Remove stream';
+        closeButton.setAttribute('aria-label', 'Remove stream');
+      }
+    }
+  }
+}
+
+function scheduleGridLayout(container: HTMLElement): void {
+  layoutRetries = 0;
+  if (layoutFrame) {
+    cancelAnimationFrame(layoutFrame);
+  }
+  layoutFrame = requestAnimationFrame(() => {
+    layoutFrame = requestAnimationFrame(() => {
+      layoutFrame = 0;
+      updateGridLayout(container);
+    });
+  });
+}
+
+function notifyFocusChange(prevFocusedId: string | null): void {
+  const isFocused = focusedStreamId !== null;
+  if (!isFocused && prevFocusedId !== null) {
+    focusChangeHandler?.(false, null);
+    return;
+  }
+  if (isFocused && focusedStreamId) {
+    focusChangeHandler?.(true, focusedStreamId);
+  }
+}
+
+function setFocusedStream(container: HTMLElement, streamId: string | null): void {
+  const prevFocusedId = focusedStreamId;
+  focusedStreamId = streamId;
+  syncFocusDom(container);
+  syncFocusPlayers(container, prevFocusedId);
+
+  const focusChanged =
+    (prevFocusedId === null) !== (focusedStreamId === null) ||
+    (focusedStreamId !== null && prevFocusedId !== focusedStreamId);
+
+  if (focusChanged) {
+    notifyFocusChange(prevFocusedId);
+  }
+
+  scheduleGridLayout(container);
+}
+
+function toggleStreamFocus(container: HTMLElement, streamId: string): void {
+  if (focusedStreamId === streamId) {
+    setFocusedStream(container, null);
+    return;
+  }
+  setFocusedStream(container, streamId);
+}
+
+function handleFocusEscape(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !focusedStreamId) return;
+  const container = document.querySelector<HTMLElement>('#stream-grid');
+  if (!container) return;
+  setFocusedStream(container, null);
+}
+
+function bindFocusEscape(): void {
+  if (escapeBound) return;
+  document.addEventListener('keydown', handleFocusEscape);
+  escapeBound = true;
+}
+
+function createPlayerElement(
+  stream: StreamRef,
+  store: StreamStore,
+  container: HTMLElement,
+): HTMLElement {
   const adapter = getAdapter(stream.platform);
 
   const card = document.createElement('article');
@@ -54,15 +224,31 @@ function createPlayerElement(stream: StreamRef, store: StreamStore): HTMLElement
   const controls = document.createElement('div');
   controls.className = 'stream-card__controls';
 
+  const focusButton = document.createElement('button');
+  focusButton.type = 'button';
+  focusButton.className = 'stream-card__focus';
+  focusButton.title = 'Focus stream';
+  focusButton.setAttribute('aria-label', 'Focus stream in browser window');
+  focusButton.setAttribute('aria-pressed', 'false');
+  focusButton.innerHTML =
+    '<span aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 5V1.5H5M9 1.5H12.5V5M12.5 9V12.5H9M5 12.5H1.5V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+  focusButton.addEventListener('click', () => toggleStreamFocus(container, stream.id));
+
   const removeButton = document.createElement('button');
   removeButton.type = 'button';
-  removeButton.className = 'stream-card__btn stream-card__btn--danger';
+  removeButton.className = 'stream-card__close';
   removeButton.title = 'Remove stream';
   removeButton.setAttribute('aria-label', 'Remove stream');
-  removeButton.textContent = 'Remove';
-  removeButton.addEventListener('click', () => store.removeStream(stream.id));
+  removeButton.innerHTML = '<span aria-hidden="true">×</span>';
+  removeButton.addEventListener('click', () => {
+    if (focusedStreamId === stream.id) {
+      setFocusedStream(container, null);
+      return;
+    }
+    store.removeStream(stream.id);
+  });
 
-  controls.append(removeButton);
+  controls.append(focusButton, removeButton);
   header.append(badge, title, controls);
 
   const player = document.createElement('div');
@@ -146,8 +332,30 @@ export function bindTabVisibilityPlayers(container: HTMLElement): void {
   });
 }
 
+export function bindStreamFocus(handler: FocusChangeHandler): void {
+  focusChangeHandler = handler;
+  bindFocusEscape();
+}
+
+export function isStreamFocused(): boolean {
+  return focusedStreamId !== null;
+}
+
 export function syncStreamGrid(container: HTMLElement, store: StreamStore): void {
   const streams = store.getStreams();
+  const nextIds = new Set(streams.map((stream) => stream.id));
+
+  // Drop stale/duplicate cards so hidden focus-mode streams cannot orphan in the DOM.
+  const seenIds = new Set<string>();
+  for (const card of [...container.querySelectorAll<HTMLElement>('.stream-card')]) {
+    const id = card.dataset.streamId ?? '';
+    if (!id || !nextIds.has(id) || seenIds.has(id)) {
+      card.remove();
+      continue;
+    }
+    seenIds.add(id);
+  }
+
   const existing = new Map(
     Array.from(container.querySelectorAll<HTMLElement>('.stream-card')).map((card) => [
       card.dataset.streamId ?? '',
@@ -155,18 +363,18 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
     ]),
   );
 
-  const nextIds = new Set(streams.map((stream) => stream.id));
-  for (const [id, card] of existing) {
-    if (!nextIds.has(id)) {
-      card.remove();
-      existing.delete(id);
-    }
+  if (focusedStreamId && !nextIds.has(focusedStreamId)) {
+    const prevFocusedId = focusedStreamId;
+    focusedStreamId = null;
+    syncFocusDom(container);
+    notifyFocusChange(prevFocusedId);
+    scheduleGridLayout(container);
   }
 
   for (const stream of streams) {
     let card = existing.get(stream.id);
     if (!card) {
-      card = createPlayerElement(stream, store);
+      card = createPlayerElement(stream, store, container);
       existing.set(stream.id, card);
     }
     container.append(card);
@@ -176,6 +384,8 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
   container.dataset.hasKick = streams.some((stream) => stream.platform === 'kick')
     ? '1'
     : '0';
+
+  syncFocusDom(container);
 }
 
 /**
@@ -184,8 +394,8 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
  * do not remount iframes (keeps Twitch playing across chat toggles).
  */
 export function updateGridLayout(container: HTMLElement): void {
-  const count = Number(container.dataset.count ?? '0');
-  if (count === 0) {
+  const totalCount = Number(container.dataset.count ?? '0');
+  if (totalCount === 0) {
     clearLayoutVars(container);
     return;
   }
@@ -196,10 +406,15 @@ export function updateGridLayout(container: HTMLElement): void {
     return;
   }
 
-  const hasKick = container.dataset.hasKick === '1';
+  const count = focusedStreamId ? 1 : totalCount;
+  const hasKick =
+    focusedStreamId !== null
+      ? container.querySelector<HTMLElement>(`.stream-card[data-stream-id="${focusedStreamId}"]`)
+          ?.dataset.platform === 'kick'
+      : container.dataset.hasKick === '1';
   const areaWidth = streamArea.clientWidth - GRID_PADDING;
 
-  if (isStackedStreamLayout()) {
+  if (isStackedStreamLayout() && !focusedStreamId) {
     // Phone: natural 16:9 stack (CSS). Still set Kick scale from column width.
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
@@ -217,8 +432,14 @@ export function updateGridLayout(container: HTMLElement): void {
   const areaHeight = streamArea.clientHeight - GRID_PADDING;
 
   if (areaWidth <= 0 || areaHeight <= 0) {
+    if (layoutRetries < MAX_LAYOUT_RETRIES) {
+      layoutRetries += 1;
+      requestAnimationFrame(() => updateGridLayout(container));
+    }
     return;
   }
+
+  layoutRetries = 0;
 
   let bestColumns = 1;
   let bestWidth = 0;

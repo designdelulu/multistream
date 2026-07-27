@@ -1,5 +1,6 @@
 import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
+  bindStreamFocus,
   bindTabVisibilityPlayers,
   syncStreamGrid,
   updateGridLayout,
@@ -40,11 +41,43 @@ function renderStreams(): void {
   updateLayout();
 }
 
+let chatSnapshotBeforeFocus: { visible: boolean; selectedId: string | null } | null = null;
+
 bindWelcomeModal();
 bindStreamToolbar(store);
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);
+bindStreamFocus((focused, streamId) => {
+  if (focused && streamId) {
+    if (!chatSnapshotBeforeFocus) {
+      chatSnapshotBeforeFocus = {
+        visible: chatStore.isVisible(),
+        selectedId: chatStore.getSelectedId(),
+      };
+    }
+
+    const platform = gridEl.querySelector<HTMLElement>(
+      `.stream-card[data-stream-id="${CSS.escape(streamId)}"]`,
+    )?.dataset.platform;
+
+    if (platform === 'twitch') {
+      chatStore.setSelectedId(streamId);
+      chatStore.setVisible(true, { persist: false });
+    } else {
+      chatStore.setVisible(false, { persist: false });
+    }
+  } else if (!focused && chatSnapshotBeforeFocus) {
+    const snapshot = chatSnapshotBeforeFocus;
+    chatSnapshotBeforeFocus = null;
+    if (snapshot.selectedId) {
+      chatStore.setSelectedId(snapshot.selectedId);
+    }
+    chatStore.setVisible(snapshot.visible, { persist: false });
+  }
+
+  updateLayout();
+});
 store.subscribe(renderStreams);
 chatStore.subscribe(updateLayout);
 

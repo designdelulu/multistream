@@ -47,9 +47,11 @@ export function createChatStore(streamStore: StreamStore) {
     }
   }
 
-  function setVisible(next: boolean): void {
+  function setVisible(next: boolean, options?: { persist?: boolean }): void {
     visible = next;
-    persistVisiblePreference(next);
+    if (options?.persist !== false) {
+      persistVisiblePreference(next);
+    }
     notify();
   }
 
@@ -65,8 +67,8 @@ export function createChatStore(streamStore: StreamStore) {
       return visible;
     },
 
-    setVisible(next: boolean): void {
-      setVisible(next);
+    setVisible(next: boolean, options?: { persist?: boolean }): void {
+      setVisible(next, options);
     },
 
     toggleVisible(): void {

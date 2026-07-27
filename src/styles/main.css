@@ -28,6 +28,24 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
+/* Crawlable copy for search engines — visually hidden, stays in DOM. */
+.seo-landing {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.seo-landing a {
+  color: inherit;
+}
+
 #app {
   min-height: 100vh;
   max-height: 100vh;
@@ -243,6 +261,19 @@ body {
   overflow: hidden;
 }
 
+.stream-grid[data-focus-id] {
+  grid-template-columns: minmax(0, var(--player-width, 1fr));
+  align-content: center;
+  justify-content: center;
+  justify-items: center;
+  height: 100%;
+}
+
+/* Kick column min must not override focus-mode centering. */
+.stream-grid[data-focus-id][data-has-kick='1'] {
+  grid-template-columns: minmax(0, var(--player-width, 1fr));
+}
+
 /* Docked beside streams — overlaying covers Twitch embeds and they pause. */
 .chat-panel {
   position: relative;
@@ -378,23 +409,63 @@ body {
   gap: 6px;
 }
 
-.stream-card__btn {
-  padding: 4px 10px;
+.stream-card__focus,
+.stream-card__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
-  color: var(--text);
-  font-size: 0.78rem;
+  color: var(--muted);
+  font-size: 1.15rem;
+  line-height: 1;
   cursor: pointer;
 }
 
-.stream-card__btn:hover {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+.stream-card__focus:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.stream-card__btn--danger {
+.stream-card__focus[aria-pressed='true'] {
+  color: #d5b8ff;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.stream-card__focus[hidden] {
+  display: none !important;
+}
+
+.stream-card__focus svg {
+  display: block;
+}
+
+.stream-card__close {
+  font-size: 1.15rem;
+}
+
+.stream-card__close:hover {
   color: #ffb4b4;
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.stream-card.is-focused .stream-card__close:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.stream-card__close span {
+  display: block;
+  margin-top: -1px;
 }
 
 .stream-card__player {
@@ -408,6 +479,27 @@ body {
 .stream-grid:not(:empty) .stream-card__player {
   aspect-ratio: unset;
   height: var(--player-height, auto);
+}
+
+.stream-grid[data-focus-id] .stream-card:not(.is-focused) {
+  display: none;
+}
+
+.stream-grid[data-focus-id] .stream-card.is-focused {
+  width: min(100%, var(--player-width, 100%));
+  max-width: var(--player-width, 100%);
+  height: auto;
+  max-height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stream-grid[data-focus-id] .stream-card.is-focused .stream-card__player {
+  flex: 0 0 auto;
+  width: 100%;
+  height: var(--player-height, auto);
+  min-height: 0;
 }
 
 .stream-card__iframe {
@@ -860,7 +952,7 @@ html.show-welcome .welcome-modal {
     font-size: 0.72rem;
   }
 
-  /* One compact row: badge · name · Remove — was stacking to a huge header. */
+  /* One compact row: badge · name · close */
   .stream-card__header {
     flex-wrap: nowrap;
     gap: 6px;
@@ -885,12 +977,17 @@ html.show-welcome .welcome-modal {
     margin-left: 0;
   }
 
-  .stream-card__btn {
-    min-height: 0;
-    padding: 2px 8px;
-    font-size: 0.68rem;
+  .stream-card__focus,
+  .stream-card__close {
+    width: 24px;
+    height: 24px;
+    font-size: 1rem;
     border-radius: 4px;
-    line-height: 1.2;
+  }
+
+  .stream-card__focus svg {
+    width: 12px;
+    height: 12px;
   }
 }
 
@@ -907,11 +1004,6 @@ html.show-welcome .welcome-modal {
 @media (min-width: 641px) and (max-width: 1024px) {
   .chat-panel {
     width: min(300px, 32vw);
-  }
-
-  .stream-card__btn {
-    min-height: 36px;
-    padding: 6px 12px;
   }
 
   .toolbar__form input,

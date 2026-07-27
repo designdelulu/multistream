@@ -1,8 +1,8 @@
 # MultiStream.cc
 
-Watch multiple **Twitch** and **Kick** live streams on one page — in a responsive grid that keeps every player as large as possible at 16:9.
+Watch **Twitch** and **Kick** streams online on one page — a responsive grid that keeps every player as large as possible at 16:9.
 
-![MultiStream.cc — Watch Twitch and Kick streams together](./public/og-image.png)
+![MultiStream.cc — Watch Twitch and Kick streams online](./public/og-image.png)
 
 **Live site:** [multistream.cc](https://multistream.cc)  
 **Repository:** [github.com/designdelulu/multistream](https://github.com/designdelulu/multistream)
@@ -18,7 +18,7 @@ MultiStream.cc is a lightweight browser viewer for multi-stream watch parties, c
 - **Twitch + Kick** on the same page
 - **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
 - **Shareable path URLs** like `/t:username/k:username`
-- **Remove** control per stream (volume lives in each platform’s own player UI)
+- **× close** and **focus** controls per stream — focus fills the browser window below the toolbar and opens that stream’s Twitch chat (Kick has no chat panel)
 - **Twitch chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
 - **Streams always boot muted** — unmute from the Twitch/Kick player chrome
 - **No backend required** — static deploy, iframe embeds only
