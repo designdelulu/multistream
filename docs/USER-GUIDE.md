@@ -50,7 +50,7 @@ Leading `@` is stripped automatically.
 - That stream fills the area below the toolbar and reloads **unmuted**.
 - Twitch chat opens automatically for focused Twitch streams.
 - In no-header mode, the focused stream’s **header bar reappears** so you can × minimize.
-- Press **Escape** or × / focus again to exit. Twitch remounts muted.
+- Press **Escape** or × / focus again to exit. The focused stream **stays unmuted**; other streams resume with their previous mute state.
 
 ### Hide headers
 

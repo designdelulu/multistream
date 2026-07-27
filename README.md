@@ -165,7 +165,7 @@ Adding a third platform later means adding one adapter file and registering it �
 - **Kick** uses the official iframe embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
 - **Layout packing** follows MultiTwitch’s `optimize_size` idea: pick the column count and 16:9 size that fits *every* stream in the streams pane. Chat docks beside the grid and triggers a reflow — it does not cover players (Twitch pauses embeds that are clipped or scrolled off-screen).
 - **Kick volume / control size:** Kick’s embed switches UI by **iframe layout width**. Below **769px** it uses mobile/tablet chrome (tiny overlays, often no volume). At **769px+** it uses desktop chrome with a speaker icon — hover the video, then the speaker, for the volume slider. When the packed cell is narrower than 769px, MultiStream still renders the Kick iframe at ≥769px and **CSS-scales** it into the cell so desktop chrome (including volume) stays available while the grid fits on-screen.
-- **Mute on load:** Both platforms boot muted. Focus reloads the focused stream unmuted (user click); exit remounts Twitch muted. Tab hide / focus-hide blanks background iframes and remounts muted on resume.
+- **Mute on load:** Both platforms boot muted. Focus reloads the focused stream unmuted (user click); exit keeps that stream unmuted. Tab hide / focus-hide blanks background iframes and remounts with each card's saved mute preference on resume.
 - **Chat** is Twitch-only (Kick has no official chat embed). Hidden on phones.
 
 ---

@@ -2,6 +2,7 @@ import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
   bindStreamFocus,
   bindTabVisibilityPlayers,
+  recoverTwitchPlayersAfterLayout,
   syncStreamGrid,
   updateGridLayout,
 } from './components/StreamGrid';
@@ -75,6 +76,7 @@ function afterHeadersToggle(): void {
   reorder.sync();
   afterLayoutPaint(() => {
     measureAndLayout();
+    recoverTwitchPlayersAfterLayout(gridEl);
     quietLayout(2500);
   });
 }

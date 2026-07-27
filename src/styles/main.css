@@ -839,6 +839,22 @@ html.headers-hidden .stream-card__overlay-controls {
   min-height: 0;
 }
 
+/*
+ * Headers-hidden sets player height: auto !important for hover-toolbar flex.
+ * Focus must reclaim an explicit height or the absolute iframe collapses to 0
+ * and only the minimize header shows.
+ */
+html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused {
+  height: auto;
+  overflow: hidden;
+}
+
+html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-card__player {
+  flex: 0 0 auto;
+  height: var(--player-height, auto) !important;
+  min-height: 0;
+}
+
 .stream-card__iframe {
   position: absolute;
   inset: 0;
