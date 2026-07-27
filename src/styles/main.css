@@ -358,142 +358,10 @@ body {
   grid-template-columns: minmax(0, var(--player-width, 1fr));
 }
 
-/* Docked beside streams — overlaying covers Twitch embeds and they pause. */
-.watching-panel {
-  position: relative;
-  flex-shrink: 0;
-  width: min(220px, 26vw);
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--border);
-  background: var(--surface);
-  min-height: 0;
-  overflow: hidden;
-}
-
-.watching-panel[hidden] {
-  display: none !important;
-}
-
-.watching-panel__header {
-  flex: 0 0 auto;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  font-weight: 700;
-  font-size: 0.85rem;
-  letter-spacing: 0.02em;
-}
-
-.watching-panel__list {
-  list-style: none;
-  margin: 0;
-  padding: 6px;
-  overflow: auto;
-  min-height: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.watching-panel__item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 6px 6px 6px 4px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-  cursor: grab;
-  touch-action: none;
-}
-
-.watching-panel__item:active {
-  cursor: grabbing;
-}
-
-/* Focus mode — hide Watching sidebar (CSS only; no JS layout churn). */
-html.stream-focused .watching-panel {
-  display: none !important;
-}
-
 /* Focus / fullscreen mode — no reorder dragging. */
-html.stream-focused .watching-panel__item,
-html.stream-focused .watching-panel__item:active,
-html.stream-focused .watching-panel__name,
 html.stream-focused .stream-card__header {
   cursor: default;
   touch-action: auto;
-}
-
-.watching-panel__item--ghost {
-  opacity: 0.45;
-}
-
-.watching-panel__item--chosen {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.watching-panel__item.is-focused {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.watching-panel__accent {
-  flex: 0 0 auto;
-  width: 3px;
-  align-self: stretch;
-  border-radius: 999px;
-  background: var(--muted);
-}
-
-.watching-panel__item--twitch .watching-panel__accent {
-  background: var(--accent);
-}
-
-.watching-panel__item--kick .watching-panel__accent {
-  background: var(--kick);
-}
-
-.watching-panel__name {
-  flex: 1;
-  min-width: 0;
-  padding: 4px 2px;
-  color: var(--text);
-  font: inherit;
-  font-weight: 600;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: grab;
-  user-select: none;
-}
-
-.watching-panel__remove {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  margin: 0;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  font: inherit;
-  font-size: 1.15rem;
-  line-height: 1;
-  color: color-mix(in srgb, var(--danger) 75%, var(--muted));
-  cursor: pointer;
-  touch-action: manipulation;
-}
-
-.watching-panel__remove:hover,
-.watching-panel__remove:focus-visible {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  outline: none;
 }
 
 .chat-panel {
@@ -906,6 +774,35 @@ html.headers-hidden .stream-card__overlay-controls {
 .stream-card__overlay-focus[aria-pressed='true'] {
   border-color: color-mix(in srgb, var(--accent) 55%, white);
   background: color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.9));
+}
+
+.stream-card__overlay-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.82);
+  color: white;
+  font: inherit;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.stream-card__overlay-remove:hover,
+.stream-card__overlay-remove:focus-visible {
+  background: rgba(0, 0, 0, 0.97);
+  border-color: color-mix(in srgb, var(--danger) 55%, white);
+  color: var(--danger);
+  transform: scale(1.08);
+  outline: none;
 }
 
 .stream-grid:not(:empty) .stream-card__player {
@@ -1328,29 +1225,6 @@ html.show-welcome .welcome-modal {
   .toolbar__icon-btn-label {
     max-width: 120px;
     opacity: 1;
-  }
-
-  .watching-panel {
-    width: 100%;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    max-height: none;
-  }
-
-  .watching-panel__header {
-    padding: 8px 10px;
-  }
-
-  .watching-panel__list {
-    flex-direction: row;
-    flex-wrap: wrap;
-    overflow: auto;
-    padding: 6px 8px 8px;
-  }
-
-  .watching-panel__item {
-    flex: 1 1 auto;
-    min-width: min(140px, 100%);
   }
 
   .toolbar__mobile-note {

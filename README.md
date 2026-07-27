@@ -143,7 +143,7 @@ Vanilla **TypeScript + Vite** — no React, no server.
 src/
 ├── platforms/     # Twitch & Kick adapters (parse input, build embed URLs)
 ├── state/         # Stream list, chat visibility, headers mode, URL sync
-├── components/    # Grid, toolbar, chat, watching, reorder, player cards
+├── components/    # Grid, toolbar, chat, reorder, player cards
 ├── lib/           # Viewport helpers
 └── styles/        # Layout and UI
 ```

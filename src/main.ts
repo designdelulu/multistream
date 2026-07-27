@@ -7,7 +7,6 @@ import {
 } from './components/StreamGrid';
 import { bindStreamReorder } from './components/StreamReorder';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
-import { bindWatchingPanel } from './components/WatchingPanel';
 import { bindWelcomeModal } from './components/WelcomeModal';
 import { phoneMediaQuery } from './lib/viewport';
 import { createChatStore } from './state/chat';
@@ -19,19 +18,15 @@ const chatStore = createChatStore(store);
 const headersStore = createHeadersStore();
 const grid = document.querySelector<HTMLElement>('#stream-grid');
 const chatPanel = document.querySelector<HTMLElement>('#chat-panel');
-const watchingPanel = document.querySelector<HTMLElement>('#watching-panel');
-const watchingList = document.querySelector<HTMLElement>('#watching-list');
 const streamArea = document.querySelector<HTMLElement>('.stream-area');
 const mainLayout = document.querySelector<HTMLElement>('.main-layout');
 
-if (!grid || !chatPanel || !watchingPanel || !watchingList || !streamArea || !mainLayout) {
+if (!grid || !chatPanel || !streamArea || !mainLayout) {
   throw new Error('Required layout elements not found');
 }
 
 const gridEl = grid;
 const chatPanelEl = chatPanel;
-const watchingPanelEl = watchingPanel;
-const watchingListEl = watchingList;
 const streamAreaEl = streamArea;
 const mainLayoutEl = mainLayout;
 
@@ -56,7 +51,6 @@ function quietLayout(ms = 1500): void {
 }
 
 function measureAndLayout(): void {
-  void watchingPanelEl.offsetWidth;
   void streamAreaEl.offsetWidth;
   updateGridLayout(gridEl);
 }
@@ -98,22 +92,13 @@ let chatSnapshotBeforeFocus: { visible: boolean; selectedId: string | null } | n
 
 bindWelcomeModal();
 const toolbar = bindStreamToolbar(store, headersStore);
-const reorder = bindStreamReorder(gridEl, store, headersStore, watchingListEl);
+const reorder = bindStreamReorder(gridEl, store, headersStore);
 reorder.sync();
-const watching = bindWatchingPanel(
-  watchingPanelEl,
-  watchingListEl,
-  store,
-  headersStore,
-  gridEl,
-  updateLayout,
-);
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);
 bindStreamFocus((focused, streamId) => {
   toolbar.sync();
-  watching.sync();
   reorder.sync();
 
   if (focused && streamId) {
@@ -170,6 +155,5 @@ const resizeObserver = new ResizeObserver(() => {
 });
 resizeObserver.observe(mainLayoutEl);
 resizeObserver.observe(streamAreaEl);
-resizeObserver.observe(watchingPanelEl);
 
 renderStreams();

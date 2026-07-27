@@ -14,8 +14,8 @@ Watch Twitch and Kick on one page. This guide covers the features and how to use
 | Username dropdown | Type a name (or `@name`) and choose Twitch or Kick |
 | Share link | Copy the current lineup URL from the toolbar |
 | Clear all | Remove every stream (with confirmation) |
-| Hide headers | Compact grid; **Watching** sidebar for remove and reorder |
-| Drag reorder | Drag card headers — or a bottom handle / Watching list rows when headers are hidden |
+| Hide headers | Compact grid; hover video for focus, remove, and drag |
+| Drag reorder | Drag card headers — or the on-video drag handle when headers are hidden |
 | Focus (headers hidden) | Magnifying glass on video hover (distinct from embed fullscreen) |
 | Session restore | Last lineup saved in `localStorage`; share URLs in the path take priority |
 | Focus mode | Expand one stream, unmute it, open Twitch chat when available |
@@ -55,11 +55,9 @@ Leading `@` is stripped automatically.
 ### Hide headers
 
 - Toolbar **Hide headers** collapses card top bars for a denser view (preference is remembered).
-- A **Watching** list appears on the left with color accents (purple = Twitch, green = Kick) and **×** to remove each stream.
-- Hover a video for a magnifying-glass **Focus** button (top-right) and a bottom **drag to reorder** handle — same pattern as [MultistreamGrid](https://multistreamgrid.com). You can also reorder from the Watching list.
+- Hover a video for MultistreamGrid-style controls: name badge, magnifying-glass **Focus**, **×** remove, and a bottom **drag to reorder** handle.
+- Chrome may pause Twitch while those overlays are visible; moving the mouse away remounts the embed so playback resumes.
 - Live viewer counts beside names are planned for a future update (Twitch requires a server-side API proxy).
-
-On phones, Watching becomes a wrapping strip above the grid.
 
 ---
 
@@ -109,7 +107,7 @@ Performance depends on how many live embeds are open. Fewer streams = smoother p
 
 - Start muted — browsers block unmuted autoplay.
 - Focus a stream when you want sound quickly.
-- Hide headers for tournaments or dense watch parties; use Watching to manage the lineup.
+- Hide headers for tournaments or dense watch parties; manage streams via hover controls.
 - Clear all when starting a fresh layout.
 - Kick’s volume UI needs a wide player; MultiStream scales Kick embeds so desktop chrome stays available when cells are narrow.
 

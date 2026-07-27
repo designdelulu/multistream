@@ -457,7 +457,32 @@ function createPlayerElement(
     }
   });
 
-  overlayControls.append(overlayFocus);
+  const overlayRemove = document.createElement('div');
+  overlayRemove.className = 'stream-card__overlay-remove';
+  overlayRemove.title = 'Remove stream';
+  overlayRemove.setAttribute('role', 'button');
+  overlayRemove.setAttribute('tabindex', '0');
+  overlayRemove.setAttribute('aria-label', 'Remove stream');
+  overlayRemove.textContent = '×';
+  overlayRemove.addEventListener('click', () => {
+    if (focusedStreamId === stream.id) {
+      setFocusedStream(container, null);
+      return;
+    }
+    store.removeStream(stream.id);
+  });
+  overlayRemove.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (focusedStreamId === stream.id) {
+        setFocusedStream(container, null);
+        return;
+      }
+      store.removeStream(stream.id);
+    }
+  });
+
+  overlayControls.append(overlayFocus, overlayRemove);
 
   const dragHandle = document.createElement('div');
   dragHandle.className = 'stream-card__drag-handle';
