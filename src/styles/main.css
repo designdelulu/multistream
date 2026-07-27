@@ -732,6 +732,69 @@ html.headers-hidden .stream-card__player {
   overflow: hidden;
 }
 
+/* flat-dom step 5: MultistreamGrid count-based CSS grid — no JS --player-height. */
+html.headers-hidden .stream-grid:not([data-focus-id]) {
+  gap: 4px;
+  padding: 4px;
+  align-content: start;
+  grid-template-columns: 1fr;
+}
+
+html.headers-hidden .stream-grid.count-1:not([data-focus-id]) {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+html.headers-hidden .stream-grid.count-2:not([data-focus-id]) {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+html.headers-hidden .stream-grid.count-3:not([data-focus-id]) {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+html.headers-hidden .stream-grid.count-4:not([data-focus-id]) {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+html.headers-hidden .stream-grid.count-5:not([data-focus-id]) {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+html.headers-hidden .stream-grid.count-6:not([data-focus-id]) {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+html.headers-hidden .stream-grid.count-7:not([data-focus-id]) {
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+html.headers-hidden .stream-grid.count-8:not([data-focus-id]) {
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+html.headers-hidden .stream-grid.count-many:not([data-focus-id]) {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+html.headers-hidden .stream-grid:not([data-focus-id]) .stream-card {
+  min-height: 0;
+  height: 100%;
+}
+
+html.headers-hidden .stream-grid:not([data-focus-id]) .stream-card__player {
+  aspect-ratio: unset;
+  height: 100%;
+  min-height: 0;
+}
+
 /* Focused stream keeps a header for × minimize — never rely on video overlays. */
 html.headers-hidden.stream-focused .stream-card.is-focused .stream-card__header {
   display: flex;

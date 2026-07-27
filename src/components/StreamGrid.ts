@@ -19,6 +19,32 @@ const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
 
+const MSG_GRID_COUNT_CLASSES = [
+  'count-0',
+  'count-1',
+  'count-2',
+  'count-3',
+  'count-4',
+  'count-5',
+  'count-6',
+  'count-7',
+  'count-8',
+  'count-many',
+] as const;
+
+function syncMsgGridCountClass(container: HTMLElement, count: number): void {
+  for (const className of MSG_GRID_COUNT_CLASSES) {
+    container.classList.remove(className);
+  }
+  container.classList.add(count > 8 ? 'count-many' : `count-${count}`);
+}
+
+function usesMsgCssGrid(): boolean {
+  return (
+    document.documentElement.classList.contains('headers-hidden') && focusedStreamId === null
+  );
+}
+
 type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
 
 let focusedStreamId: string | null = null;
@@ -522,14 +548,9 @@ export function resumeStreamPlayers(container: HTMLElement): void {
   }
 }
 
-export function bindTabVisibilityPlayers(container: HTMLElement): void {
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      freezeStreamPlayers(container);
-    } else {
-      resumeStreamPlayers(container);
-    }
-  });
+export function bindTabVisibilityPlayers(_container: HTMLElement): void {
+  // flat-dom: tab-freeze (about:blank on visibilitychange) disabled — MSG does not
+  // reload embeds on tab switch; remounting can interact badly with Chrome visibility.
 }
 
 export function bindStreamFocus(handler: FocusChangeHandler): void {
@@ -585,6 +606,7 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
     ? '1'
     : '0';
 
+  syncMsgGridCountClass(container, streams.length);
   syncFocusDom(container);
 }
 
@@ -596,6 +618,15 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
 export function updateGridLayout(container: HTMLElement): void {
   const totalCount = Number(container.dataset.count ?? '0');
   if (totalCount === 0) {
+    clearLayoutVars(container);
+    syncMsgGridCountClass(container, 0);
+    return;
+  }
+
+  syncMsgGridCountClass(container, totalCount);
+
+  // flat-dom: headers-hidden uses MultistreamGrid pure CSS grid (no JS pixel sizing).
+  if (usesMsgCssGrid()) {
     clearLayoutVars(container);
     return;
   }

@@ -39,8 +39,7 @@ const mainLayoutEl = mainLayout;
  * Quiet ResizeObserver briefly after mounts so mid-bootstrap size thrash
  * cannot stall Twitch embeds.
  *
- * Twitch refuses muted autoplay when the embed is obscured. We use plain
- * player.twitch.tv iframes (like MultistreamGrid) so small hover overlays work.
+ * flat-dom: ResizeObserver is skipped while headers are hidden (CSS grid only).
  */
 let suppressLayout = false;
 let suppressLayoutTimer = 0;
@@ -160,11 +159,13 @@ phoneQuery.addEventListener('change', handleViewportChange);
 window.visualViewport?.addEventListener('resize', handleViewportChange);
 
 const resizeObserver = new ResizeObserver(() => {
+  if (document.documentElement.classList.contains('headers-hidden')) return;
   if (suppressLayout) return;
   window.clearTimeout(resizeDebounceTimer);
   resizeDebounceTimer = window.setTimeout(() => {
     resizeDebounceTimer = 0;
     if (suppressLayout) return;
+    if (document.documentElement.classList.contains('headers-hidden')) return;
     updateGridLayout(gridEl);
   }, 120);
 });
