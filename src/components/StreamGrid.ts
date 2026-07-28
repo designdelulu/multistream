@@ -1,3 +1,4 @@
+import { embedDebugEnabled, logEmbedEvent } from '../lib/embedDebug';
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import type { StreamRef } from '../types';
@@ -10,9 +11,10 @@ import type { StreamStore } from '../state/streams';
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  *
  * Twitch Requirement 1.3: never obscure the embed. Headers-hidden keeps the
- * video alone at rest; on card hover the player shrinks and a toolbar opens
- * BELOW the iframe (not over it). No mouseleave remount — entering the iframe
- * fires leave on the parent and would reload mute controls in a loop.
+ * video alone at rest; on card hover the card grows downward and a toolbar
+ * opens BELOW the iframe (player size unchanged). No mouseleave remount —
+ * entering the iframe fires leave on the parent and would reload mute controls
+ * in a loop.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
@@ -68,7 +70,11 @@ function preferredMuted(card: HTMLElement): boolean {
   return card.dataset.embedMuted !== '0';
 }
 
-function mountTwitchIframe(card: HTMLElement, muted: boolean): void {
+function mountTwitchIframe(
+  card: HTMLElement,
+  muted: boolean,
+  reason: 'mount' | 'tab-resume' | 'focus-resume' | 'focus-unmute' = 'mount',
+): void {
   const iframe = streamIframe(card);
   const channel = card.dataset.channel;
   if (!iframe || !channel) return;
@@ -83,6 +89,15 @@ function mountTwitchIframe(card: HTMLElement, muted: boolean): void {
   if (!isBlankIframeSrc(iframe.src)) {
     try {
       if (new URL(iframe.src).href === new URL(nextSrc).href) {
+        if (embedDebugEnabled) {
+          logEmbedEvent(reason, {
+            platform: 'twitch',
+            channel,
+            action: 'skip-same-url',
+            muted,
+            card,
+          });
+        }
         return;
       }
     } catch {
@@ -90,6 +105,13 @@ function mountTwitchIframe(card: HTMLElement, muted: boolean): void {
     }
   }
 
+  logEmbedEvent(reason, {
+    platform: 'twitch',
+    channel,
+    action: 'src',
+    muted,
+    card,
+  });
   iframe.src = nextSrc;
 }
 
@@ -105,11 +127,29 @@ function mountTwitchIframeForced(card: HTMLElement, muted: boolean): void {
   iframe.dataset.embedMuted = muted ? '1' : '0';
   card.dataset.embedMuted = muted ? '1' : '0';
 
+  logEmbedEvent('headers-recover', {
+    platform: 'twitch',
+    channel,
+    action: 'blank',
+    muted,
+    card,
+  });
   iframe.src = 'about:blank';
+  logEmbedEvent('mount-forced', {
+    platform: 'twitch',
+    channel,
+    action: 'src',
+    muted,
+    card,
+  });
   iframe.src = nextSrc;
 }
 
-function mountKickIframe(card: HTMLElement, muted: boolean): void {
+function mountKickIframe(
+  card: HTMLElement,
+  muted: boolean,
+  reason: 'mount' | 'tab-resume' | 'focus-resume' | 'focus-unmute' = 'mount',
+): void {
   const iframe = streamIframe(card);
   const channel = card.dataset.channel;
   if (!iframe || !channel) return;
@@ -126,6 +166,15 @@ function mountKickIframe(card: HTMLElement, muted: boolean): void {
   if (!isBlankIframeSrc(iframe.src)) {
     try {
       if (new URL(iframe.src).href === new URL(nextSrc).href) {
+        if (embedDebugEnabled) {
+          logEmbedEvent(reason, {
+            platform: 'kick',
+            channel,
+            action: 'skip-same-url',
+            muted,
+            card,
+          });
+        }
         return;
       }
     } catch {
@@ -133,16 +182,27 @@ function mountKickIframe(card: HTMLElement, muted: boolean): void {
     }
   }
 
+  logEmbedEvent(reason, {
+    platform: 'kick',
+    channel,
+    action: 'src',
+    muted,
+    card,
+  });
   iframe.src = nextSrc;
 }
 
-function mountStreamMedia(card: HTMLElement, muted: boolean): void {
+function mountStreamMedia(
+  card: HTMLElement,
+  muted: boolean,
+  reason: 'mount' | 'tab-resume' | 'focus-resume' | 'focus-unmute' = 'mount',
+): void {
   if (card.dataset.platform === 'twitch') {
-    mountTwitchIframe(card, muted);
+    mountTwitchIframe(card, muted, reason);
     return;
   }
   if (card.dataset.platform === 'kick') {
-    mountKickIframe(card, muted);
+    mountKickIframe(card, muted, reason);
   }
 }
 
@@ -157,6 +217,12 @@ function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): vo
     const iframe = streamIframe(card);
     if (!iframe || iframe.dataset.tabFrozen === '1') continue;
     iframe.dataset.focusFrozen = '1';
+    logEmbedEvent('focus-freeze', {
+      platform: card.dataset.platform,
+      channel: card.dataset.channel,
+      action: 'blank',
+      card,
+    });
     iframe.src = 'about:blank';
   }
 }
@@ -166,7 +232,7 @@ function resumeFocusHiddenPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
     if (card.dataset.focusFrozen !== '1') continue;
     delete card.dataset.focusFrozen;
-    mountStreamMedia(card, preferredMuted(card));
+    mountStreamMedia(card, preferredMuted(card), 'focus-resume');
   }
 }
 
@@ -180,7 +246,7 @@ function syncFocusPlayers(container: HTMLElement, prevFocusedId: string | null):
     );
     if (focusedCard?.dataset.platform === 'kick') {
       focusedCard.dataset.embedMuted = '0';
-      mountStreamMedia(focusedCard, false);
+      mountStreamMedia(focusedCard, false, 'focus-unmute');
     }
     return;
   }
@@ -300,7 +366,7 @@ export function toggleStreamFocus(container: HTMLElement, streamId: string): voi
   );
   if (focusedCard?.dataset.platform === 'twitch') {
     focusedCard.dataset.embedMuted = '0';
-    mountTwitchIframe(focusedCard, false);
+    mountTwitchIframe(focusedCard, false, 'focus-unmute');
   }
 }
 
@@ -495,6 +561,12 @@ export function freezeStreamPlayers(container: HTMLElement): void {
     const iframe = streamIframe(card);
     if (!iframe) continue;
     iframe.dataset.tabFrozen = '1';
+    logEmbedEvent('tab-freeze', {
+      platform: card.dataset.platform,
+      channel: card.dataset.channel,
+      action: 'blank',
+      card,
+    });
     iframe.src = 'about:blank';
   }
 }
@@ -512,17 +584,33 @@ export function resumeStreamPlayers(container: HTMLElement): void {
 
     const isFocused =
       focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
-    mountStreamMedia(card, isFocused ? false : preferredMuted(card));
+    mountStreamMedia(card, isFocused ? false : preferredMuted(card), 'tab-resume');
   }
 }
 
 export function bindTabVisibilityPlayers(container: HTMLElement): void {
+  /** Ignore brief hide flashes (app switch overlays, etc.) before blanking embeds. */
+  const HIDE_BLANK_DELAY_MS = 250;
+  let hideBlankTimer = 0;
+
   document.addEventListener('visibilitychange', () => {
+    logEmbedEvent('visibility', {
+      action: document.hidden ? 'blank' : 'src',
+    });
+
     if (document.hidden) {
-      freezeStreamPlayers(container);
-    } else {
-      resumeStreamPlayers(container);
+      window.clearTimeout(hideBlankTimer);
+      hideBlankTimer = window.setTimeout(() => {
+        hideBlankTimer = 0;
+        if (!document.hidden) return;
+        freezeStreamPlayers(container);
+      }, HIDE_BLANK_DELAY_MS);
+      return;
     }
+
+    window.clearTimeout(hideBlankTimer);
+    hideBlankTimer = 0;
+    resumeStreamPlayers(container);
   });
 }
 

@@ -14,7 +14,7 @@ Watch Twitch and Kick on one page. MultiStream.cc is a modern multi-stream viewe
 | Username dropdown | Type a name (or `@name`) and choose Twitch or Kick |
 | Share link | Copy the current lineup URL from the toolbar |
 | Clear all | Remove every stream (with confirmation) |
-| Hide headers | Compact grid; hover a card to reveal controls below the video (never over it) |
+| Hide headers | Compact grid; hover a card to reveal controls below the video without shrinking it |
 | Drag reorder | Drag card headers — or the drag handle in the hover toolbar when headers are hidden |
 | Focus (headers hidden) | Magnifying glass in the hover toolbar |
 | Session restore | Last lineup saved in `localStorage`; share URLs in the path take priority |
@@ -28,7 +28,7 @@ Watch Twitch and Kick on one page. MultiStream.cc is a modern multi-stream viewe
 
 1. Click the username field in the toolbar.
 2. Type a channel name. A dropdown offers **Twitch** and **Kick**.
-3. Click a row to add that platform. **Enter** only works for URLs and `t:` / `k:` prefixes — plain usernames require picking Twitch or Kick from the list.
+3. Click a row to add that platform, or use **ArrowDown** / **ArrowUp** to highlight Twitch or Kick and press **Enter**. Plain usernames require that explicit pick — **Enter** alone only works for URLs and `t:` / `k:` prefixes.
 4. You can also paste a Twitch/Kick URL or use `t:username` / `k:username`.
 
 Leading `@` is stripped automatically.
@@ -55,8 +55,8 @@ Leading `@` is stripped automatically.
 ### Hide headers
 
 - Toolbar **Show headers** / **Hide headers** toggles card top bars (preference is remembered; headers hidden by default).
-- At rest the card is **video only**. Hover the card and the player shrinks slightly so a control strip appears **below** the iframe (name, drag, focus, remove) — never stacked over the embed (Twitch requirement 1.3).
-- This avoids Chrome pause-on-overlay and the mute-control refresh loop from remounting embeds.
+- At rest the card is **video only**. Hover the card and a control strip appears **below** the video — the card grows slightly so the player size does not change (Kick volume / pause stay usable; never stacked over the embed — Twitch requirement 1.3).
+- This avoids Chrome pause-on-overlay, Kick control clipping, and the mute-control refresh loop from remounting embeds.
 
 ---
 
@@ -106,9 +106,20 @@ Performance depends on how many live embeds are open. Fewer streams = smoother p
 
 - Start muted — browsers block unmuted autoplay.
 - Focus a stream when you want sound quickly.
-- Hide headers for tournaments or dense watch parties; hover a card for the toolbar below each video (focus, remove, drag).
+- Hide headers for tournaments or dense watch parties; hover a card for the toolbar below each video (focus, remove, drag) — player size stays put.
 - Clear all when starting a fresh layout.
 - Kick’s volume UI needs a wide player; MultiStream scales Kick embeds so desktop chrome stays available when cells are narrow.
+
+### Debugging embed remounts (optional)
+
+Only if streams keep stopping and you want to see why:
+
+1. Add `?debug=embeds` to the URL and reload.
+2. Open the browser console (right-click → Inspect → Console).
+3. When a stream stops, look for lines starting with `[embed-debug]`.
+4. Tell me the **reason** field (e.g. `tab-freeze`, `headers-recover`). That’s enough.
+
+Turn it off later with `?debug=off`. You don’t need this for normal use — safe stability patches are already in the app.
 
 ---
 

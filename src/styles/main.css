@@ -139,6 +139,7 @@ body {
   cursor: pointer;
 }
 
+.toolbar__suggestion--active,
 .toolbar__suggestion:hover,
 .toolbar__suggestion:focus-visible {
   background: color-mix(in srgb, var(--text) 8%, transparent);
@@ -599,22 +600,40 @@ html.stream-focused .stream-card__toolbar {
 }
 
 /*
- * Headers-hidden: video alone at rest. On card hover the player shrinks and a
- * toolbar opens BELOW the iframe — never stacked over it (Twitch 1.3).
+ * Headers-hidden: video alone at rest. On hover/focus-within the card grows
+ * downward and a toolbar opens BELOW the iframe — player size stays fixed so
+ * Twitch muted autoplay does not shrink under ~400×300, and Kick’s bottom
+ * chrome (volume / pause) is not clipped or covered (Twitch 1.3: never obscure).
  */
+html.headers-hidden .stream-grid {
+  overflow: visible;
+}
+
 html.headers-hidden .stream-card {
   display: flex;
   flex-direction: column;
   height: var(--player-height, auto);
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+  z-index: 1;
+  transition: height 0.15s ease;
+}
+
+html.headers-hidden .stream-card:hover,
+html.headers-hidden .stream-card:focus-within {
+  z-index: 6;
+  /* When --player-height is unset (e.g. phone stack), this calc is invalid and
+     height stays auto — the toolbar still expands the card naturally. */
+  height: calc(var(--player-height) + 40px);
 }
 
 html.headers-hidden .stream-grid:not(:empty) .stream-card__player {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   width: 100%;
   min-height: 0;
-  height: auto !important;
+  height: var(--player-height, auto) !important;
   aspect-ratio: unset;
+  overflow: hidden;
 }
 
 .stream-card__toolbar {
@@ -840,13 +859,14 @@ html.headers-hidden .stream-card__overlay-controls {
 }
 
 /*
- * Headers-hidden sets player height: auto !important for hover-toolbar flex.
- * Focus must reclaim an explicit height or the absolute iframe collapses to 0
- * and only the minimize header shows.
+ * Headers-hidden keeps an explicit player height (no hover shrink). Focus must
+ * still reclaim that height or the absolute iframe collapses to 0 and only the
+ * minimize header shows.
  */
 html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused {
   height: auto;
   overflow: hidden;
+  z-index: 1;
 }
 
 html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-card__player {

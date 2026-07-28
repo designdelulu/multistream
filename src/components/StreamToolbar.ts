@@ -118,25 +118,58 @@ export function bindStreamToolbar(
   const formEl = form;
   const inputEl = input;
   const suggestionsEl = suggestions;
+  const suggestionPlatforms: Platform[] = ['twitch', 'kick'];
   let selectedPlatform = loadPreferredPlatform();
+  let activeSuggestionIndex = -1;
   let shareResetTimer = 0;
 
   function hideSuggestions(): void {
     suggestionsEl.hidden = true;
     suggestionsEl.replaceChildren();
     inputEl.setAttribute('aria-expanded', 'false');
+    activeSuggestionIndex = -1;
+    inputEl.removeAttribute('aria-activedescendant');
+  }
+
+  function setActiveSuggestion(index: number): void {
+    const options = suggestionsEl.querySelectorAll<HTMLButtonElement>('.toolbar__suggestion');
+    activeSuggestionIndex = index;
+
+    options.forEach((option, i) => {
+      const isActive = i === index;
+      option.classList.toggle('toolbar__suggestion--active', isActive);
+      option.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+
+    if (index >= 0 && index < options.length) {
+      inputEl.setAttribute('aria-activedescendant', options[index].id);
+    } else {
+      inputEl.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function selectSuggestion(username: string, platform: Platform): void {
+    selectedPlatform = platform;
+    persistPreferredPlatform(platform);
+    const resolved = resolveAddInput(username, platform);
+    if (tryAddStream(store, inputEl, resolved)) {
+      hideSuggestions();
+    }
   }
 
   function showSuggestions(username: string): void {
     suggestionsEl.replaceChildren();
+    activeSuggestionIndex = -1;
+    inputEl.removeAttribute('aria-activedescendant');
 
-    const platforms: Platform[] = ['twitch', 'kick'];
-    for (const platform of platforms) {
+    for (const platform of suggestionPlatforms) {
       const option = document.createElement('button');
       option.type = 'button';
       option.className = 'toolbar__suggestion';
       option.role = 'option';
+      option.id = `add-stream-suggestion-${platform}`;
       option.dataset.platform = platform;
+      option.setAttribute('aria-selected', 'false');
 
       const label = document.createElement('span');
       label.className = 'toolbar__suggestion-label';
@@ -154,12 +187,7 @@ export function bindStreamToolbar(
         event.preventDefault();
       });
       option.addEventListener('click', () => {
-        selectedPlatform = platform;
-        persistPreferredPlatform(platform);
-        const resolved = resolveAddInput(username, platform);
-        if (tryAddStream(store, inputEl, resolved)) {
-          hideSuggestions();
-        }
+        selectSuggestion(username, platform);
       });
       suggestionsEl.append(option);
     }
@@ -210,6 +238,43 @@ export function bindStreamToolbar(
   inputEl.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       hideSuggestions();
+      return;
+    }
+
+    if (suggestionsEl.hidden) return;
+
+    const optionCount = suggestionsEl.querySelectorAll('.toolbar__suggestion').length;
+    if (optionCount === 0) return;
+
+    const candidate = plainUsernameCandidate(inputEl.value);
+    if (!candidate) return;
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      const next =
+        activeSuggestionIndex < 0
+          ? 0
+          : Math.min(activeSuggestionIndex + 1, optionCount - 1);
+      setActiveSuggestion(next);
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (activeSuggestionIndex <= 0) {
+        setActiveSuggestion(activeSuggestionIndex < 0 ? -1 : 0);
+      } else {
+        setActiveSuggestion(activeSuggestionIndex - 1);
+      }
+      return;
+    }
+
+    if (event.key === 'Enter' && activeSuggestionIndex >= 0) {
+      event.preventDefault();
+      const platform = suggestionPlatforms[activeSuggestionIndex];
+      if (platform) {
+        selectSuggestion(candidate, platform);
+      }
     }
   });
 

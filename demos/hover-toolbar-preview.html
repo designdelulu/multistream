@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hover toolbar preview (local only)</title>
+    <style>
+      :root {
+        --bg: #0f0f14;
+        --surface: #1a1a22;
+        --border: #2e2e3a;
+        --text: #f2f2f7;
+        --muted: #9b9ba8;
+        --accent: #9146ff;
+        --kick: #53fc18;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.45;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.35rem;
+      }
+
+      .lead {
+        margin: 0 0 28px;
+        color: var(--muted);
+        max-width: 62ch;
+      }
+
+      .note {
+        margin: 0 0 28px;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--surface) 90%, black);
+        color: var(--muted);
+        max-width: 70ch;
+      }
+
+      .note strong {
+        color: var(--text);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+        align-items: start;
+      }
+
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        padding: 14px;
+      }
+
+      .panel h2 {
+        margin: 0 0 6px;
+        font-size: 1rem;
+      }
+
+      .panel p {
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .stage {
+        --player-height: 200px;
+        border-radius: 10px;
+        background: #0a0a0e;
+        padding: 10px;
+      }
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        height: var(--player-height);
+        overflow: hidden;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #000;
+      }
+
+      .player {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: grid;
+        place-items: center;
+        background:
+          linear-gradient(135deg, #1b1028, #0d1a12 55%, #111),
+          repeating-linear-gradient(
+            -12deg,
+            transparent,
+            transparent 10px,
+            rgba(255, 255, 255, 0.03) 10px,
+            rgba(255, 255, 255, 0.03) 20px
+          );
+        color: #fff;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+
+      .size {
+        margin-top: 10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.82rem;
+        color: var(--muted);
+      }
+
+      .size .warn {
+        color: #ffb4b4;
+      }
+
+      .size .ok {
+        color: #b8f5c4;
+      }
+
+      .toolbar {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 8px;
+        box-sizing: border-box;
+        padding: 0 8px;
+        overflow: hidden;
+        background: color-mix(in srgb, var(--surface) 94%, black);
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        flex: 1;
+      }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #ff4444;
+        box-shadow: 0 0 6px #ff4444;
+      }
+
+      .channel {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .pill {
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--accent) 28%, transparent);
+        color: #e6d4ff;
+        font-size: 0.68rem;
+        font-weight: 750;
+        letter-spacing: 0.04em;
+      }
+
+      .actions {
+        margin-left: auto;
+        display: flex;
+        gap: 6px;
+      }
+
+      .actions span {
+        opacity: 0.7;
+      }
+
+      /* --- Current: shrink video on hover --- */
+      .current .toolbar {
+        height: 0;
+        min-height: 0;
+        max-height: 0;
+        opacity: 0;
+        border: 0;
+        transition:
+          height 0.15s ease,
+          max-height 0.15s ease,
+          min-height 0.15s ease,
+          opacity 0.15s ease;
+      }
+
+      .current .card:hover .toolbar {
+        height: 40px;
+        min-height: 40px;
+        max-height: 40px;
+        opacity: 1;
+        border-top: 1px solid var(--border);
+      }
+
+      /* --- Proposed A: always reserve 40px (video never resizes) --- */
+      .reserve .card {
+        height: calc(var(--player-height) + 40px);
+      }
+
+      .reserve .player {
+        height: var(--player-height);
+        flex: 0 0 var(--player-height);
+      }
+
+      .reserve .toolbar {
+        height: 40px;
+        min-height: 40px;
+        max-height: 40px;
+        opacity: 0.35;
+        border-top: 1px solid transparent;
+        transition:
+          opacity 0.15s ease,
+          border-color 0.15s ease;
+      }
+
+      .reserve .card:hover .toolbar {
+        opacity: 1;
+        border-top-color: var(--border);
+      }
+
+      /* --- Proposed B: card grows down; video stays fixed --- */
+      .grow .card {
+        height: var(--player-height);
+        overflow: visible;
+        transition: height 0.15s ease;
+      }
+
+      .grow .player {
+        height: var(--player-height);
+        flex: 0 0 var(--player-height);
+      }
+
+      .grow .toolbar {
+        height: 0;
+        min-height: 0;
+        max-height: 0;
+        opacity: 0;
+        border: 0;
+        transition:
+          height 0.15s ease,
+          max-height 0.15s ease,
+          min-height 0.15s ease,
+          opacity 0.15s ease;
+      }
+
+      .grow .card:hover {
+        height: calc(var(--player-height) + 40px);
+      }
+
+      .grow .card:hover .toolbar {
+        height: 40px;
+        min-height: 40px;
+        max-height: 40px;
+        opacity: 1;
+        border-top: 1px solid var(--border);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Hover toolbar preview</h1>
+    <p class="lead">
+      Local mock only — open this file in a browser. It does not change the real MultiStream app.
+      Hover each card and watch the “video” size readout.
+    </p>
+    <p class="note">
+      <strong>Status:</strong> Option B is now applied in the real MultiStream app.
+      This page is only a side-by-side reference. Kick’s bottom controls were getting
+      clipped when the old hover shrunk the player — Option B keeps player size fixed.
+    </p>
+
+    <div class="grid">
+      <section class="panel current">
+        <h2>Current (in the app today)</h2>
+        <p>Hover → video shrinks ~40px so the toolbar can appear under it.</p>
+        <div class="stage">
+          <article class="card" data-label="current">
+            <div class="player">FAKE VIDEO</div>
+            <div class="toolbar">
+              <div class="badge">
+                <span class="dot"></span>
+                <span class="channel">shroud</span>
+                <span class="pill">TWITCH</span>
+              </div>
+              <div class="actions"><span>⠿</span><span>🔍</span><span>×</span></div>
+            </div>
+          </article>
+        </div>
+        <div class="size" data-size>Player: —</div>
+      </section>
+
+      <section class="panel reserve">
+        <h2>Option A — always reserve toolbar</h2>
+        <p>
+          Video height never changes. Toolbar strip is always there; it just brightens on hover.
+          Slightly less video height at rest.
+        </p>
+        <div class="stage">
+          <article class="card" data-label="reserve">
+            <div class="player">FAKE VIDEO</div>
+            <div class="toolbar">
+              <div class="badge">
+                <span class="dot"></span>
+                <span class="channel">shroud</span>
+                <span class="pill">TWITCH</span>
+              </div>
+              <div class="actions"><span>⠿</span><span>🔍</span><span>×</span></div>
+            </div>
+          </article>
+        </div>
+        <div class="size" data-size>Player: —</div>
+      </section>
+
+      <section class="panel grow">
+        <h2>Option B — grow card downward</h2>
+        <p>
+          Video stays fixed. On hover the card gets taller and the toolbar appears below. Can clash
+          with a tight grid if there’s no spare space.
+        </p>
+        <div class="stage">
+          <article class="card" data-label="grow">
+            <div class="player">FAKE VIDEO</div>
+            <div class="toolbar">
+              <div class="badge">
+                <span class="dot"></span>
+                <span class="channel">shroud</span>
+                <span class="pill">TWITCH</span>
+              </div>
+              <div class="actions"><span>⠿</span><span>🔍</span><span>×</span></div>
+            </div>
+          </article>
+        </div>
+        <div class="size" data-size>Player: —</div>
+      </section>
+    </div>
+
+    <script>
+      function updateSizes() {
+        for (const card of document.querySelectorAll('.card')) {
+          const player = card.querySelector('.player');
+          const out = card.closest('.panel')?.querySelector('[data-size]');
+          if (!player || !out) continue;
+          const r = player.getBoundingClientRect();
+          const w = Math.round(r.width);
+          const h = Math.round(r.height);
+          const tight = h < 160;
+          out.innerHTML =
+            'Player: <span class="' +
+            (tight ? 'warn' : 'ok') +
+            '">' +
+            w +
+            '×' +
+            h +
+            '</span>' +
+            (tight ? ' (shrunk on hover)' : ' (stable)');
+        }
+      }
+
+      for (const card of document.querySelectorAll('.card')) {
+        card.addEventListener('mouseenter', () => requestAnimationFrame(updateSizes));
+        card.addEventListener('mouseleave', () => requestAnimationFrame(updateSizes));
+      }
+      window.addEventListener('resize', updateSizes);
+      updateSizes();
+    </script>
+  </body>
+</html>

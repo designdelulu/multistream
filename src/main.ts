@@ -9,10 +9,13 @@ import {
 import { bindStreamReorder } from './components/StreamReorder';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
 import { bindWelcomeModal } from './components/WelcomeModal';
+import { announceEmbedDebug } from './lib/embedDebug';
 import { phoneMediaQuery } from './lib/viewport';
 import { createChatStore } from './state/chat';
 import { createHeadersStore } from './state/headers';
 import { createStreamStore } from './state/streams';
+
+announceEmbedDebug();
 
 const store = createStreamStore();
 const chatStore = createChatStore(store);
@@ -36,7 +39,8 @@ const mainLayoutEl = mainLayout;
  * cannot stall Twitch embeds.
  *
  * Twitch refuses muted autoplay when the embed is obscured. Headers-hidden
- * mode keeps the video alone at rest; hover reveals a toolbar below the iframe.
+ * mode keeps the video alone at rest; hover grows the card and reveals a
+ * toolbar below the iframe without shrinking the player.
  */
 let suppressLayout = false;
 let suppressLayoutTimer = 0;
@@ -133,7 +137,10 @@ bindStreamFocus((focused, streamId) => {
   updateLayout();
 });
 store.subscribe(renderStreams);
-chatStore.subscribe(updateLayout);
+chatStore.subscribe(() => {
+  quietLayout(1500);
+  updateLayout();
+});
 headersStore.subscribe(afterHeadersToggle);
 
 const phoneQuery = phoneMediaQuery();
