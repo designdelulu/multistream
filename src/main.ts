@@ -93,6 +93,9 @@ function renderStreams(): void {
   updateEmptyState(store);
   afterLayoutPaint(() => {
     measureAndLayout();
+    // Adding/removing a stream resizes every remaining card the same way a
+    // headers-toggle does — same recovery is needed here, not just there.
+    recoverTwitchPlayersAfterLayout(gridEl);
   });
 }
 

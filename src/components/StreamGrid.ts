@@ -748,6 +748,16 @@ function createPlayerElement(
   toolbar.append(nameBadge, dragHandle, overlayControls);
   card.append(header, player, toolbar);
 
+  if (stream.platform === 'twitch') {
+    // Headers-hidden reveals this toolbar on hover by shrinking the player
+    // box (main.css) — a real iframe resize we otherwise never observe.
+    // Check once the shrink/grow settles instead of waiting on the watchdog.
+    toolbar.addEventListener('transitionend', (event) => {
+      if (event.propertyName !== 'height') return;
+      verifyAndRecoverTwitchPlayer(card);
+    });
+  }
+
   if (document.hidden) {
     card.dataset.tabFrozen = '1';
   } else {
@@ -862,12 +872,55 @@ export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
 }
 
 /**
- * 'api'-mode Twitch cards get real recovery: check isPaused() and only act
- * on an actual stall — play() first, setChannel() (a real reconnect) after a
- * second consecutive stall. Fallback-mode cards (script blocked/failed) keep
- * the original blind force-remount, since that's the only signal available
- * for them. Skips the focused stream either way — reloading the one stream
- * someone is actively watching is more disruptive than a muted-tile stall.
+ * Real recovery for one 'api'-mode card: check isPaused() and only act on an
+ * actual stall — play() first, setChannel() (a real reconnect) after a
+ * second consecutive stall. Cheap enough to call from more than the 90s
+ * watchdog (e.g. right after a hover-driven resize) since it's a no-op
+ * whenever the player is actually fine.
+ */
+function verifyAndRecoverTwitchPlayer(card: HTMLElement): void {
+  if (card.dataset.twitchMode !== 'api') return;
+  if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
+  if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) return;
+
+  const streamId = card.dataset.streamId ?? '';
+  const player = twitchPlayers.get(streamId);
+  if (!player) return;
+
+  let paused: boolean;
+  try {
+    paused = player.isPaused();
+  } catch {
+    return; // player not fully ready yet
+  }
+
+  if (!paused) {
+    twitchStallCounts.delete(streamId);
+    return;
+  }
+
+  const count = (twitchStallCounts.get(streamId) ?? 0) + 1;
+  twitchStallCounts.set(streamId, count);
+  logEmbedEvent('player-recover', {
+    platform: 'twitch',
+    channel: card.dataset.channel,
+    card,
+  });
+
+  if (count >= 2) {
+    player.setChannel(card.dataset.channel ?? '');
+    twitchStallCounts.set(streamId, 0);
+  } else {
+    player.play();
+  }
+}
+
+/**
+ * 'api'-mode Twitch cards get real recovery via verifyAndRecoverTwitchPlayer.
+ * Fallback-mode cards (script blocked/failed) keep the original blind
+ * force-remount, since that's the only signal available for them. Skips the
+ * focused stream either way — reloading the one stream someone is actively
+ * watching is more disruptive than a muted-tile stall.
  */
 export function recoverStalledTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
@@ -875,43 +928,12 @@ export function recoverStalledTwitchPlayers(container: HTMLElement): void {
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) continue;
 
-    if (card.dataset.twitchMode !== 'api') {
-      if (card.dataset.twitchMode === 'fallback') {
-        mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
-      }
+    if (card.dataset.twitchMode === 'fallback') {
+      mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
       continue;
     }
 
-    const streamId = card.dataset.streamId ?? '';
-    const player = twitchPlayers.get(streamId);
-    if (!player) continue;
-
-    let paused: boolean;
-    try {
-      paused = player.isPaused();
-    } catch {
-      continue; // player not fully ready yet
-    }
-
-    if (!paused) {
-      twitchStallCounts.delete(streamId);
-      continue;
-    }
-
-    const count = (twitchStallCounts.get(streamId) ?? 0) + 1;
-    twitchStallCounts.set(streamId, count);
-    logEmbedEvent('player-recover', {
-      platform: 'twitch',
-      channel: card.dataset.channel,
-      card,
-    });
-
-    if (count >= 2) {
-      player.setChannel(card.dataset.channel ?? '');
-      twitchStallCounts.set(streamId, 0);
-    } else {
-      player.play();
-    }
+    verifyAndRecoverTwitchPlayer(card);
   }
 }
 
