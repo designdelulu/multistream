@@ -18,7 +18,13 @@ export type EmbedDebugReason =
   | 'focus-unmute'
   | 'headers-recover'
   | 'watchdog'
-  | 'visibility';
+  | 'visibility'
+  | 'script-fallback'
+  | 'player-ready'
+  | 'player-blocked'
+  | 'player-offline'
+  | 'player-online'
+  | 'player-recover';
 
 type EmbedDebugDetail = {
   platform?: string;

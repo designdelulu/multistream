@@ -16,6 +16,14 @@ function channelFromPath(pathname: string): string | null {
   return segment.toLowerCase();
 }
 
+/** Dual localhost/127.0.0.1 pair for dev; production gets just the one hostname. */
+export function twitchParentList(hostname: string): string[] {
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return hostname === 'localhost' ? ['localhost', '127.0.0.1'] : ['127.0.0.1', 'localhost'];
+  }
+  return [hostname];
+}
+
 export const twitchAdapter: PlatformAdapter = {
   id: 'twitch',
   label: 'Twitch',
@@ -60,18 +68,16 @@ export const twitchAdapter: PlatformAdapter = {
       params.set('autoplay', 'true');
     }
     // MultistreamGrid: parent = current hostname only (dual localhost pair for dev).
-    params.set('parent', opts.parent);
-    if (opts.parent === 'localhost' || opts.parent === '127.0.0.1') {
-      params.append('parent', opts.parent === 'localhost' ? '127.0.0.1' : 'localhost');
+    for (const parent of twitchParentList(opts.parent)) {
+      params.append('parent', parent);
     }
     return `https://player.twitch.tv/?${params.toString()}`;
   },
 
   buildChatEmbedUrl(ref, opts) {
     const params = new URLSearchParams();
-    params.set('parent', opts.parent);
-    if (opts.parent === 'localhost' || opts.parent === '127.0.0.1') {
-      params.append('parent', opts.parent === 'localhost' ? '127.0.0.1' : 'localhost');
+    for (const parent of twitchParentList(opts.parent)) {
+      params.append('parent', parent);
     }
     return `https://www.twitch.tv/embed/${encodeURIComponent(ref.channel)}/chat?${params.toString()}&darkpopout`;
   },

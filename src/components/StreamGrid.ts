@@ -1,6 +1,7 @@
 import { embedDebugEnabled, logEmbedEvent } from '../lib/embedDebug';
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
+import { twitchParentList } from '../platforms/twitch';
 import type { StreamRef } from '../types';
 import type { StreamStore } from '../state/streams';
 
@@ -30,6 +31,20 @@ let escapeBound = false;
 let layoutFrame = 0;
 let layoutRetries = 0;
 const MAX_LAYOUT_RETRIES = 8;
+
+/**
+ * Twitch.Player (dev.twitch.tv/docs/embed/video-and-clips/) gives real
+ * play/pause/offline events instead of the blind watchdog Kick still relies
+ * on — but it always builds its own iframe, so a card only reaches 'api'
+ * mode once the wrapper script has actually loaded. Ad-blockers catch that
+ * script more often than a bare video iframe, so 'fallback' mode (today's
+ * exact bare-iframe path) is the required safety net, not an edge case.
+ */
+const twitchPlayers = new Map<string, Twitch.Player>();
+const twitchStallCounts = new Map<string, number>();
+let twitchMountSeq = 0;
+let twitchScriptPromise: Promise<boolean> | null = null;
+const TWITCH_SCRIPT_TIMEOUT_MS = 4000;
 
 function clearLayoutVars(container: HTMLElement): void {
   container.style.removeProperty('--grid-columns');
@@ -68,6 +83,106 @@ function streamIframe(card: HTMLElement): HTMLIFrameElement | null {
 /** Per-card mute preference stored on the card DOM (survives blank/remount). */
 function preferredMuted(card: HTMLElement): boolean {
   return card.dataset.embedMuted !== '0';
+}
+
+/**
+ * Lazily loads Twitch's embed script once, shared by every Twitch card, so a
+ * Kick-only session never pays for it. Resolves true only if the script
+ * actually loaded AND window.Twitch.Player is really there — some
+ * ad-blockers let the request "succeed" with an empty stub.
+ */
+function ensureTwitchEmbedScript(): Promise<boolean> {
+  if (twitchScriptPromise) return twitchScriptPromise;
+
+  twitchScriptPromise = new Promise<boolean>((resolve) => {
+    if (window.Twitch?.Player) {
+      resolve(true);
+      return;
+    }
+
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (!ok) {
+        logEmbedEvent('script-fallback', { platform: 'twitch' });
+      }
+      resolve(ok);
+    };
+
+    const timer = window.setTimeout(() => finish(false), TWITCH_SCRIPT_TIMEOUT_MS);
+
+    const script = document.createElement('script');
+    script.src = 'https://player.twitch.tv/js/embed/v1.js';
+    script.async = true;
+    script.onload = () => {
+      window.clearTimeout(timer);
+      finish(Boolean(window.Twitch?.Player));
+    };
+    script.onerror = () => {
+      window.clearTimeout(timer);
+      finish(false);
+    };
+    document.head.append(script);
+  });
+
+  return twitchScriptPromise;
+}
+
+/** Only place a bare Twitch iframe gets built now — the script-load-failed path. */
+function createTwitchFallbackIframe(channel: string): HTMLIFrameElement {
+  const iframe = document.createElement('iframe');
+  iframe.className = 'stream-card__iframe';
+  iframe.allowFullscreen = true;
+  iframe.title = `Twitch stream: ${channel}`;
+  iframe.referrerPolicy = 'no-referrer-when-downgrade';
+  iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
+  iframe.setAttribute(
+    'sandbox',
+    'allow-scripts allow-same-origin allow-popups allow-presentation allow-modals',
+  );
+  return iframe;
+}
+
+function replaceWithFallbackIframe(card: HTMLElement): void {
+  const placeholder = card.querySelector<HTMLElement>('.stream-card__iframe');
+  const iframe = createTwitchFallbackIframe(card.dataset.channel ?? '');
+  placeholder?.replaceWith(iframe);
+  card.dataset.twitchMode = 'fallback';
+}
+
+function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
+  const streamId = card.dataset.streamId ?? '';
+  const channel = card.dataset.channel ?? '';
+  const mountEl = card.querySelector<HTMLElement>('.stream-card__iframe');
+  if (!mountEl || !channel || !streamId) return;
+
+  const player = new Twitch.Player(mountEl.id, {
+    width: '100%',
+    height: '100%',
+    channel,
+    parent: twitchParentList(window.location.hostname),
+    muted,
+    autoplay: true,
+  });
+
+  twitchPlayers.set(streamId, player);
+  card.dataset.twitchMode = 'api';
+  card.dataset.embedMuted = muted ? '1' : '0';
+
+  logEmbedEvent('player-ready', { platform: 'twitch', channel, action: 'src', muted, card });
+
+  player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED, () => {
+    logEmbedEvent('player-blocked', { platform: 'twitch', channel, card });
+    player.play();
+  });
+  player.addEventListener(Twitch.Player.OFFLINE, () => {
+    logEmbedEvent('player-offline', { platform: 'twitch', channel, card });
+  });
+  player.addEventListener(Twitch.Player.ONLINE, () => {
+    logEmbedEvent('player-online', { platform: 'twitch', channel, card });
+    player.play();
+  });
 }
 
 function mountTwitchIframe(
@@ -233,13 +348,44 @@ function mountStreamMedia(
   muted: boolean,
   reason: 'mount' | 'tab-resume' | 'focus-resume' | 'focus-unmute' = 'mount',
 ): void {
-  if (card.dataset.platform === 'twitch') {
+  if (card.dataset.platform === 'kick') {
+    mountKickIframe(card, muted, reason);
+    return;
+  }
+  if (card.dataset.platform !== 'twitch') return;
+  if (card.dataset.tabFrozen === '1') return;
+
+  const mode = card.dataset.twitchMode;
+
+  if (mode === 'api') {
+    const player = twitchPlayers.get(card.dataset.streamId ?? '');
+    player?.setMuted(muted);
+    player?.play();
+    card.dataset.embedMuted = muted ? '1' : '0';
+    return;
+  }
+
+  if (mode === 'fallback') {
     mountTwitchIframe(card, muted, reason);
     return;
   }
-  if (card.dataset.platform === 'kick') {
-    mountKickIframe(card, muted, reason);
-  }
+
+  // 'pending' or first mount — (re)attempt once the shared script load settles.
+  card.dataset.twitchMode = 'pending';
+  card.dataset.embedMuted = muted ? '1' : '0';
+  void ensureTwitchEmbedScript().then((available) => {
+    if (!card.isConnected) return;
+    if (card.dataset.tabFrozen === '1') return; // re-frozen mid-await; next resume retries
+    if (card.dataset.twitchMode !== 'pending') return; // already resolved by a concurrent call
+
+    const currentMuted = preferredMuted(card);
+    if (available) {
+      constructTwitchPlayer(card, currentMuted);
+    } else {
+      replaceWithFallbackIframe(card);
+      mountTwitchIframe(card, currentMuted, reason);
+    }
+  });
 }
 
 /** Unload streams hidden by focus mode (Kick keeps playing audio if left loaded). */
@@ -249,9 +395,26 @@ function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): vo
     if (card.dataset.focusFrozen === '1') continue;
 
     card.dataset.focusFrozen = '1';
+    if (card.dataset.tabFrozen === '1') continue;
+
+    if (card.dataset.platform === 'twitch') {
+      if (card.dataset.twitchMode === 'pending') continue; // nothing mounted yet
+      if (card.dataset.twitchMode === 'api') {
+        const player = twitchPlayers.get(card.dataset.streamId ?? '');
+        if (!player) continue;
+        logEmbedEvent('focus-freeze', {
+          platform: 'twitch',
+          channel: card.dataset.channel,
+          action: 'blank',
+          card,
+        });
+        player.pause();
+        continue;
+      }
+    }
 
     const iframe = streamIframe(card);
-    if (!iframe || iframe.dataset.tabFrozen === '1') continue;
+    if (!iframe) continue;
     iframe.dataset.focusFrozen = '1';
     logEmbedEvent('focus-freeze', {
       platform: card.dataset.platform,
@@ -402,7 +565,16 @@ export function toggleStreamFocus(container: HTMLElement, streamId: string): voi
   );
   if (focusedCard?.dataset.platform === 'twitch') {
     focusedCard.dataset.embedMuted = '0';
-    mountTwitchIframe(focusedCard, false, 'focus-unmute');
+    const mode = focusedCard.dataset.twitchMode;
+    if (mode === 'api') {
+      const player = twitchPlayers.get(streamId);
+      player?.setMuted(false);
+      player?.play();
+    } else if (mode === 'fallback') {
+      mountTwitchIframe(focusedCard, false, 'focus-unmute');
+    }
+    // mode === 'pending': the in-flight construction reads embedMuted once
+    // the script settles — nothing to do here.
   }
 }
 
@@ -423,7 +595,7 @@ function bindFocusEscape(): void {
   escapeBound = true;
 }
 
-function createStreamIframe(
+function createKickIframe(
   stream: StreamRef,
   adapter: ReturnType<typeof getAdapter>,
 ): HTMLIFrameElement {
@@ -432,24 +604,22 @@ function createStreamIframe(
   iframe.allowFullscreen = true;
   iframe.title = `${adapter.label} stream: ${stream.channel}`;
   iframe.referrerPolicy = 'no-referrer-when-downgrade';
-
-  if (stream.platform === 'kick') {
-    applyKickAllowPolicy(iframe, true);
-    iframe.setAttribute('credentialless', '');
-    try {
-      (iframe as HTMLIFrameElement & { credentialless?: boolean }).credentialless = true;
-    } catch {
-      // Older browsers ignore this.
-    }
-  } else {
-    iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
-    iframe.setAttribute(
-      'sandbox',
-      'allow-scripts allow-same-origin allow-popups allow-presentation allow-modals',
-    );
+  applyKickAllowPolicy(iframe, true);
+  iframe.setAttribute('credentialless', '');
+  try {
+    (iframe as HTMLIFrameElement & { credentialless?: boolean }).credentialless = true;
+  } catch {
+    // Older browsers ignore this.
   }
-
   return iframe;
+}
+
+/** Empty mount point — Twitch.Player (or the fallback iframe) attaches via mountStreamMedia. */
+function createTwitchMountPoint(): HTMLDivElement {
+  const mount = document.createElement('div');
+  mount.className = 'stream-card__iframe';
+  mount.id = `twitch-embed-${++twitchMountSeq}`;
+  return mount;
 }
 
 function createPlayerElement(
@@ -510,15 +680,14 @@ function createPlayerElement(
   const player = document.createElement('div');
   player.className = 'stream-card__player';
 
-  const iframe = createStreamIframe(stream, adapter);
-
   if (stream.platform === 'kick') {
+    const iframe = createKickIframe(stream, adapter);
     const kickFrame = document.createElement('div');
     kickFrame.className = 'stream-card__kick-frame';
     kickFrame.append(iframe);
     player.append(kickFrame);
   } else {
-    player.append(iframe);
+    player.append(createTwitchMountPoint());
   }
 
   // Toolbar is a sibling BELOW the player — never stacked over the iframe.
@@ -594,6 +763,21 @@ export function freezeStreamPlayers(container: HTMLElement): void {
     if (card.dataset.tabFrozen === '1') continue;
     card.dataset.tabFrozen = '1';
 
+    if (card.dataset.platform === 'twitch') {
+      if (card.dataset.twitchMode === 'pending') continue; // nothing mounted yet
+      if (card.dataset.twitchMode === 'api') {
+        const player = twitchPlayers.get(card.dataset.streamId ?? '');
+        logEmbedEvent('tab-freeze', {
+          platform: 'twitch',
+          channel: card.dataset.channel,
+          action: 'blank',
+          card,
+        });
+        player?.pause();
+        continue;
+      }
+    }
+
     const iframe = streamIframe(card);
     if (!iframe) continue;
     iframe.dataset.tabFrozen = '1';
@@ -660,13 +844,16 @@ export function isStreamFocused(): boolean {
 }
 
 /**
- * Twitch can pause after headers-hidden layout thrash. Force-remount with each
- * card's saved mute preference so stalled embeds autoplay again.
+ * Fallback-mode Twitch (bare iframe) can pause after headers-hidden layout
+ * thrash with nothing to detect it — force-remount as before. 'api'-mode
+ * cards are trusted to survive the CSS resize without a remount (this is
+ * the one part of the swap that most needs live-browser confirmation).
  */
 export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
     if (card.dataset.platform !== 'twitch') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+    if (card.dataset.twitchMode !== 'fallback') continue;
 
     const isFocused =
       focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
@@ -675,11 +862,12 @@ export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
 }
 
 /**
- * Bare Twitch iframe gives no play/pause/buffering signal, so a background
- * stream can silently stall with nothing to react to. Blind periodic
- * force-remount is the cheap stopgap until the JS Embed API replaces this.
- * Skips the focused stream — reloading the one stream someone is actively
- * watching (unmuted) is more disruptive than an occasional muted-tile stall.
+ * 'api'-mode Twitch cards get real recovery: check isPaused() and only act
+ * on an actual stall — play() first, setChannel() (a real reconnect) after a
+ * second consecutive stall. Fallback-mode cards (script blocked/failed) keep
+ * the original blind force-remount, since that's the only signal available
+ * for them. Skips the focused stream either way — reloading the one stream
+ * someone is actively watching is more disruptive than a muted-tile stall.
  */
 export function recoverStalledTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
@@ -687,7 +875,43 @@ export function recoverStalledTwitchPlayers(container: HTMLElement): void {
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) continue;
 
-    mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
+    if (card.dataset.twitchMode !== 'api') {
+      if (card.dataset.twitchMode === 'fallback') {
+        mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
+      }
+      continue;
+    }
+
+    const streamId = card.dataset.streamId ?? '';
+    const player = twitchPlayers.get(streamId);
+    if (!player) continue;
+
+    let paused: boolean;
+    try {
+      paused = player.isPaused();
+    } catch {
+      continue; // player not fully ready yet
+    }
+
+    if (!paused) {
+      twitchStallCounts.delete(streamId);
+      continue;
+    }
+
+    const count = (twitchStallCounts.get(streamId) ?? 0) + 1;
+    twitchStallCounts.set(streamId, count);
+    logEmbedEvent('player-recover', {
+      platform: 'twitch',
+      channel: card.dataset.channel,
+      card,
+    });
+
+    if (count >= 2) {
+      player.setChannel(card.dataset.channel ?? '');
+      twitchStallCounts.set(streamId, 0);
+    } else {
+      player.play();
+    }
   }
 }
 
@@ -710,6 +934,11 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
   for (const card of [...container.querySelectorAll<HTMLElement>('.stream-card')]) {
     const id = card.dataset.streamId ?? '';
     if (!id || !nextIds.has(id) || seenIds.has(id)) {
+      if (card.dataset.platform === 'twitch') {
+        twitchPlayers.get(id)?.destroy();
+        twitchPlayers.delete(id);
+        twitchStallCounts.delete(id);
+      }
       card.remove();
       continue;
     }
