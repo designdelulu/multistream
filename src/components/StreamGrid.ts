@@ -1,4 +1,4 @@
-import { embedDebugEnabled, logEmbedEvent } from '../lib/embedDebug';
+import { embedDebugEnabled, logEmbedEvent, reportEmbedRecovery } from '../lib/embedDebug';
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import { twitchParentList } from '../platforms/twitch';
@@ -106,6 +106,7 @@ function ensureTwitchEmbedScript(): Promise<boolean> {
       settled = true;
       if (!ok) {
         logEmbedEvent('script-fallback', { platform: 'twitch' });
+        reportEmbedRecovery('script-fallback', { platform: 'twitch' });
       }
       resolve(ok);
     };
@@ -174,6 +175,7 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
 
   player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED, () => {
     logEmbedEvent('player-blocked', { platform: 'twitch', channel, card });
+    reportEmbedRecovery('playback-blocked', { platform: 'twitch' });
     player.play();
   });
   player.addEventListener(Twitch.Player.OFFLINE, () => {
@@ -253,6 +255,7 @@ function mountTwitchIframeForced(
     muted,
     card,
   });
+  reportEmbedRecovery('forced-remount', { platform: 'twitch', reason });
   iframe.src = 'about:blank';
   logEmbedEvent('mount-forced', {
     platform: 'twitch',
@@ -332,6 +335,7 @@ function mountKickIframeForced(card: HTMLElement, muted: boolean): void {
     muted,
     card,
   });
+  reportEmbedRecovery('forced-remount', { platform: 'kick', reason: 'watchdog' });
   iframe.src = 'about:blank';
   logEmbedEvent('mount-forced', {
     platform: 'kick',
@@ -908,9 +912,11 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement): void {
   });
 
   if (count >= 2) {
+    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'reconnect' });
     player.setChannel(card.dataset.channel ?? '');
     twitchStallCounts.set(streamId, 0);
   } else {
+    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'replay' });
     player.play();
   }
 }

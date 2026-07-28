@@ -81,6 +81,33 @@ export function logEmbedEvent(reason: EmbedDebugReason, detail: EmbedDebugDetail
   });
 }
 
+export type EmbedRecoveryAction =
+  | 'script-fallback'
+  | 'playback-blocked'
+  | 'player-recover'
+  | 'forced-remount';
+
+/**
+ * Always-on (not gated by ?debug=embeds) — a curated subset of recovery
+ * events sent to GA4 (already loaded in index.html) so stall frequency is
+ * measurable instead of guessed at. Never throws; telemetry must not be able
+ * to affect playback.
+ */
+export function reportEmbedRecovery(
+  action: EmbedRecoveryAction,
+  detail: { platform?: string; reason?: string } = {},
+): void {
+  try {
+    window.gtag?.('event', 'embed_recovery', {
+      recovery_action: action,
+      platform: detail.platform,
+      reason: detail.reason,
+    });
+  } catch {
+    // Never let telemetry break playback.
+  }
+}
+
 export function announceEmbedDebug(): void {
   if (!embedDebugEnabled) return;
   console.info(
