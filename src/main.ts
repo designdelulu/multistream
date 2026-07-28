@@ -2,7 +2,6 @@ import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
   bindStreamFocus,
   bindTabVisibilityPlayers,
-  recoverStalledKickPlayers,
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
   syncStreamGrid,
@@ -171,17 +170,18 @@ resizeObserver.observe(mainLayoutEl);
 resizeObserver.observe(streamAreaEl);
 
 /**
- * Safety net for stalls that never trigger a layout event (buffering
- * hiccup, dropped ad, network blip). Neither embed exposes a playback
- * signal — bound the max stall duration with a blind background remount
- * instead. Skipped while hidden/quiet so it never fights an in-flight layout
- * settle or a backgrounded tab.
+ * Twitch-only: real events (PLAYBACK_BLOCKED/OFFLINE/ONLINE) and
+ * isPaused() give api-mode cards a verified stall to act on; fallback-mode
+ * cards still get a blind remount since that's the only signal available.
+ * Kick has neither signal nor an API-mode path — a periodic blind remount
+ * here was confirmed to reset its volume back to muted on every cycle
+ * (no way to read back a live in-player unmute) far more often than it
+ * ever fixed a real stall, so Kick gets no periodic watchdog at all.
  */
 const WATCHDOG_INTERVAL_MS = 90_000;
 window.setInterval(() => {
   if (document.hidden || suppressLayout) return;
   recoverStalledTwitchPlayers(gridEl);
-  recoverStalledKickPlayers(gridEl);
 }, WATCHDOG_INTERVAL_MS);
 
 renderStreams();
