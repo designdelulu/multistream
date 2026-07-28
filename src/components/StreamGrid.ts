@@ -115,7 +115,11 @@ function mountTwitchIframe(
   iframe.src = nextSrc;
 }
 
-function mountTwitchIframeForced(card: HTMLElement, muted: boolean): void {
+function mountTwitchIframeForced(
+  card: HTMLElement,
+  muted: boolean,
+  reason: 'headers-recover' | 'watchdog' = 'headers-recover',
+): void {
   const iframe = streamIframe(card);
   const channel = card.dataset.channel;
   if (!iframe || !channel) return;
@@ -127,7 +131,7 @@ function mountTwitchIframeForced(card: HTMLElement, muted: boolean): void {
   iframe.dataset.embedMuted = muted ? '1' : '0';
   card.dataset.embedMuted = muted ? '1' : '0';
 
-  logEmbedEvent('headers-recover', {
+  logEmbedEvent(reason, {
     platform: 'twitch',
     channel,
     action: 'blank',
@@ -635,6 +639,23 @@ export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
     const isFocused =
       focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
     mountTwitchIframeForced(card, isFocused ? false : preferredMuted(card));
+  }
+}
+
+/**
+ * Bare Twitch iframe gives no play/pause/buffering signal, so a background
+ * stream can silently stall with nothing to react to. Blind periodic
+ * force-remount is the cheap stopgap until the JS Embed API replaces this.
+ * Skips the focused stream — reloading the one stream someone is actively
+ * watching (unmuted) is more disruptive than an occasional muted-tile stall.
+ */
+export function recoverStalledTwitchPlayers(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (card.dataset.platform !== 'twitch') continue;
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+    if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) continue;
+
+    mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
   }
 }
 

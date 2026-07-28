@@ -2,6 +2,7 @@ import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
   bindStreamFocus,
   bindTabVisibilityPlayers,
+  recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
   syncStreamGrid,
   updateGridLayout,
@@ -164,5 +165,18 @@ const resizeObserver = new ResizeObserver(() => {
 });
 resizeObserver.observe(mainLayoutEl);
 resizeObserver.observe(streamAreaEl);
+
+/**
+ * Safety net for Twitch stalls that never trigger a layout event (buffering
+ * hiccup, dropped ad, network blip). No JS Embed API means no real playback
+ * signal — bound the max stall duration with a blind background remount
+ * instead. Skipped while hidden/quiet so it never fights an in-flight layout
+ * settle or a backgrounded tab.
+ */
+const WATCHDOG_INTERVAL_MS = 90_000;
+window.setInterval(() => {
+  if (document.hidden || suppressLayout) return;
+  recoverStalledTwitchPlayers(gridEl);
+}, WATCHDOG_INTERVAL_MS);
 
 renderStreams();

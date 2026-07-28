@@ -17,6 +17,7 @@ export type EmbedDebugReason =
   | 'focus-resume'
   | 'focus-unmute'
   | 'headers-recover'
+  | 'watchdog'
   | 'visibility';
 
 type EmbedDebugDetail = {
