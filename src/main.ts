@@ -190,9 +190,13 @@ window.setInterval(() => {
  * background/throttled period, browsers can silently ignore it without one.
  * The first real mouse movement or click after returning satisfies that,
  * so nudge stalled players right then instead of waiting on the next 90s
- * watchdog tick. Cooldown keeps this from running on every mouse pixel.
+ * watchdog tick. Cooldown keeps this from running on every mouse pixel —
+ * kept short so it doesn't itself delay recovery: an incidental movement
+ * right as a fullscreen exit settles can burn the window before players
+ * are actually ready to check, and a long cooldown then makes the very
+ * next deliberate movement (checking a different card) wait it out too.
  */
-const INTERACTION_NUDGE_COOLDOWN_MS = 3000;
+const INTERACTION_NUDGE_COOLDOWN_MS = 500;
 let lastInteractionNudge = 0;
 function nudgeOnInteraction(): void {
   const now = Date.now();
