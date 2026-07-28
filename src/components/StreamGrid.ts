@@ -196,6 +196,38 @@ function mountKickIframe(
   iframe.src = nextSrc;
 }
 
+function mountKickIframeForced(card: HTMLElement, muted: boolean): void {
+  const iframe = streamIframe(card);
+  const channel = card.dataset.channel;
+  if (!iframe || !channel) return;
+  if (iframe.dataset.tabFrozen === '1') return;
+
+  applyKickAllowPolicy(iframe, muted);
+
+  const nextSrc = buildEmbedUrl({ platform: 'kick', channel }, muted, { autoplay: true });
+
+  delete iframe.dataset.focusFrozen;
+  iframe.dataset.embedMuted = muted ? '1' : '0';
+  card.dataset.embedMuted = muted ? '1' : '0';
+
+  logEmbedEvent('watchdog', {
+    platform: 'kick',
+    channel,
+    action: 'blank',
+    muted,
+    card,
+  });
+  iframe.src = 'about:blank';
+  logEmbedEvent('mount-forced', {
+    platform: 'kick',
+    channel,
+    action: 'src',
+    muted,
+    card,
+  });
+  iframe.src = nextSrc;
+}
+
 function mountStreamMedia(
   card: HTMLElement,
   muted: boolean,
@@ -656,6 +688,17 @@ export function recoverStalledTwitchPlayers(container: HTMLElement): void {
     if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) continue;
 
     mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
+  }
+}
+
+/** Same stopgap as recoverStalledTwitchPlayers, Kick side — no playback signal either. */
+export function recoverStalledKickPlayers(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (card.dataset.platform !== 'kick') continue;
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+    if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) continue;
+
+    mountKickIframeForced(card, preferredMuted(card));
   }
 }
 
