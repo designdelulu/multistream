@@ -85,7 +85,8 @@ export type EmbedRecoveryAction =
   | 'script-fallback'
   | 'playback-blocked'
   | 'player-recover'
-  | 'forced-remount';
+  | 'forced-remount'
+  | 'tab-freeze';
 
 /**
  * Always-on (not gated by ?debug=embeds) — a curated subset of recovery

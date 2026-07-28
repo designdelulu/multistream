@@ -823,8 +823,16 @@ export function resumeStreamPlayers(container: HTMLElement): void {
 }
 
 export function bindTabVisibilityPlayers(container: HTMLElement): void {
-  /** Ignore brief hide flashes (app switch overlays, etc.) before blanking embeds. */
-  const HIDE_BLANK_DELAY_MS = 250;
+  /**
+   * Kick has no pause API — freezing means blank+reload, and resuming means
+   * remounting muted (no way to read back a live in-player unmute). At 250ms
+   * this fired on almost any tab switch — alt-tabbing to answer a message,
+   * checking chat elsewhere — turning ordinary multitasking into a visible
+   * reload + remute on every return. 20s treats it as real backgrounding
+   * instead of a brief glance away, while still silencing Kick's audio
+   * (which ignores tab backgrounding on its own) after a genuine absence.
+   */
+  const HIDE_BLANK_DELAY_MS = 20_000;
   let hideBlankTimer = 0;
 
   document.addEventListener('visibilitychange', () => {
@@ -837,6 +845,7 @@ export function bindTabVisibilityPlayers(container: HTMLElement): void {
       hideBlankTimer = window.setTimeout(() => {
         hideBlankTimer = 0;
         if (!document.hidden) return;
+        reportEmbedRecovery('tab-freeze');
         freezeStreamPlayers(container);
       }, HIDE_BLANK_DELAY_MS);
       return;
