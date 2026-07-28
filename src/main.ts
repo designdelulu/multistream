@@ -2,6 +2,7 @@ import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
   bindStreamFocus,
   bindTabVisibilityPlayers,
+  nudgeStalledTwitchPlayers,
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
   syncStreamGrid,
@@ -183,5 +184,23 @@ window.setInterval(() => {
   if (document.hidden || suppressLayout) return;
   recoverStalledTwitchPlayers(gridEl);
 }, WATCHDOG_INTERVAL_MS);
+
+/**
+ * A tab-resume's own play() call isn't a genuine user gesture — after a real
+ * background/throttled period, browsers can silently ignore it without one.
+ * The first real mouse movement or click after returning satisfies that,
+ * so nudge stalled players right then instead of waiting on the next 90s
+ * watchdog tick. Cooldown keeps this from running on every mouse pixel.
+ */
+const INTERACTION_NUDGE_COOLDOWN_MS = 3000;
+let lastInteractionNudge = 0;
+function nudgeOnInteraction(): void {
+  const now = Date.now();
+  if (now - lastInteractionNudge < INTERACTION_NUDGE_COOLDOWN_MS) return;
+  lastInteractionNudge = now;
+  nudgeStalledTwitchPlayers(gridEl);
+}
+window.addEventListener('mousemove', nudgeOnInteraction, { passive: true });
+window.addEventListener('pointerdown', nudgeOnInteraction, { passive: true });
 
 renderStreams();

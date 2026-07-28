@@ -725,7 +725,7 @@ function createPlayerElement(
     // Check once the shrink/grow settles instead of waiting on the watchdog.
     toolbar.addEventListener('transitionend', (event) => {
       if (event.propertyName !== 'height') return;
-      verifyAndRecoverTwitchPlayer(card);
+      verifyAndRecoverTwitchPlayer(card, false);
     });
   }
 
@@ -853,12 +853,16 @@ export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
 
 /**
  * Real recovery for one 'api'-mode card: check isPaused() and only act on an
- * actual stall — play() first, setChannel() (a real reconnect) after a
- * second consecutive stall. Cheap enough to call from more than the 90s
- * watchdog (e.g. right after a hover-driven resize) since it's a no-op
- * whenever the player is actually fine.
+ * actual stall. `allowReconnect` gates the escalation to setChannel() (a
+ * real, visibly-slow reconnect) after repeated stalls — only the 90s
+ * watchdog is allowed that, since its own cadence naturally rate-limits it.
+ * Hover-triggered calls pass false: a quick play() nudge for the pause that
+ * hover's own box-resize can cause, never the heavier reconnect. Without this
+ * split, ordinary mouse movement (hover in/out a couple times within
+ * seconds) could hit the same escalation threshold the watchdog needed 90s+
+ * to reach, turning a brief resize-induced pause into a visible reload.
  */
-function verifyAndRecoverTwitchPlayer(card: HTMLElement): void {
+function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true): void {
   if (card.dataset.twitchMode !== 'api') return;
   if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
   if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) return;
@@ -879,13 +883,20 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement): void {
     return;
   }
 
-  const count = (twitchStallCounts.get(streamId) ?? 0) + 1;
-  twitchStallCounts.set(streamId, count);
   logEmbedEvent('player-recover', {
     platform: 'twitch',
     channel: card.dataset.channel,
     card,
   });
+
+  if (!allowReconnect) {
+    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'replay' });
+    player.play();
+    return;
+  }
+
+  const count = (twitchStallCounts.get(streamId) ?? 0) + 1;
+  twitchStallCounts.set(streamId, count);
 
   if (count >= 2) {
     reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'reconnect' });
@@ -916,6 +927,24 @@ export function recoverStalledTwitchPlayers(container: HTMLElement): void {
     }
 
     verifyAndRecoverTwitchPlayer(card);
+  }
+}
+
+/**
+ * Gentle, escalation-free sweep for api-mode cards — reused by any "user
+ * just showed up" signal (mouse movement, pointer down). A visibilitychange
+ * or timer-driven play() call isn't a genuine user gesture, and browsers can
+ * silently ignore a resume request after a real background/throttled period
+ * without one — a real mouse movement satisfies that requirement. Never
+ * escalates to setChannel(): only the 90s watchdog's own slow cadence may.
+ */
+export function nudgeStalledTwitchPlayers(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (card.dataset.platform !== 'twitch') continue;
+    if (card.dataset.twitchMode !== 'api') continue;
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+
+    verifyAndRecoverTwitchPlayer(card, false);
   }
 }
 
