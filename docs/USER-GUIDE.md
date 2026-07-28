@@ -14,7 +14,7 @@ Watch Twitch and Kick on one page. MultiStream.cc is a modern multi-stream viewe
 | Username dropdown | Type a name (or `@name`) and choose Twitch or Kick |
 | Share link | Copy the current lineup URL from the toolbar |
 | Clear all | Remove every stream (with confirmation) |
-| Hide headers | Compact grid; hover a card to reveal controls below the video without shrinking it |
+| Hide headers | Compact grid; hover a card to reveal controls below the video (never over it) |
 | Drag reorder | Drag card headers — or the drag handle in the hover toolbar when headers are hidden |
 | Focus (headers hidden) | Magnifying glass in the hover toolbar |
 | Session restore | Last lineup saved in `localStorage`; share URLs in the path take priority |
@@ -55,8 +55,8 @@ Leading `@` is stripped automatically.
 ### Hide headers
 
 - Toolbar **Show headers** / **Hide headers** toggles card top bars (preference is remembered; headers hidden by default).
-- At rest the card is **video only**. Hover the card and a control strip appears **below** the video — the card grows slightly so the player size does not change (Kick volume / pause stay usable; never stacked over the embed — Twitch requirement 1.3).
-- This avoids Chrome pause-on-overlay, Kick control clipping, and the mute-control refresh loop from remounting embeds.
+- At rest the card is **video only**. Hover the card and the player shrinks slightly so a control strip appears **below** the iframe (name, drag, focus, remove) — never stacked over the embed (Twitch requirement 1.3). Kick embeds re-scale on hover so volume / pause stay inside the smaller player.
+- This avoids Chrome pause-on-overlay and the mute-control refresh loop from remounting embeds.
 
 ---
 
@@ -106,7 +106,7 @@ Performance depends on how many live embeds are open. Fewer streams = smoother p
 
 - Start muted — browsers block unmuted autoplay.
 - Focus a stream when you want sound quickly.
-- Hide headers for tournaments or dense watch parties; hover a card for the toolbar below each video (focus, remove, drag) — player size stays put.
+- Hide headers for tournaments or dense watch parties; hover a card for the toolbar below each video (focus, remove, drag).
 - Clear all when starting a fresh layout.
 - Kick’s volume UI needs a wide player; MultiStream scales Kick embeds so desktop chrome stays available when cells are narrow.
 

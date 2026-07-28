@@ -39,8 +39,8 @@ const mainLayoutEl = mainLayout;
  * cannot stall Twitch embeds.
  *
  * Twitch refuses muted autoplay when the embed is obscured. Headers-hidden
- * mode keeps the video alone at rest; hover grows the card and reveals a
- * toolbar below the iframe without shrinking the player.
+ * mode keeps the video alone at rest; hover shrinks the player slightly and
+ * reveals a toolbar below the iframe (Kick re-scales so controls stay usable).
  */
 let suppressLayout = false;
 let suppressLayoutTimer = 0;

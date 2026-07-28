@@ -11,10 +11,10 @@ import type { StreamStore } from '../state/streams';
  * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
  *
  * Twitch Requirement 1.3: never obscure the embed. Headers-hidden keeps the
- * video alone at rest; on card hover the card grows downward and a toolbar
- * opens BELOW the iframe (player size unchanged). No mouseleave remount —
- * entering the iframe fires leave on the parent and would reload mute controls
- * in a loop.
+ * video alone at rest; on card hover the player shrinks and a toolbar opens
+ * BELOW the iframe (not over it). Kick re-scales on hover so bottom chrome
+ * still fits. No mouseleave remount — entering the iframe fires leave on the
+ * parent and would reload mute controls in a loop.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
