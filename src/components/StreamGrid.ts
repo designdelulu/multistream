@@ -42,6 +42,7 @@ const MAX_LAYOUT_RETRIES = 8;
  */
 const twitchPlayers = new Map<string, Twitch.Player>();
 const twitchStallCounts = new Map<string, number>();
+const twitchExceptionCounts = new Map<string, number>();
 let twitchMountSeq = 0;
 let twitchScriptPromise: Promise<boolean> | null = null;
 const TWITCH_SCRIPT_TIMEOUT_MS = 4000;
@@ -860,16 +861,53 @@ export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
  */
 const STALL_CONFIRM_DELAY_MS = 500;
 
+/** isPaused() throwing this many checks in a row means the instance itself is broken. */
+const MAX_CONSECUTIVE_EXCEPTIONS = 3;
+
+/**
+ * true/false is a real answer; null means isPaused() threw — the player
+ * isn't ready yet, or (after MAX_CONSECUTIVE_EXCEPTIONS running total) is
+ * broken. Exceptions must never be read as "confirmed not paused": a player
+ * stuck throwing after a failed setChannel() would otherwise look
+ * permanently healthy and never get recovered again.
+ */
+function checkPaused(player: Twitch.Player, streamId: string): boolean | null {
+  try {
+    const paused = player.isPaused();
+    twitchExceptionCounts.delete(streamId);
+    return paused;
+  } catch {
+    twitchExceptionCounts.set(streamId, (twitchExceptionCounts.get(streamId) ?? 0) + 1);
+    return null;
+  }
+}
+
+/** Destroy and reconstruct from scratch — for when the instance itself can't be trusted. */
+function rebuildTwitchPlayer(card: HTMLElement): void {
+  const streamId = card.dataset.streamId ?? '';
+
+  twitchPlayers.get(streamId)?.destroy();
+  twitchPlayers.delete(streamId);
+  twitchStallCounts.delete(streamId);
+  twitchExceptionCounts.delete(streamId);
+
+  const placeholder = card.querySelector<HTMLElement>('.stream-card__iframe');
+  placeholder?.replaceWith(createTwitchMountPoint());
+
+  constructTwitchPlayer(card, preferredMuted(card));
+}
+
 /**
  * Real recovery for one 'api'-mode card: check isPaused(), confirm it's
  * still paused after a short delay, and only then act. `allowReconnect`
- * gates the escalation to setChannel() (a real, visibly-slow reconnect)
- * after repeated stalls — only the 90s watchdog is allowed that, since its
- * own cadence naturally rate-limits it. Hover/interaction-triggered calls
- * pass false: a quick play() nudge for the pause a resize or backgrounding
- * can cause, never the heavier reconnect. Without this split, ordinary
- * mouse movement could hit the same escalation threshold the watchdog
- * needed 90s+ to reach, turning a brief pause into a visible reload.
+ * gates both the escalation to setChannel() (a real, visibly-slow reconnect)
+ * and the full rebuild below — only the 90s watchdog is allowed those,
+ * since its own cadence naturally rate-limits them. Hover/interaction-
+ * triggered calls pass false: a quick play() nudge for the pause a resize
+ * or backgrounding can cause, never the heavier actions. Without this
+ * split, ordinary mouse movement could hit the same escalation threshold
+ * the watchdog needed 90s+ to reach, turning a brief pause into a visible
+ * reload or rebuild.
  */
 function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true): void {
   if (card.dataset.twitchMode !== 'api') return;
@@ -880,7 +918,21 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
   const player = twitchPlayers.get(streamId);
   if (!player) return;
 
-  if (!isReallyPaused(player)) {
+  const paused = checkPaused(player, streamId);
+
+  if (allowReconnect && (twitchExceptionCounts.get(streamId) ?? 0) >= MAX_CONSECUTIVE_EXCEPTIONS) {
+    logEmbedEvent('player-recover', {
+      platform: 'twitch',
+      channel: card.dataset.channel,
+      card,
+    });
+    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'rebuild' });
+    rebuildTwitchPlayer(card);
+    return;
+  }
+
+  if (paused === null) return; // unreadable for now — try again next check
+  if (!paused) {
     twitchStallCounts.delete(streamId);
     return;
   }
@@ -890,7 +942,9 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
     if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) return;
 
-    if (!isReallyPaused(player)) {
+    const stillPaused = checkPaused(player, streamId);
+    if (stillPaused === null) return;
+    if (!stillPaused) {
       twitchStallCounts.delete(streamId);
       return;
     }
@@ -919,14 +973,6 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
       player.play();
     }
   }, STALL_CONFIRM_DELAY_MS);
-}
-
-function isReallyPaused(player: Twitch.Player): boolean {
-  try {
-    return player.isPaused();
-  } catch {
-    return false; // not fully ready yet — treat as fine, not stalled
-  }
 }
 
 /**
@@ -981,6 +1027,7 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
         twitchPlayers.get(id)?.destroy();
         twitchPlayers.delete(id);
         twitchStallCounts.delete(id);
+        twitchExceptionCounts.delete(id);
       }
       card.remove();
       continue;
