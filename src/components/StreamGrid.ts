@@ -852,15 +852,24 @@ export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
 }
 
 /**
- * Real recovery for one 'api'-mode card: check isPaused() and only act on an
- * actual stall. `allowReconnect` gates the escalation to setChannel() (a
- * real, visibly-slow reconnect) after repeated stalls — only the 90s
- * watchdog is allowed that, since its own cadence naturally rate-limits it.
- * Hover-triggered calls pass false: a quick play() nudge for the pause that
- * hover's own box-resize can cause, never the heavier reconnect. Without this
- * split, ordinary mouse movement (hover in/out a couple times within
- * seconds) could hit the same escalation threshold the watchdog needed 90s+
- * to reach, turning a brief resize-induced pause into a visible reload.
+ * Wait this long, then re-check isPaused(), before treating a pause as real.
+ * With many concurrent streams competing for bandwidth, Twitch's own normal
+ * rebuffering can read paused for a moment and resolve on its own — acting
+ * on that single instantaneous read just adds our own play()-call flash on
+ * top of a blip that was already clearing up by itself.
+ */
+const STALL_CONFIRM_DELAY_MS = 500;
+
+/**
+ * Real recovery for one 'api'-mode card: check isPaused(), confirm it's
+ * still paused after a short delay, and only then act. `allowReconnect`
+ * gates the escalation to setChannel() (a real, visibly-slow reconnect)
+ * after repeated stalls — only the 90s watchdog is allowed that, since its
+ * own cadence naturally rate-limits it. Hover/interaction-triggered calls
+ * pass false: a quick play() nudge for the pause a resize or backgrounding
+ * can cause, never the heavier reconnect. Without this split, ordinary
+ * mouse movement could hit the same escalation threshold the watchdog
+ * needed 90s+ to reach, turning a brief pause into a visible reload.
  */
 function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true): void {
   if (card.dataset.twitchMode !== 'api') return;
@@ -871,40 +880,52 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
   const player = twitchPlayers.get(streamId);
   if (!player) return;
 
-  let paused: boolean;
-  try {
-    paused = player.isPaused();
-  } catch {
-    return; // player not fully ready yet
-  }
-
-  if (!paused) {
+  if (!isReallyPaused(player)) {
     twitchStallCounts.delete(streamId);
     return;
   }
 
-  logEmbedEvent('player-recover', {
-    platform: 'twitch',
-    channel: card.dataset.channel,
-    card,
-  });
+  window.setTimeout(() => {
+    if (twitchPlayers.get(streamId) !== player) return; // removed/replaced meanwhile
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
+    if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) return;
 
-  if (!allowReconnect) {
-    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'replay' });
-    player.play();
-    return;
-  }
+    if (!isReallyPaused(player)) {
+      twitchStallCounts.delete(streamId);
+      return;
+    }
 
-  const count = (twitchStallCounts.get(streamId) ?? 0) + 1;
-  twitchStallCounts.set(streamId, count);
+    logEmbedEvent('player-recover', {
+      platform: 'twitch',
+      channel: card.dataset.channel,
+      card,
+    });
 
-  if (count >= 2) {
-    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'reconnect' });
-    player.setChannel(card.dataset.channel ?? '');
-    twitchStallCounts.set(streamId, 0);
-  } else {
-    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'replay' });
-    player.play();
+    if (!allowReconnect) {
+      reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'replay' });
+      player.play();
+      return;
+    }
+
+    const count = (twitchStallCounts.get(streamId) ?? 0) + 1;
+    twitchStallCounts.set(streamId, count);
+
+    if (count >= 2) {
+      reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'reconnect' });
+      player.setChannel(card.dataset.channel ?? '');
+      twitchStallCounts.set(streamId, 0);
+    } else {
+      reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'replay' });
+      player.play();
+    }
+  }, STALL_CONFIRM_DELAY_MS);
+}
+
+function isReallyPaused(player: Twitch.Player): boolean {
+  try {
+    return player.isPaused();
+  } catch {
+    return false; // not fully ready yet — treat as fine, not stalled
   }
 }
 
