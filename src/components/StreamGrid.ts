@@ -646,7 +646,16 @@ function createPlayerElement(
     store.removeStream(stream.id);
   });
 
-  controls.append(focusButton, removeButton);
+  const reloadButton = document.createElement('button');
+  reloadButton.type = 'button';
+  reloadButton.className = 'stream-card__reload';
+  reloadButton.title = 'Reload stream';
+  reloadButton.setAttribute('aria-label', 'Reload stream');
+  reloadButton.innerHTML =
+    '<span aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 7A5 5 0 1 1 10.5 3.4M12 1.5V4.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+  reloadButton.addEventListener('click', () => reloadStreamCard(card));
+
+  controls.append(focusButton, reloadButton, removeButton);
   header.append(badge, title, controls);
 
   const player = document.createElement('div');
@@ -709,7 +718,15 @@ function createPlayerElement(
     store.removeStream(stream.id);
   });
 
-  overlayControls.append(overlayFocus, overlayRemove);
+  const overlayReload = document.createElement('button');
+  overlayReload.type = 'button';
+  overlayReload.className = 'stream-card__overlay-reload';
+  overlayReload.title = 'Reload stream';
+  overlayReload.setAttribute('aria-label', 'Reload stream');
+  overlayReload.textContent = '⟳';
+  overlayReload.addEventListener('click', () => reloadStreamCard(card));
+
+  overlayControls.append(overlayFocus, overlayReload, overlayRemove);
 
   const dragHandle = document.createElement('div');
   dragHandle.className = 'stream-card__drag-handle';
@@ -895,6 +912,73 @@ function rebuildTwitchPlayer(card: HTMLElement): void {
   placeholder?.replaceWith(createTwitchMountPoint());
 
   constructTwitchPlayer(card, preferredMuted(card));
+}
+
+/**
+ * Force-remount, ignoring the same-URL dedup mountKickIframe uses — for the
+ * manual reload button only. No periodic watchdog calls this: an automatic
+ * blind reload on a timer was confirmed to reset Kick's volume back to muted
+ * far more often than it fixed anything (removed entirely in e1799f8 for
+ * that reason). A user explicitly clicking reload is a different case —
+ * they're choosing to accept losing a manually-adjusted volume in exchange
+ * for un-sticking the stream right now.
+ */
+function reloadKickPlayer(card: HTMLElement): void {
+  const iframe = streamIframe(card);
+  const channel = card.dataset.channel;
+  if (!iframe || !channel) return;
+
+  const muted = preferredMuted(card);
+  applyKickAllowPolicy(iframe, muted);
+  const nextSrc = buildEmbedUrl({ platform: 'kick', channel }, muted, { autoplay: true });
+
+  delete iframe.dataset.focusFrozen;
+  iframe.dataset.embedMuted = muted ? '1' : '0';
+  card.dataset.embedMuted = muted ? '1' : '0';
+
+  logEmbedEvent('mount-forced', { platform: 'kick', channel, action: 'blank', muted, card });
+  reportEmbedRecovery('forced-remount', { platform: 'kick', reason: 'manual' });
+  iframe.src = 'about:blank';
+  iframe.src = nextSrc;
+}
+
+/**
+ * Manual per-stream reload — the last-resort escape hatch for anything
+ * automatic recovery can't catch. Fixes just this one card instead of a
+ * full-page refresh that would disrupt every other stream.
+ *
+ * Deliberately skips none of the usual guards: unlike the automatic paths,
+ * reloading the focused stream is exactly what's wanted when a user asks,
+ * and no rate limit applies to a deliberate click.
+ */
+function reloadStreamCard(card: HTMLElement): void {
+  if (card.dataset.platform === 'kick') {
+    reloadKickPlayer(card);
+    return;
+  }
+  if (card.dataset.platform !== 'twitch') return;
+
+  const mode = card.dataset.twitchMode;
+
+  if (mode === 'api') {
+    logEmbedEvent('player-recover', { platform: 'twitch', channel: card.dataset.channel, card });
+    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'manual' });
+    rebuildTwitchPlayer(card);
+    return;
+  }
+
+  if (mode === 'fallback') {
+    reportEmbedRecovery('forced-remount', { platform: 'twitch', reason: 'manual' });
+    mountTwitchIframeForced(card, preferredMuted(card));
+    return;
+  }
+
+  // 'pending' (or unset): the script load never resolved, so nothing is
+  // mounted to reload. Clear the flag and re-run the mount so a card stuck
+  // waiting on a blocked/slow script gets a genuine retry instead of a no-op.
+  delete card.dataset.twitchMode;
+  reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'manual-retry' });
+  mountStreamMedia(card, preferredMuted(card));
 }
 
 /**

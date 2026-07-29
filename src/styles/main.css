@@ -520,6 +520,7 @@ html.stream-focused .stream-card__header {
 }
 
 .stream-card__focus,
+.stream-card__reload,
 .stream-card__close {
   flex: 0 0 auto;
   display: inline-flex;
@@ -553,7 +554,8 @@ html.stream-focused .stream-card__header {
   display: none !important;
 }
 
-.stream-card__focus svg {
+.stream-card__focus svg,
+.stream-card__reload svg {
   display: block;
 }
 
@@ -788,6 +790,7 @@ html.headers-hidden .stream-card__overlay-controls {
 }
 
 .stream-card__overlay-focus,
+.stream-card__overlay-reload,
 .stream-card__overlay-remove {
   display: inline-flex;
   align-items: center;
@@ -809,6 +812,8 @@ html.headers-hidden .stream-card__overlay-controls {
 
 .stream-card__overlay-focus:hover,
 .stream-card__overlay-focus:focus-visible,
+.stream-card__overlay-reload:hover,
+.stream-card__overlay-reload:focus-visible,
 .stream-card__overlay-remove:hover,
 .stream-card__overlay-remove:focus-visible {
   background: color-mix(in srgb, var(--text) 8%, transparent);
@@ -1348,6 +1353,7 @@ html.show-welcome .welcome-modal {
   }
 
   .stream-card__focus,
+  .stream-card__reload,
   .stream-card__close {
     width: 24px;
     height: 24px;
@@ -1355,7 +1361,8 @@ html.show-welcome .welcome-modal {
     border-radius: 4px;
   }
 
-  .stream-card__focus svg {
+  .stream-card__focus svg,
+  .stream-card__reload svg {
     width: 12px;
     height: 12px;
   }

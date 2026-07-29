@@ -186,24 +186,43 @@ window.setInterval(() => {
 }, WATCHDOG_INTERVAL_MS);
 
 /**
- * A tab-resume's own play() call isn't a genuine user gesture — after a real
- * background/throttled period, browsers can silently ignore it without one.
- * The first real mouse movement or click after returning satisfies that,
- * so nudge stalled players right then instead of waiting on the next 90s
- * watchdog tick. Cooldown keeps this from running on every mouse pixel —
- * kept short so it doesn't itself delay recovery: an incidental movement
- * right as a fullscreen exit settles can burn the window before players
- * are actually ready to check, and a long cooldown then makes the very
- * next deliberate movement (checking a different card) wait it out too.
+ * A tab-resume's (or fullscreen-exit's) own play() call isn't a genuine user
+ * gesture — after a real background/throttled period, browsers can silently
+ * ignore it without one. The first real mouse movement or click afterward
+ * satisfies that, so nudge stalled players right then instead of waiting on
+ * the next watchdog tick.
+ *
+ * That rationale only holds in the window right after such an event. Left
+ * ungated, this listener is a permanent grid-wide play() generator firing up
+ * to twice a second during ordinary mouse use — and play() makes Twitch flash
+ * its loading overlay, on every card the sweep touches, at once. That is the
+ * likeliest source of the reported "overlay flashes on several streams
+ * together, video keeps playing". So: arm only on the events that actually
+ * need a user gesture, and stay dormant otherwise.
  */
+const NUDGE_ARM_WINDOW_MS = 30_000;
 const INTERACTION_NUDGE_COOLDOWN_MS = 500;
+let nudgeArmedUntil = 0;
 let lastInteractionNudge = 0;
+
+function armInteractionNudge(): void {
+  nudgeArmedUntil = Date.now() + NUDGE_ARM_WINDOW_MS;
+}
+
 function nudgeOnInteraction(): void {
   const now = Date.now();
+  if (now >= nudgeArmedUntil) return;
   if (now - lastInteractionNudge < INTERACTION_NUDGE_COOLDOWN_MS) return;
   lastInteractionNudge = now;
   nudgeStalledTwitchPlayers(gridEl);
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) armInteractionNudge();
+});
+// Exiting fullscreen has the same lost-gesture problem, and was previously
+// only ever fixed by incidental mouse movement — there was no listener for it.
+document.addEventListener('fullscreenchange', armInteractionNudge);
 window.addEventListener('mousemove', nudgeOnInteraction, { passive: true });
 window.addEventListener('pointerdown', nudgeOnInteraction, { passive: true });
 
