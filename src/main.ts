@@ -3,8 +3,7 @@ import {
   bindStreamFocus,
   bindTabVisibilityPlayers,
   nudgeStalledTwitchPlayers,
-  recoverStalledApiTwitchPlayers,
-  recoverStalledFallbackTwitchPlayers,
+  recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
   syncStreamGrid,
   updateGridLayout,
@@ -172,36 +171,26 @@ resizeObserver.observe(mainLayoutEl);
 resizeObserver.observe(streamAreaEl);
 
 /**
- * Twitch-only, two cadences. Api-mode cards get real events
- * (PLAYBACK_BLOCKED/OFFLINE/ONLINE) plus isPaused() and a stuck-buffering
- * check, all confirm-delayed before acting — safe to run often since it
- * only ever touches a genuinely confirmed stall, so it runs every few
- * seconds instead of waiting up to 90s. Fallback-mode cards have no signal
- * at all, so that blind remount stays on the original slow 90s cadence —
- * running it as often as the api-mode check would reload a possibly-fine
- * stream constantly. Kick has neither signal nor an API-mode path — a
- * periodic blind remount there was confirmed to reset its volume back to
- * muted on every cycle far more often than it ever fixed a real stall, so
- * Kick gets no periodic watchdog at all.
+ * Twitch-only: real events (PLAYBACK_BLOCKED/OFFLINE/ONLINE) and
+ * isPaused() give api-mode cards a verified stall to act on; fallback-mode
+ * cards still get a blind remount since that's the only signal available.
+ * Kick has neither signal nor an API-mode path — a periodic blind remount
+ * here was confirmed to reset its volume back to muted on every cycle
+ * (no way to read back a live in-player unmute) far more often than it
+ * ever fixed a real stall, so Kick gets no periodic watchdog at all.
  */
-const API_WATCHDOG_INTERVAL_MS = 6_000;
+const WATCHDOG_INTERVAL_MS = 90_000;
 window.setInterval(() => {
   if (document.hidden || suppressLayout) return;
-  recoverStalledApiTwitchPlayers(gridEl);
-}, API_WATCHDOG_INTERVAL_MS);
-
-const FALLBACK_WATCHDOG_INTERVAL_MS = 90_000;
-window.setInterval(() => {
-  if (document.hidden || suppressLayout) return;
-  recoverStalledFallbackTwitchPlayers(gridEl);
-}, FALLBACK_WATCHDOG_INTERVAL_MS);
+  recoverStalledTwitchPlayers(gridEl);
+}, WATCHDOG_INTERVAL_MS);
 
 /**
  * A tab-resume's own play() call isn't a genuine user gesture — after a real
  * background/throttled period, browsers can silently ignore it without one.
  * The first real mouse movement or click after returning satisfies that,
- * so nudge stalled players right then instead of waiting on the next
- * api-watchdog tick. Cooldown keeps this from running on every mouse pixel —
+ * so nudge stalled players right then instead of waiting on the next 90s
+ * watchdog tick. Cooldown keeps this from running on every mouse pixel —
  * kept short so it doesn't itself delay recovery: an incidental movement
  * right as a fullscreen exit settles can burn the window before players
  * are actually ready to check, and a long cooldown then makes the very

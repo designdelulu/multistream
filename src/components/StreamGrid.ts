@@ -43,16 +43,6 @@ const MAX_LAYOUT_RETRIES = 8;
 const twitchPlayers = new Map<string, Twitch.Player>();
 const twitchStallCounts = new Map<string, number>();
 const twitchExceptionCounts = new Map<string, number>();
-/**
- * Twitch's own isPaused() docs: "buffering or seeking is considered
- * playing" — meaning a stream stuck on a loading spinner reads as NOT
- * paused and is invisible to isPaused()-based recovery no matter how long
- * it spins. Tracked separately: last time PLAYING actually fired, and
- * whether the channel is legitimately offline (so a real offline channel
- * never gets mistaken for a stuck one).
- */
-const twitchLastPlayingAt = new Map<string, number>();
-const twitchOffline = new Map<string, boolean>();
 let twitchMountSeq = 0;
 let twitchScriptPromise: Promise<boolean> | null = null;
 const TWITCH_SCRIPT_TIMEOUT_MS = 4000;
@@ -181,14 +171,9 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
   twitchPlayers.set(streamId, player);
   card.dataset.twitchMode = 'api';
   card.dataset.embedMuted = muted ? '1' : '0';
-  twitchLastPlayingAt.set(streamId, Date.now());
-  twitchOffline.set(streamId, false);
 
   logEmbedEvent('player-ready', { platform: 'twitch', channel, action: 'src', muted, card });
 
-  player.addEventListener(Twitch.Player.PLAYING, () => {
-    twitchLastPlayingAt.set(streamId, Date.now());
-  });
   player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED, () => {
     logEmbedEvent('player-blocked', { platform: 'twitch', channel, card });
     reportEmbedRecovery('playback-blocked', { platform: 'twitch' });
@@ -196,12 +181,9 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
   });
   player.addEventListener(Twitch.Player.OFFLINE, () => {
     logEmbedEvent('player-offline', { platform: 'twitch', channel, card });
-    twitchOffline.set(streamId, true);
   });
   player.addEventListener(Twitch.Player.ONLINE, () => {
     logEmbedEvent('player-online', { platform: 'twitch', channel, card });
-    twitchOffline.set(streamId, false);
-    twitchLastPlayingAt.set(streamId, Date.now());
     player.play();
   });
 }
@@ -650,15 +632,6 @@ function createPlayerElement(
     '<span aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 5V1.5H5M9 1.5H12.5V5M12.5 9V12.5H9M5 12.5H1.5V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
   focusButton.addEventListener('click', () => toggleStreamFocus(container, stream.id));
 
-  const reloadButton = document.createElement('button');
-  reloadButton.type = 'button';
-  reloadButton.className = 'stream-card__reload';
-  reloadButton.title = 'Reload stream';
-  reloadButton.setAttribute('aria-label', 'Reload stream');
-  reloadButton.innerHTML =
-    '<span aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 7A5 5 0 1 1 10.5 3.4M12 1.5V4.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
-  reloadButton.addEventListener('click', () => reloadStreamCard(card));
-
   const removeButton = document.createElement('button');
   removeButton.type = 'button';
   removeButton.className = 'stream-card__close';
@@ -673,7 +646,7 @@ function createPlayerElement(
     store.removeStream(stream.id);
   });
 
-  controls.append(focusButton, reloadButton, removeButton);
+  controls.append(focusButton, removeButton);
   header.append(badge, title, controls);
 
   const player = document.createElement('div');
@@ -722,14 +695,6 @@ function createPlayerElement(
   overlayFocus.textContent = '🔍';
   overlayFocus.addEventListener('click', () => toggleStreamFocus(container, stream.id));
 
-  const overlayReload = document.createElement('button');
-  overlayReload.type = 'button';
-  overlayReload.className = 'stream-card__overlay-reload';
-  overlayReload.title = 'Reload stream';
-  overlayReload.setAttribute('aria-label', 'Reload stream');
-  overlayReload.textContent = '⟳';
-  overlayReload.addEventListener('click', () => reloadStreamCard(card));
-
   const overlayRemove = document.createElement('button');
   overlayRemove.type = 'button';
   overlayRemove.className = 'stream-card__overlay-remove';
@@ -744,7 +709,7 @@ function createPlayerElement(
     store.removeStream(stream.id);
   });
 
-  overlayControls.append(overlayFocus, overlayReload, overlayRemove);
+  overlayControls.append(overlayFocus, overlayRemove);
 
   const dragHandle = document.createElement('div');
   dragHandle.className = 'stream-card__drag-handle';
@@ -917,22 +882,6 @@ function checkPaused(player: Twitch.Player, streamId: string): boolean | null {
   }
 }
 
-/**
- * isPaused() reads buffering as "playing", so a stuck loading spinner needs
- * its own signal: how long since PLAYING last actually fired. Long enough
- * to not fire on an ordinary ad transition or quality-switch rebuffer, short
- * enough to feel fast next to the old escalation path. Never true for a
- * channel that's legitimately offline — that's not stuck, retrying won't help.
- */
-const STUCK_BUFFERING_MS = 8000;
-
-function isStuckBuffering(streamId: string): boolean {
-  if (twitchOffline.get(streamId)) return false;
-  const lastPlaying = twitchLastPlayingAt.get(streamId);
-  if (lastPlaying === undefined) return false;
-  return Date.now() - lastPlaying > STUCK_BUFFERING_MS;
-}
-
 /** Destroy and reconstruct from scratch — for when the instance itself can't be trusted. */
 function rebuildTwitchPlayer(card: HTMLElement): void {
   const streamId = card.dataset.streamId ?? '';
@@ -941,8 +890,6 @@ function rebuildTwitchPlayer(card: HTMLElement): void {
   twitchPlayers.delete(streamId);
   twitchStallCounts.delete(streamId);
   twitchExceptionCounts.delete(streamId);
-  twitchLastPlayingAt.delete(streamId);
-  twitchOffline.delete(streamId);
 
   const placeholder = card.querySelector<HTMLElement>('.stream-card__iframe');
   placeholder?.replaceWith(createTwitchMountPoint());
@@ -951,75 +898,16 @@ function rebuildTwitchPlayer(card: HTMLElement): void {
 }
 
 /**
- * Force-remount, ignoring the same-URL dedup mountKickIframe uses — for the
- * manual reload button only. No periodic watchdog calls this: an automatic
- * blind reload on a timer was confirmed to reset Kick's volume back to muted
- * far more often than it fixed anything (removed entirely for that reason).
- * A user explicitly clicking reload is a different case — they're choosing
- * to accept losing any manually-adjusted volume in exchange for un-sticking
- * the stream right now.
- */
-function reloadKickPlayer(card: HTMLElement): void {
-  const iframe = streamIframe(card);
-  const channel = card.dataset.channel;
-  if (!iframe || !channel) return;
-
-  const muted = preferredMuted(card);
-  applyKickAllowPolicy(iframe, muted);
-  const nextSrc = buildEmbedUrl({ platform: 'kick', channel }, muted, { autoplay: true });
-
-  delete iframe.dataset.focusFrozen;
-  iframe.dataset.embedMuted = muted ? '1' : '0';
-  card.dataset.embedMuted = muted ? '1' : '0';
-
-  logEmbedEvent('mount-forced', { platform: 'kick', channel, action: 'blank', muted, card });
-  reportEmbedRecovery('forced-remount', { platform: 'kick', reason: 'manual' });
-  iframe.src = 'about:blank';
-  iframe.src = nextSrc;
-}
-
-/**
- * Manual per-stream reload — the escape hatch for whatever automatic
- * recovery can't catch (e.g. a browser-level resource limit with many
- * concurrent streams open, outside anything play()/setChannel()/rebuild can
- * force past). Fixes just this one card instead of a full-page refresh that
- * would disrupt every other stream.
- */
-function reloadStreamCard(card: HTMLElement): void {
-  if (card.dataset.platform === 'kick') {
-    reloadKickPlayer(card);
-    return;
-  }
-  if (card.dataset.platform !== 'twitch') return;
-
-  if (card.dataset.twitchMode === 'api') {
-    logEmbedEvent('player-recover', { platform: 'twitch', channel: card.dataset.channel, card });
-    reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'manual' });
-    rebuildTwitchPlayer(card);
-    return;
-  }
-  if (card.dataset.twitchMode === 'fallback') {
-    reportEmbedRecovery('forced-remount', { platform: 'twitch', reason: 'manual' });
-    mountTwitchIframeForced(card, preferredMuted(card), 'headers-recover');
-  }
-  // 'pending': script still loading — nothing to reload yet.
-}
-
-/**
- * Real recovery for one 'api'-mode card: check isPaused() and the
- * stuck-buffering signal (isPaused() alone reads buffering as "playing",
- * so a stuck loading spinner would otherwise never be seen), confirm it's
- * still stalled after a short delay, and only then act, escalating
- * play() -> setChannel() -> a full rebuild across repeated confirmed
- * stalls, so a reconnect that doesn't actually fix anything doesn't just
- * loop forever. `allowReconnect` gates all three of those — only
- * recoverStalledApiTwitchPlayers' own interval is allowed them, since its
- * cadence naturally rate-limits how often they can fire. Hover/interaction-
+ * Real recovery for one 'api'-mode card: check isPaused(), confirm it's
+ * still paused after a short delay, and only then act. `allowReconnect`
+ * gates both the escalation to setChannel() (a real, visibly-slow reconnect)
+ * and the full rebuild below — only the 90s watchdog is allowed those,
+ * since its own cadence naturally rate-limits them. Hover/interaction-
  * triggered calls pass false: a quick play() nudge for the pause a resize
  * or backgrounding can cause, never the heavier actions. Without this
  * split, ordinary mouse movement could hit the same escalation threshold
- * the interval needed several ticks to reach, turning a brief pause into a
- * visible reload or rebuild.
+ * the watchdog needed 90s+ to reach, turning a brief pause into a visible
+ * reload or rebuild.
  */
 function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true): void {
   if (card.dataset.twitchMode !== 'api') return;
@@ -1044,7 +932,7 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
   }
 
   if (paused === null) return; // unreadable for now — try again next check
-  if (!paused && !isStuckBuffering(streamId)) {
+  if (!paused) {
     twitchStallCounts.delete(streamId);
     return;
   }
@@ -1056,7 +944,7 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
 
     const stillPaused = checkPaused(player, streamId);
     if (stillPaused === null) return;
-    if (!stillPaused && !isStuckBuffering(streamId)) {
+    if (!stillPaused) {
       twitchStallCounts.delete(streamId);
       return;
     }
@@ -1076,15 +964,10 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
     const count = (twitchStallCounts.get(streamId) ?? 0) + 1;
     twitchStallCounts.set(streamId, count);
 
-    if (count >= 3) {
-      // setChannel() didn't resolve it either — stop trying incremental
-      // fixes on an instance that's proven it won't recover on its own.
-      reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'rebuild' });
-      twitchStallCounts.set(streamId, 0);
-      rebuildTwitchPlayer(card);
-    } else if (count === 2) {
+    if (count >= 2) {
       reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'reconnect' });
       player.setChannel(card.dataset.channel ?? '');
+      twitchStallCounts.set(streamId, 0);
     } else {
       reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'replay' });
       player.play();
@@ -1093,37 +976,22 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
 }
 
 /**
- * Fallback-mode cards (script blocked/failed) have no signal at all, so this
- * stays on the slow 90s cadence, unconditional force-remount — the only
- * option available for them. Never call this often: unlike the verified
- * api-mode path, there's no confirm-delay or check to filter out a stream
- * that's actually fine.
+ * 'api'-mode Twitch cards get real recovery via verifyAndRecoverTwitchPlayer.
+ * Fallback-mode cards (script blocked/failed) keep the original blind
+ * force-remount, since that's the only signal available for them. Skips the
+ * focused stream either way — reloading the one stream someone is actively
+ * watching is more disruptive than a muted-tile stall.
  */
-export function recoverStalledFallbackTwitchPlayers(container: HTMLElement): void {
+export function recoverStalledTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
     if (card.dataset.platform !== 'twitch') continue;
-    if (card.dataset.twitchMode !== 'fallback') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) continue;
 
-    mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
-  }
-}
-
-/**
- * 'api'-mode cards get real, verified recovery via verifyAndRecoverTwitchPlayer
- * (isPaused() + the stuck-buffering signal, confirm-delay, escalation) — safe
- * to run on a much faster cadence than the fallback sweep above, since it
- * only ever acts on a confirmed stall. Skips the focused stream — reloading
- * the one stream someone is actively watching is more disruptive than a
- * muted-tile stall.
- */
-export function recoverStalledApiTwitchPlayers(container: HTMLElement): void {
-  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    if (card.dataset.platform !== 'twitch') continue;
-    if (card.dataset.twitchMode !== 'api') continue;
-    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
-    if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) continue;
+    if (card.dataset.twitchMode === 'fallback') {
+      mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
+      continue;
+    }
 
     verifyAndRecoverTwitchPlayer(card);
   }
@@ -1135,8 +1003,7 @@ export function recoverStalledApiTwitchPlayers(container: HTMLElement): void {
  * or timer-driven play() call isn't a genuine user gesture, and browsers can
  * silently ignore a resume request after a real background/throttled period
  * without one — a real mouse movement satisfies that requirement. Never
- * escalates to setChannel() or rebuild: only recoverStalledApiTwitchPlayers'
- * own interval may, since allowReconnect=true there is what gates those.
+ * escalates to setChannel(): only the 90s watchdog's own slow cadence may.
  */
 export function nudgeStalledTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
@@ -1161,8 +1028,6 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
         twitchPlayers.delete(id);
         twitchStallCounts.delete(id);
         twitchExceptionCounts.delete(id);
-        twitchLastPlayingAt.delete(id);
-        twitchOffline.delete(id);
       }
       card.remove();
       continue;

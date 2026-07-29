@@ -31,7 +31,6 @@ declare global {
       destroy(): void;
 
       static readonly READY: string;
-      static readonly PLAYING: string;
       static readonly PLAYBACK_BLOCKED: string;
       static readonly OFFLINE: string;
       static readonly ONLINE: string;
