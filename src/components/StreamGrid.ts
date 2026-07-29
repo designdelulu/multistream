@@ -7,9 +7,13 @@ import type { StreamStore } from '../state/streams';
 
 /**
  * Kick only mounts desktop chrome (volume, quality) when the iframe's layout
- * width is >= 769px. MultiTwitch-style optimize_size often makes cells smaller
- * than that — so Kick iframes are rendered at ≥769px and CSS-scaled down into
- * the cell. Kick sees a wide player; the grid still fits every stream on-screen.
+ * width is >= 769px (measured empirically). MultiTwitch-style optimize_size
+ * often makes cells smaller than that — so Kick iframes are rendered wide and
+ * CSS-scaled down into the cell. Kick sees a wide player; the grid still fits
+ * every stream on-screen.
+ *
+ * 640 is untested against Kick's real breakpoint — if production shows
+ * degraded (not just smaller) Kick chrome below 769px, revert to 769.
  *
  * Twitch Requirement 1.3: never obscure the embed. Headers-hidden keeps the
  * video alone at rest; on card hover the player shrinks and a toolbar opens
@@ -17,7 +21,7 @@ import type { StreamStore } from '../state/streams';
  * still fits. No mouseleave remount — entering the iframe fires leave on the
  * parent and would reload mute controls in a loop.
  */
-const MIN_KICK_VIEWPORT_WIDTH = 769;
+const MIN_KICK_VIEWPORT_WIDTH = 640;
 const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
