@@ -27,7 +27,7 @@ export function bindStreamReorder(
     chosenClass: 'stream-card--chosen',
     dragClass: 'stream-card--drag',
     filter:
-      '.stream-card__focus, .stream-card__close, .stream-card__overlay-focus, .stream-card__overlay-remove, a, input, select, textarea',
+      '.stream-card__focus, .stream-card__reload, .stream-card__close, .stream-card__overlay-focus, .stream-card__overlay-reload, .stream-card__overlay-remove, a, input, select, textarea',
     preventOnFilter: false,
     disabled: isStreamFocused(),
     onEnd: () => {
