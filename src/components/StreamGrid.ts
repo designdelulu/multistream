@@ -181,14 +181,7 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
   twitchPlayers.set(streamId, player);
   card.dataset.twitchMode = 'api';
   card.dataset.embedMuted = muted ? '1' : '0';
-  // No optimistic baseline here: initial load (buffering, a pre-roll ad,
-  // bandwidth contention from many concurrent streams) can legitimately
-  // take longer than STUCK_BUFFERING_MS before the first real PLAYING
-  // event. isStuckBuffering() reads "never set" as not-stuck, so nothing
-  // is enforced until a stream has actually confirmed playback once —
-  // starting the clock here instead would fire the detector on completely
-  // normal startup, forcing a reconnect that resets the load before it
-  // finishes, forever.
+  twitchLastPlayingAt.set(streamId, Date.now());
   twitchOffline.set(streamId, false);
 
   logEmbedEvent('player-ready', { platform: 'twitch', channel, action: 'src', muted, card });
@@ -208,12 +201,7 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
   player.addEventListener(Twitch.Player.ONLINE, () => {
     logEmbedEvent('player-online', { platform: 'twitch', channel, card });
     twitchOffline.set(streamId, false);
-    // Clear, don't set a fresh timestamp: a channel that was offline for
-    // minutes coming back online is not "stuck" the instant isStuckBuffering
-    // is next checked — wait for a real PLAYING event, same reasoning as
-    // construction above. Leaving the old (now very stale) timestamp in
-    // place would look stuck immediately instead.
-    twitchLastPlayingAt.delete(streamId);
+    twitchLastPlayingAt.set(streamId, Date.now());
     player.play();
   });
 }
