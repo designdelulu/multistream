@@ -153,6 +153,7 @@ const phoneQuery = phoneMediaQuery();
 
 function handleViewportChange(): void {
   updateLayout();
+  armInteractionNudge();
 }
 
 window.addEventListener('resize', handleViewportChange);
@@ -161,6 +162,7 @@ window.visualViewport?.addEventListener('resize', handleViewportChange);
 
 const resizeObserver = new ResizeObserver(() => {
   if (suppressLayout) return;
+  armInteractionNudge();
   window.clearTimeout(resizeDebounceTimer);
   resizeDebounceTimer = window.setTimeout(() => {
     resizeDebounceTimer = 0;
@@ -207,6 +209,14 @@ startStatsProbe(gridEl);
  * ignore it without one. The first real mouse movement or click afterward
  * satisfies that, so nudge stalled players right then instead of waiting on
  * the next watchdog tick.
+ *
+ * Window/container resize has the same problem from a different cause:
+ * shrinking the browser window can drop a cell below Twitch's own minimum
+ * autoplay size, and Twitch can pause the embed on its own in response —
+ * confirmed live (many streams paused after a resize, only some recovering
+ * on their own; the rest sat until the next 90s watchdog tick). Arming here
+ * too means the next mouse movement — which reliably follows a manual resize
+ * — recovers them immediately instead.
  *
  * That rationale only holds in the window right after such an event. Left
  * ungated, this listener is a permanent grid-wide play() generator firing up
