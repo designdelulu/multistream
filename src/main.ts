@@ -180,14 +180,19 @@ resizeObserver.observe(streamAreaEl);
  * (no way to read back a live in-player unmute) far more often than it
  * ever fixed a real stall, so Kick gets no periodic watchdog at all.
  *
- * 30s (down from 90s): this is still the same confirm-then-escalate path in
- * verifyAndRecoverTwitchPlayer, just running more often — the only thing
- * that changes is how long a genuinely stalled card waits for its first
- * check. recoverStalledTwitchPlayers spreads each card's check over a small
- * random delay so several stalled cards can't confirm/escalate in the same
- * instant at this shorter interval.
+ * Tried 30s (down from 90s) to reduce the stuck-until-hover wait — reverted.
+ * verifyAndRecoverTwitchPlayer escalates to a full setChannel() reconnect
+ * after 2 consecutive confirmed stalls, so shortening the interval also
+ * shortens that escalation's grace period (90-180s of continuous stall
+ * before reconnecting, down to just 30-60s at the faster cadence). With
+ * many streams open, ordinary bandwidth-contention buffering can outlast
+ * that shorter window on its own, so streams that would've quietly
+ * recovered got forced into a disruptive reconnect instead — confirmed live,
+ * more streams stuck than at 90s, some unrecoverable by a gentle hover-nudge
+ * mid-reconnect. Back to 90s; recoverStalledTwitchPlayers' per-card stagger
+ * stays (harmless regardless of interval, still useful if this is revisited).
  */
-const WATCHDOG_INTERVAL_MS = 30_000;
+const WATCHDOG_INTERVAL_MS = 90_000;
 window.setInterval(() => {
   if (document.hidden || suppressLayout) return;
   recoverStalledTwitchPlayers(gridEl);
