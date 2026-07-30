@@ -625,8 +625,8 @@ html.headers-hidden .stream-grid:not(:empty) .stream-card__player {
   aspect-ratio: unset;
 }
 
-html.headers-hidden .stream-card--kick:hover .stream-card__iframe,
-html.headers-hidden .stream-card--kick:focus-within .stream-card__iframe {
+html.headers-hidden .stream-card--kick:not(.is-focused):hover .stream-card__iframe,
+html.headers-hidden .stream-card--kick:not(.is-focused):focus-within .stream-card__iframe {
   /* 9999px fallback when --player-height is unset (phone stack) → width scale wins. */
   transform: translate(-50%, -50%)
     scale(
