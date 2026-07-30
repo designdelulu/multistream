@@ -8,6 +8,16 @@
   --accent: #9146ff;
   --kick: #53fc18;
   --danger: #ff5d5d;
+  /*
+   * Height the headers-hidden hover toolbar opens to, and therefore exactly
+   * how much height the player gives up during a hover. Read in two places
+   * that must never disagree: the toolbar's own open height, and Kick's
+   * hover re-scale (which has to fit the shrunk box or its bottom chrome
+   * clips). Was 40px when this bar also held a reload button and a drag
+   * handle; a text label plus four 26px buttons still fits in 30px because
+   * the buttons set the bar's cross-axis size, not its own font metrics.
+   */
+  --toolbar-open-height: 30px;
   --radius: 10px;
   --grid-columns: 2;
 }
@@ -602,28 +612,28 @@ html.stream-focused .stream-card__toolbar {
 }
 
 /*
- * Headers-hidden: video alone at rest, toolbar opens BELOW it on hover — never
- * stacked over it (Twitch 1.3).
+ * Headers-hidden: video alone at rest. On card hover the player shrinks and a
+ * toolbar opens BELOW the iframe — never stacked over it (Twitch 1.3).
  *
- * The toolbar's 40px is PERMANENTLY reserved in the grid's own layout math
- * (updateGridLayout's chromeHeight, StreamGrid.ts) — never borrowed live from
- * the player on hover. Hover/focus-within only toggle the toolbar's own
- * opacity/visibility/pointer-events; --player-height, the player box, and
- * every iframe inside it are IDENTICAL before/during/after hover. This is a
- * hard requirement, not a style preference: an earlier version resized the
- * player (and briefly a CSS-transform-scale variant that kept the layout box
- * constant but still ran a transform on the live Twitch iframe) and both were
- * confirmed live to make Chrome pause the Twitch embed on hover — Twitch/
- * Chrome enforce something here beyond simple occlusion. The only version
- * that didn't reproduce it is: never touch the iframe's box OR its transform
- * at all, ever. --card-height (= --player-height + the reserved chrome) is
- * what actually sizes the card; --player-height itself is purely the video's
- * own height and must stay untouched by hover in every layout mode.
+ * The toolbar holds the channel name and platform on the left and focus/close
+ * on the right — no reload, no drag handle — and reserves NO space while
+ * closed (height 0). Painting these controls over the player instead was
+ * tried and confirmed to pause Twitch on hover; shrinking the player to open a
+ * bar underneath is the arrangement that has actually held up in production,
+ * so the shrink is deliberate, not a defect to design away.
+ *
+ * :focus-within opens the bar too, so the two buttons are reachable by
+ * keyboard without a pointer ever entering the card.
+ *
+ * Kick is special: the iframe is laid out wide (≥769px) and CSS-scaled to the
+ * cell. A plain height shrink would clip Kick’s bottom chrome (volume / pause).
+ * On hover we re-scale with min(widthScale, heightScale) so the full player
+ * still fits inside the smaller box.
  */
 html.headers-hidden .stream-card {
   display: flex;
   flex-direction: column;
-  height: var(--card-height, auto);
+  height: var(--player-height, auto);
   overflow: hidden;
 }
 
@@ -635,50 +645,66 @@ html.headers-hidden .stream-grid:not(:empty) .stream-card__player {
   aspect-ratio: unset;
 }
 
+html.headers-hidden .stream-card--kick:not(.is-focused):hover .stream-card__iframe,
+html.headers-hidden .stream-card--kick:not(.is-focused):focus-within .stream-card__iframe {
+  /* 9999px fallback when --player-height is unset (phone stack) → width scale wins. */
+  transform: translate(-50%, -50%)
+    scale(
+      min(
+        var(--kick-scale, 1),
+        calc(
+          (var(--player-height, 9999px) - var(--toolbar-open-height)) /
+            (var(--kick-render-width) * 9 / 16)
+        )
+      )
+    );
+}
+
 .stream-card__toolbar {
   display: none;
   flex: 0 0 auto;
   align-items: center;
+  /* Identity left, actions right. The name badge takes the free space, so
+     this only matters if the badge is ever empty. */
+  justify-content: space-between;
   gap: 8px;
   box-sizing: border-box;
+  height: 0;
+  min-height: 0;
+  max-height: 0;
   padding: 0 8px;
   margin: 0;
   overflow: hidden;
+  opacity: 0;
   border: 0;
   background: color-mix(in srgb, var(--surface) 94%, black);
+  transition:
+    height 0.15s ease,
+    max-height 0.15s ease,
+    min-height 0.15s ease,
+    opacity 0.15s ease,
+    border-width 0.15s ease;
 }
 
-/*
- * Headers-hidden: the toolbar's box (height + border) is constant in every
- * state — only opacity/visibility/pointer-events toggle on hover. This is
- * what actually reserves the space (see updateGridLayout's chromeHeight) and
- * is why the player/iframe never resize when this reveals — see the comment
- * above .stream-card for why that's non-negotiable, not cosmetic.
- */
 html.headers-hidden .stream-card__toolbar {
   display: flex;
-  height: 40px;
-  min-height: 40px;
-  max-height: 40px;
-  border-top: 1px solid var(--border);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition:
-    opacity 0.15s ease,
-    visibility 0s linear 0.15s;
 }
 
 html.headers-hidden .stream-card:hover .stream-card__toolbar,
 html.headers-hidden .stream-card:focus-within .stream-card__toolbar {
+  height: var(--toolbar-open-height);
+  min-height: var(--toolbar-open-height);
+  max-height: var(--toolbar-open-height);
   opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-  transition-delay: 0s;
+  border-top: 1px solid var(--border);
 }
 
+/*
+ * Left half of the hover toolbar: who this card is. Takes the free space so
+ * a long channel name ellipsises instead of pushing the buttons off the bar.
+ */
 .stream-card__name-badge {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
@@ -719,6 +745,12 @@ html.headers-hidden .stream-card:focus-within .stream-card__toolbar {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .stream-card__name-badge-dot {
+    animation: none;
+  }
+}
+
 .stream-card__name-badge-channel {
   min-width: 0;
   overflow: hidden;
@@ -749,41 +781,6 @@ html.headers-hidden .stream-card:focus-within .stream-card__toolbar {
   color: #000;
 }
 
-.stream-card__drag-handle {
-  flex: 0 0 auto;
-  display: none;
-  margin: 0;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.68rem;
-  font-weight: 600;
-  line-height: 1.4;
-  white-space: nowrap;
-  cursor: grab;
-  user-select: none;
-  touch-action: none;
-}
-
-html.headers-hidden .stream-card__drag-handle {
-  display: inline-flex;
-}
-
-.stream-card__drag-handle:active {
-  cursor: grabbing;
-}
-
-html.stream-focused .stream-card__drag-handle {
-  display: none !important;
-}
-
-.stream-card__drag-handle[hidden] {
-  display: none !important;
-}
-
 .stream-card__overlay-controls {
   flex: 0 0 auto;
   display: none;
@@ -794,14 +791,23 @@ html.headers-hidden .stream-card__overlay-controls {
   display: flex;
 }
 
+/*
+ * Identical 26px boxes for both controls, inside a 30px bar. Below the old
+ * 32px, but still above the 24px WCAG 2.2 SC 2.5.8 minimum target size, and
+ * the 6px gap keeps the two apart.
+ *
+ * line-height: 0 matters: these hold inline SVG, and any inherited line box
+ * would add a phantom descender under the icon and push it off centre.
+ */
+.stream-card__overlay-drag,
 .stream-card__overlay-focus,
 .stream-card__overlay-reload,
 .stream-card__overlay-remove {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   margin: 0;
   padding: 0;
   border: 1px solid var(--border);
@@ -809,12 +815,35 @@ html.headers-hidden .stream-card__overlay-controls {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 1rem;
-  line-height: 1;
+  line-height: 0;
   cursor: pointer;
   touch-action: manipulation;
 }
 
+/* The drag handle needs the browser to hand touch gestures to SortableJS
+   instead of scrolling — same reasoning as .stream-card__header's grab
+   cursor, applied to this smaller target instead of the whole row. */
+.stream-card__overlay-drag {
+  cursor: grab;
+  touch-action: none;
+}
+
+.stream-card__overlay-drag:active {
+  cursor: grabbing;
+}
+
+.stream-card__overlay-drag svg,
+.stream-card__overlay-focus svg,
+.stream-card__overlay-reload svg,
+.stream-card__overlay-remove svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.stream-card__overlay-drag:hover,
+.stream-card__overlay-drag:focus-visible,
 .stream-card__overlay-focus:hover,
 .stream-card__overlay-focus:focus-visible,
 .stream-card__overlay-reload:hover,
@@ -825,13 +854,20 @@ html.headers-hidden .stream-card__overlay-controls {
   outline: none;
 }
 
+.stream-card__overlay-drag:focus-visible,
+.stream-card__overlay-focus:focus-visible,
+.stream-card__overlay-reload:focus-visible,
+.stream-card__overlay-remove:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 70%, white);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 .stream-card__overlay-focus[aria-pressed='true'] {
   border-color: color-mix(in srgb, var(--accent) 55%, white);
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .stream-card__overlay-remove {
-  font-size: 1.2rem;
   color: color-mix(in srgb, var(--danger) 80%, var(--text));
 }
 
@@ -906,19 +942,6 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   transform: translate(-50%, -50%) scale(var(--kick-scale, 1));
   transform-origin: 50% 50%;
 }
-
-/*
- * Twitch deliberately has NO platform-specific override here — it uses the
- * plain .stream-card__iframe rule above (inset:0, width/height:100%,
- * transform: none) in every state, hover included. A prior attempt pinned
- * its layout height and CSS-scaled it exactly like Kick; that kept the real
- * layout box constant but still applied a transform to the live Twitch
- * iframe, and that alone was enough for Chrome to pause it on hover — see
- * the comment above .stream-card. The only version that held up live is
- * zero geometry change AND zero transform on the Twitch iframe, achieved by
- * permanently reserving the toolbar's space instead of ever resizing
- * anything on hover.
- */
 
 .empty-state {
   position: absolute;

@@ -44,7 +44,18 @@ declare global {
       removeEventListener(event: string, callback: () => void): void;
       destroy(): void;
 
+      /**
+       * PLAY fires when the player unpauses and will either start playback or
+       * start buffering; PLAYING fires only once playback has actually begun.
+       * PLAYING is therefore the positive confirmation to trust, and it is an
+       * EDGE event — it never repeats during continuous playback, so it may
+       * only ever be latched into a state, never used as "time since".
+       */
       static readonly READY: string;
+      static readonly PLAY: string;
+      static readonly PLAYING: string;
+      static readonly PAUSE: string;
+      static readonly ENDED: string;
       static readonly PLAYBACK_BLOCKED: string;
       static readonly OFFLINE: string;
       static readonly ONLINE: string;

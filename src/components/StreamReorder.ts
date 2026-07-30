@@ -10,9 +10,11 @@ function streamIdsFrom(container: HTMLElement, itemSelector: string): string[] {
 }
 
 /**
- * Headers visible → drag card headers on the grid.
- * Headers hidden → drag handle in the hover toolbar below each card.
- * Focus mode → dragging disabled entirely.
+ * Headers visible → drag the card header (the whole row is the handle).
+ * Headers hidden → drag the toolbar's dedicated grip button instead; the
+ * SortableJS instance and its onEnd/reorder logic are unchanged, only the
+ * `handle` selector moves to match whichever surface is actually visible.
+ * Focus mode → dragging disabled entirely, in both cases.
  */
 export function bindStreamReorder(
   grid: HTMLElement,
@@ -39,7 +41,11 @@ export function bindStreamReorder(
     const focused = isStreamFocused();
     const hidden = headersStore.isHidden();
     gridSortable.option('disabled', focused);
-    gridSortable.option('handle', hidden ? '.stream-card__drag-handle' : '.stream-card__header');
+    // Only the element matching `handle` can start a drag — Focus/Reload/
+    // Close in the toolbar are siblings of the grip button, not descendants
+    // of it, so switching this selector is what makes them un-draggable
+    // without needing anything else to change.
+    gridSortable.option('handle', hidden ? '.stream-card__overlay-drag' : '.stream-card__header');
   }
 
   headersStore.subscribe(sync);

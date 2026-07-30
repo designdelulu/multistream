@@ -1,14 +1,17 @@
 /**
- * Opt-in debug logging. Enable with ?debug=embeds, ?debug=stats, a comma list
- * (?debug=embeds,stats), or ?debug=all — persists for the tab session via
- * sessionStorage, because stream URL sync strips query params. Disable with
- * ?debug=off.
+ * Opt-in debug logging. Enable with ?debug=embeds, ?debug=stats,
+ * ?debug=players, a comma list (?debug=embeds,players), or ?debug=all —
+ * persists for the tab session via sessionStorage, because stream URL sync
+ * strips query params. Disable with ?debug=off.
+ *
+ * ?debugPlayers=1 is an alias for ?debug=players, kept because it is the
+ * spelling the add/remove recovery work is documented under.
  *
  * No playback behavior — console diagnostics only.
  */
 
 const SESSION_KEY = 'multistream:debug-flags';
-const KNOWN_FLAGS = ['embeds', 'stats'] as const;
+const KNOWN_FLAGS = ['embeds', 'stats', 'players'] as const;
 type DebugFlag = (typeof KNOWN_FLAGS)[number];
 
 function isDebugFlag(value: string): value is DebugFlag {
@@ -25,13 +28,19 @@ function readFlags(): Set<DebugFlag> {
       return new Set();
     }
 
+    const requested: string[] = [];
     if (debug) {
-      const requested = debug === 'all' ? [...KNOWN_FLAGS] : debug.split(',');
-      const valid = requested.filter(isDebugFlag);
-      if (valid.length > 0) {
-        sessionStorage.setItem(SESSION_KEY, valid.join(','));
-        return new Set(valid);
-      }
+      requested.push(...(debug === 'all' ? [...KNOWN_FLAGS] : debug.split(',')));
+    }
+    if (params.get('debugPlayers') === '1') {
+      requested.push('players');
+    }
+
+    const valid = requested.filter(isDebugFlag);
+    if (valid.length > 0) {
+      const merged = [...new Set(valid)];
+      sessionStorage.setItem(SESSION_KEY, merged.join(','));
+      return new Set(merged);
     }
 
     const stored = sessionStorage.getItem(SESSION_KEY) ?? '';
@@ -73,6 +82,23 @@ const counts: Record<string, number> = Object.create(null) as Record<string, num
 
 export const embedDebugEnabled = enabledDebugFlags.has('embeds');
 export const statsDebugEnabled = enabledDebugFlags.has('stats');
+export const playersDebugEnabled = enabledDebugFlags.has('players');
+
+/**
+ * Player-lifecycle trace for the add/remove recovery path (?debugPlayers=1).
+ * Separate from ?debug=embeds because that one logs iframe src churn, while
+ * this one follows Twitch.Player instances: which ids exist, what the
+ * pre-mutation snapshot was, when layout settled, and every check / play() /
+ * event / retry outcome in between. Console only, never touches playback.
+ */
+export function logPlayerEvent(event: string, detail: Record<string, unknown> = {}): void {
+  if (!playersDebugEnabled) return;
+  console.info('[players-debug]', {
+    t: Math.round(performance.now()),
+    event,
+    ...detail,
+  });
+}
 
 function iframeSize(card: HTMLElement | undefined): string | undefined {
   if (!card) return undefined;
@@ -169,6 +195,12 @@ export function announceEmbedDebug(): void {
   if (statsDebugEnabled) {
     console.info(
       '[stats-debug] enabled — samples every ~5s for api-mode Twitch cards. Disable with ?debug=off.',
+    );
+  }
+
+  if (playersDebugEnabled) {
+    console.info(
+      '[players-debug] enabled — Twitch player lifecycle and add/remove recovery. Disable with ?debug=off.',
     );
   }
 }

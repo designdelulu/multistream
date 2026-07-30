@@ -1,10 +1,13 @@
 import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
+  beginAddRemoveRecovery,
+  bindPlaybackRecovery,
   bindStreamFocus,
   bindTabVisibilityPlayers,
   nudgeStalledTwitchPlayers,
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
+  snapshotPlayingTwitchPlayers,
   startStatsProbe,
   syncStreamGrid,
   updateGridLayout,
@@ -42,10 +45,8 @@ const mainLayoutEl = mainLayout;
  * cannot stall Twitch embeds.
  *
  * Twitch refuses muted autoplay when the embed is obscured. Headers-hidden
- * mode keeps the video alone at rest; hover reveals a toolbar below the
- * iframe (never stacked over it). Both Kick and Twitch iframes are rendered
- * at a fixed size and CSS-scaled into the toolbar-shrunk box, so the reveal
- * is paint-only — it never triggers a real resize of either embed.
+ * mode keeps the video alone at rest; hover shrinks the player slightly and
+ * reveals a toolbar below the iframe (Kick re-scales so controls stay usable).
  */
 let suppressLayout = false;
 let suppressLayoutTimer = 0;
@@ -65,12 +66,11 @@ function measureAndLayout(): void {
   updateGridLayout(gridEl);
 }
 
-function updateLayout(after?: () => void): void {
+function updateLayout(): void {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       if (suppressLayout) return;
       updateGridLayout(gridEl);
-      after?.();
     });
   });
 }
@@ -91,7 +91,37 @@ function afterHeadersToggle(): void {
   });
 }
 
+/**
+ * Add/remove detection. The store notifies on reorder too, and a reorder is a
+ * different problem with a different fix — this recovery path is deliberately
+ * scoped to transactions that change *which* streams exist, per the constraint
+ * that it must not run on every layout event.
+ */
+let knownStreamIds: string[] = [];
+
+function takeStreamIdChange(next: string[]): 'add' | 'remove' | null {
+  const previous = knownStreamIds;
+  knownStreamIds = next;
+
+  const previousSet = new Set(previous);
+  const added = next.filter((id) => !previousSet.has(id)).length;
+  const nextSet = new Set(next);
+  const removed = previous.filter((id) => !nextSet.has(id)).length;
+
+  if (added === 0 && removed === 0) return null;
+  return added >= removed ? 'add' : 'remove';
+}
+
 function renderStreams(): void {
+  /*
+   * Snapshot first: this must read the live players BEFORE syncStreamGrid
+   * destroys any of them, because "was this playing beforehand?" is the only
+   * thing that authorises a later play() call. A stream the user had paused
+   * is simply absent here and can never be restarted by the recovery path.
+   */
+  const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
+  const transaction = takeStreamIdChange(store.getStreams().map((stream) => stream.id));
+
   quietLayout(2000);
   syncStreamGrid(gridEl, store);
   updateEmptyState(store);
@@ -100,6 +130,17 @@ function renderStreams(): void {
     // Adding/removing a stream resizes every remaining card the same way a
     // headers-toggle does — same recovery is needed here, not just there.
     recoverTwitchPlayersAfterLayout(gridEl);
+
+    if (!transaction) return;
+    /*
+     * measureAndLayout only *writes* the new --player-width/--player-height.
+     * One more frame lets the browser apply them, so every surviving iframe
+     * has its final box before the first check — that resize is what Twitch
+     * reacts to, and reacting to it is exactly what we are waiting on.
+     */
+    requestAnimationFrame(() => {
+      beginAddRemoveRecovery(gridEl, playingBefore, transaction);
+    });
   });
 }
 
@@ -112,6 +153,7 @@ reorder.sync();
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);
+bindPlaybackRecovery();
 bindStreamFocus((focused, streamId) => {
   toolbar.sync();
   reorder.sync();
@@ -155,7 +197,7 @@ headersStore.subscribe(afterHeadersToggle);
 const phoneQuery = phoneMediaQuery();
 
 function handleViewportChange(): void {
-  updateLayout(() => recoverTwitchPlayersAfterLayout(gridEl));
+  updateLayout();
   armInteractionNudge();
 }
 
@@ -171,7 +213,6 @@ const resizeObserver = new ResizeObserver(() => {
     resizeDebounceTimer = 0;
     if (suppressLayout) return;
     updateGridLayout(gridEl);
-    afterLayoutPaint(() => recoverTwitchPlayersAfterLayout(gridEl));
   }, 120);
 });
 resizeObserver.observe(mainLayoutEl);

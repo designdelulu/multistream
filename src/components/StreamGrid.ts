@@ -1,10 +1,12 @@
 import {
   embedDebugEnabled,
   logEmbedEvent,
+  logPlayerEvent,
   logStatsSample,
   reportEmbedRecovery,
   statsDebugEnabled,
 } from '../lib/embedDebug';
+import { createPlaybackRecovery, type RecoveryTarget } from '../lib/playbackRecovery';
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import { twitchParentList } from '../platforms/twitch';
@@ -23,24 +25,61 @@ import type { StreamStore } from '../state/streams';
  * a live check; 769 is the last known-good floor.
  *
  * Twitch Requirement 1.3: never obscure the embed. Headers-hidden keeps the
- * video alone at rest; hover reveals a toolbar permanently reserved BELOW the
- * iframe (not over it, and not resized into on hover — see updateGridLayout's
- * chromeHeight and the comment above .stream-card in main.css). No mouseleave
- * remount — entering the iframe fires leave on the parent and would reload
- * mute controls in a loop.
+ * video alone at rest; on card hover the player shrinks and a toolbar opens
+ * BELOW the iframe (not over it). Kick re-scales on hover so bottom chrome
+ * still fits. No mouseleave remount — entering the iframe fires leave on the
+ * parent and would reload mute controls in a loop.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
-/**
- * Headers-hidden's toolbar (main.css) is a permanently reserved 40px strip
- * below the player — never borrowed from it live on hover. Must match the
- * toolbar's own CSS height exactly, or --card-height mis-sizes the card.
- */
-const TOOLBAR_HEIGHT = 40;
 /** Spreads the watchdog's per-card checks so several stalled cards don't confirm/escalate in the same instant. */
 const RECOVERY_SPREAD_MAX_MS = 2000;
+
+/*
+ * Headers-hidden toolbar icons. Both are drawn in the same 16×16 box, with the
+ * same 1.5 stroke and round joins, and both are optically centred on (8, 8):
+ * the magnifier's artwork spans 1.5–14.5 and the cross spans 3.25–12.75, so
+ * each is symmetric about the middle and they sit on the same baseline inside
+ * identical 26px buttons. The cross is the smaller of the two on purpose —
+ * that size ratio is what makes a close control read as lighter than a
+ * primary action rather than as a misaligned one.
+ *
+ * These replaced a 🔍 emoji and a × character. Both rendered at whatever size
+ * and vertical offset the user's emoji/text font happened to choose, which is
+ * why they never lined up with each other.
+ */
+const ICON_MAGNIFIER =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">' +
+  '<circle cx="7" cy="7" r="4.75" stroke="currentColor" stroke-width="1.5"/>' +
+  '<path d="M11.1 11.1 13.75 13.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+  '</svg>';
+
+const ICON_CLOSE =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">' +
+  '<path d="M4 4 12 12M12 4 4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+  '</svg>';
+
+/** Same artwork as the header reload button (14x14, +1/+1 offset into the shared 16x16 box). */
+const ICON_RELOAD =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">' +
+  '<path d="M13 8A5 5 0 1 1 11.5 4.4M13 2.5V5.5H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '</svg>';
+
+/**
+ * The header's own drag handle has no icon — the entire header row is the
+ * grab target (see .stream-card__header { cursor: grab }), so there is
+ * nothing to literally copy. This is a standard six-dot grip drawn in the
+ * same 16x16 box as the other toolbar icons, filled rather than stroked
+ * (the usual convention for a grip glyph) so it still reads at this size.
+ */
+const ICON_DRAG =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">' +
+  '<circle cx="6" cy="4" r="1.3" fill="currentColor"/><circle cx="10" cy="4" r="1.3" fill="currentColor"/>' +
+  '<circle cx="6" cy="8" r="1.3" fill="currentColor"/><circle cx="10" cy="8" r="1.3" fill="currentColor"/>' +
+  '<circle cx="6" cy="12" r="1.3" fill="currentColor"/><circle cx="10" cy="12" r="1.3" fill="currentColor"/>' +
+  '</svg>';
 
 type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
 
@@ -67,10 +106,61 @@ let twitchMountSeq = 0;
 let twitchScriptPromise: Promise<boolean> | null = null;
 const TWITCH_SCRIPT_TIMEOUT_MS = 4000;
 
+/**
+ * Latched playback state per api-mode player, driven purely by Twitch's own
+ * events. This exists so "was this stream playing before I touched the grid?"
+ * is an observation rather than a guess.
+ *
+ * 'playing' is only ever set by a real PLAYING event ("player started video
+ * playback"). PLAYING is an EDGE event — it fires once and never repeats —
+ * so it is latched into this map and never used as a "time since" measure.
+ * That distinction is the whole reason 180f12e's detector misfired on every
+ * healthy stream.
+ *
+ * Fail-safe direction: if Twitch ever stopped emitting these, every card
+ * would stay 'unknown', the pre-mutation snapshot would come back empty and
+ * add/remove recovery would quietly do nothing. It cannot fail towards
+ * playing streams nobody asked for.
+ */
+type PlaybackState = 'unknown' | 'playing' | 'paused' | 'blocked' | 'offline';
+const twitchPlayback = new Map<string, PlaybackState>();
+
+function setPlaybackState(streamId: string, state: PlaybackState, channel?: string): void {
+  twitchPlayback.set(streamId, state);
+  logPlayerEvent('state', { streamId, channel, state });
+}
+
+/**
+ * Drop every trace of one player. Any recovery run still pointed at this id
+ * stops on its own at the next pass — its isEligible() fails once the player
+ * is out of twitchPlayers — so runs for other cards are left alone.
+ */
+function forgetTwitchPlayer(streamId: string): void {
+  twitchPlayers.delete(streamId);
+  twitchStallCounts.delete(streamId);
+  twitchExceptionCounts.delete(streamId);
+  twitchPlayback.delete(streamId);
+}
+
+/**
+ * Add/remove recovery. Deliberately scoped: this runs for stream add and
+ * remove transactions and for a freshly constructed player, and for nothing
+ * else. It is not wired to ResizeObserver, window resize, focus changes or the
+ * toolbar transition — those already have their own, older handling, and
+ * attaching a play()-capable mechanism to high-frequency events is how the
+ * grid-wide overlay flashing got introduced the first time.
+ */
+const playbackRecovery = createPlaybackRecovery({
+  timers: {
+    setTimeout: (handler, ms) => window.setTimeout(handler, ms),
+    clearTimeout: (handle) => window.clearTimeout(handle),
+  },
+  log: (event, detail) => logPlayerEvent(`recovery:${event}`, detail),
+});
+
 function clearLayoutVars(container: HTMLElement): void {
   container.style.removeProperty('--grid-columns');
   container.style.removeProperty('--player-height');
-  container.style.removeProperty('--card-height');
   container.style.removeProperty('--player-width');
   container.style.removeProperty('--kick-col-min');
   container.style.removeProperty('--kick-render-width');
@@ -190,22 +280,66 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
   });
 
   twitchPlayers.set(streamId, player);
+  twitchPlayback.set(streamId, 'unknown');
   card.dataset.twitchMode = 'api';
   card.dataset.embedMuted = muted ? '1' : '0';
 
   logEmbedEvent('player-ready', { platform: 'twitch', channel, action: 'src', muted, card });
+  logPlayerEvent('construct', { streamId, channel, mountId: mountEl.id, muted });
 
   player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED, () => {
     logEmbedEvent('player-blocked', { platform: 'twitch', channel, card });
+    logPlayerEvent('event:PLAYBACK_BLOCKED', { streamId, channel });
     reportEmbedRecovery('playback-blocked', { platform: 'twitch' });
+    setPlaybackState(streamId, 'blocked', channel);
+    // Autoplay policy, not a stall — retrying play() cannot clear it, so stop
+    // any recovery run chasing this card and let it be reported on its own.
+    playbackRecovery.markBlocked(streamId);
     player.play();
   });
   player.addEventListener(Twitch.Player.OFFLINE, () => {
     logEmbedEvent('player-offline', { platform: 'twitch', channel, card });
+    logPlayerEvent('event:OFFLINE', { streamId, channel });
+    setPlaybackState(streamId, 'offline', channel);
   });
   player.addEventListener(Twitch.Player.ONLINE, () => {
     logEmbedEvent('player-online', { platform: 'twitch', channel, card });
+    logPlayerEvent('event:ONLINE', { streamId, channel });
+    if (twitchPlayback.get(streamId) === 'offline') {
+      setPlaybackState(streamId, 'unknown', channel);
+    }
     player.play();
+  });
+
+  player.addEventListener(Twitch.Player.PLAY, () => {
+    // Unpaused — playback may still only be buffering. Not confirmation.
+    logPlayerEvent('event:PLAY', { streamId, channel });
+  });
+  player.addEventListener(Twitch.Player.PLAYING, () => {
+    logPlayerEvent('event:PLAYING', { streamId, channel });
+    setPlaybackState(streamId, 'playing', channel);
+    playbackRecovery.confirmPlaying(streamId);
+  });
+  player.addEventListener(Twitch.Player.PAUSE, () => {
+    logPlayerEvent('event:PAUSE', { streamId, channel });
+    setPlaybackState(streamId, 'paused', channel);
+  });
+  player.addEventListener(Twitch.Player.ENDED, () => {
+    logPlayerEvent('event:ENDED', { streamId, channel });
+    setPlaybackState(streamId, 'paused', channel);
+  });
+
+  player.addEventListener(Twitch.Player.READY, () => {
+    logPlayerEvent('event:READY', { streamId, channel });
+    // A brand-new card is expected to autoplay by itself. Watch that it
+    // actually does, on a later-starting schedule than the transaction run so
+    // a player that was going to start anyway is never interrupted by a
+    // needless play(). Set once per constructed player, so this covers the
+    // initial page load as well as streams added later — both are the same
+    // "did autoplay actually take?" question.
+    if (card.dataset.recoveryWatchNew !== '1') return;
+    delete card.dataset.recoveryWatchNew;
+    playbackRecovery.track(createTwitchRecoveryTarget(streamId, Date.now()), 'new-player');
   });
 }
 
@@ -484,11 +618,6 @@ function syncFocusDom(container: HTMLElement): void {
       }
     }
 
-    const dragHandle = card.querySelector<HTMLButtonElement>('.stream-card__drag-handle');
-    if (dragHandle) {
-      dragHandle.hidden = focusedStreamId !== null;
-    }
-
     const overlayFocus = card.querySelector<HTMLElement>('.stream-card__overlay-focus');
     if (overlayFocus) {
       overlayFocus.setAttribute('aria-pressed', isFocused ? 'true' : 'false');
@@ -512,9 +641,6 @@ function scheduleGridLayout(container: HTMLElement): void {
     layoutFrame = requestAnimationFrame(() => {
       layoutFrame = 0;
       updateGridLayout(container);
-      // Focus/unfocus resizes every remaining card the same way add/remove
-      // does — same automatic recovery is needed here, not just there.
-      recoverTwitchPlayersAfterLayout(container);
     });
   });
 }
@@ -634,6 +760,10 @@ function createPlayerElement(
   // Stable per-card jitter so the watchdog sweep doesn't act on every stalled
   // card in the same instant — see recoverStalledTwitchPlayers.
   card.dataset.recoverySpreadMs = String(Math.floor(Math.random() * RECOVERY_SPREAD_MAX_MS));
+  // Consumed once by the player's READY handler: a freshly mounted card is
+  // expected to autoplay, and this asks for that to be verified rather than
+  // assumed. Cleared there so a later rebuild doesn't re-arm it.
+  card.dataset.recoveryWatchNew = '1';
 
   const header = document.createElement('div');
   header.className = 'stream-card__header';
@@ -702,25 +832,51 @@ function createPlayerElement(
   const toolbar = document.createElement('div');
   toolbar.className = 'stream-card__toolbar';
 
+  /*
+   * Headers-hidden identity on the left, actions on the right: Drag, Focus,
+   * Reload, Close. Reload reuses reloadStreamCard — the exact function the
+   * header's own reload button calls — so the two controls can never drift
+   * apart in behavior. The drag handle reuses StreamReorder's existing
+   * SortableJS instance unchanged; only its `handle` option now points here
+   * instead of `.stream-card__header` while headers are hidden (see
+   * StreamReorder.sync), so this button is the ONLY element that can start a
+   * drag in that mode — Focus/Reload/Close are siblings, not descendants of
+   * it, so a click on them can never be mistaken for a drag start.
+   *
+   * Despite the name, nothing in `__overlay-*` overlays anything: this whole
+   * subtree lives in `.stream-card__toolbar`, a flex sibling BELOW
+   * `.stream-card__player`. Painting controls over a live Twitch iframe was
+   * confirmed to pause it on hover — keep them out of the player subtree.
+   */
   const nameBadge = document.createElement('div');
   nameBadge.className = 'stream-card__name-badge';
 
-  const liveDot = document.createElement('span');
-  liveDot.className = 'stream-card__name-badge-dot';
-  liveDot.setAttribute('aria-hidden', 'true');
+  const nameDot = document.createElement('span');
+  nameDot.className = 'stream-card__name-badge-dot';
+  nameDot.setAttribute('aria-hidden', 'true');
 
-  const badgeName = document.createElement('span');
-  badgeName.className = 'stream-card__name-badge-channel';
-  badgeName.textContent = adapter.displayName(stream);
+  const nameChannel = document.createElement('span');
+  nameChannel.className = 'stream-card__name-badge-channel';
+  nameChannel.textContent = adapter.displayName(stream);
 
-  const badgePlatform = document.createElement('span');
-  badgePlatform.className = `stream-card__name-badge-platform stream-card__name-badge-platform--${stream.platform}`;
-  badgePlatform.textContent = stream.platform === 'twitch' ? 'TWITCH' : 'KICK';
+  const namePlatform = document.createElement('span');
+  namePlatform.className = `stream-card__name-badge-platform stream-card__name-badge-platform--${stream.platform}`;
+  namePlatform.textContent = adapter.label;
 
-  nameBadge.append(liveDot, badgeName, badgePlatform);
+  nameBadge.append(nameDot, nameChannel, namePlatform);
 
   const overlayControls = document.createElement('div');
   overlayControls.className = 'stream-card__overlay-controls';
+
+  const overlayDrag = document.createElement('button');
+  overlayDrag.type = 'button';
+  overlayDrag.className = 'stream-card__overlay-drag';
+  overlayDrag.title = 'Drag to reorder';
+  overlayDrag.setAttribute('aria-label', 'Drag to reorder');
+  overlayDrag.innerHTML = ICON_DRAG;
+  // No click handler: SortableJS binds its own pointerdown/touch listeners
+  // to this element (see StreamReorder's `handle` option) and drives the
+  // drag itself. A stray click after a drag ends has nothing to do here.
 
   const overlayFocus = document.createElement('button');
   overlayFocus.type = 'button';
@@ -728,15 +884,26 @@ function createPlayerElement(
   overlayFocus.title = 'Focus stream';
   overlayFocus.setAttribute('aria-label', 'Focus stream in browser window');
   overlayFocus.setAttribute('aria-pressed', 'false');
-  overlayFocus.textContent = '🔍';
+  overlayFocus.innerHTML = ICON_MAGNIFIER;
   overlayFocus.addEventListener('click', () => toggleStreamFocus(container, stream.id));
+
+  const overlayReload = document.createElement('button');
+  overlayReload.type = 'button';
+  overlayReload.className = 'stream-card__overlay-reload';
+  overlayReload.title = 'Reload stream';
+  overlayReload.setAttribute('aria-label', 'Reload stream');
+  overlayReload.innerHTML = ICON_RELOAD;
+  // Same function the header reload button calls — one implementation, so
+  // the two controls cannot behave differently. Reloads only this card: see
+  // reloadStreamCard/rebuildTwitchPlayer, neither touches any other player.
+  overlayReload.addEventListener('click', () => reloadStreamCard(card));
 
   const overlayRemove = document.createElement('button');
   overlayRemove.type = 'button';
   overlayRemove.className = 'stream-card__overlay-remove';
   overlayRemove.title = 'Remove stream';
   overlayRemove.setAttribute('aria-label', 'Remove stream');
-  overlayRemove.textContent = '×';
+  overlayRemove.innerHTML = ICON_CLOSE;
   overlayRemove.addEventListener('click', () => {
     if (focusedStreamId === stream.id) {
       setFocusedStream(container, null);
@@ -745,24 +912,20 @@ function createPlayerElement(
     store.removeStream(stream.id);
   });
 
-  const overlayReload = document.createElement('button');
-  overlayReload.type = 'button';
-  overlayReload.className = 'stream-card__overlay-reload';
-  overlayReload.title = 'Reload stream';
-  overlayReload.setAttribute('aria-label', 'Reload stream');
-  overlayReload.textContent = '⟳';
-  overlayReload.addEventListener('click', () => reloadStreamCard(card));
+  overlayControls.append(overlayDrag, overlayFocus, overlayReload, overlayRemove);
 
-  overlayControls.append(overlayFocus, overlayReload, overlayRemove);
-
-  const dragHandle = document.createElement('div');
-  dragHandle.className = 'stream-card__drag-handle';
-  dragHandle.title = 'Drag to reorder';
-  dragHandle.setAttribute('aria-label', 'Drag to reorder');
-  dragHandle.textContent = '⠿ drag';
-
-  toolbar.append(nameBadge, dragHandle, overlayControls);
+  toolbar.append(nameBadge, overlayControls);
   card.append(header, player, toolbar);
+
+  if (stream.platform === 'twitch') {
+    // Headers-hidden reveals this toolbar on hover by shrinking the player
+    // box (main.css) — a real iframe resize we otherwise never observe.
+    // Check once the shrink/grow settles instead of waiting on the watchdog.
+    toolbar.addEventListener('transitionend', (event) => {
+      if (event.propertyName !== 'height') return;
+      verifyAndRecoverTwitchPlayer(card, false);
+    });
+  }
 
   if (document.hidden) {
     card.dataset.tabFrozen = '1';
@@ -869,39 +1032,20 @@ export function isStreamFocused(): boolean {
 }
 
 /**
- * Runs after any event that resizes cards in place — add/remove a stream,
- * headers toggle, focus/unfocus, viewport or container resize. Two distinct
- * recovery needs:
- *
- * Fallback-mode Twitch (bare iframe, no events) has no signal at all, so it
- * gets the same blind force-remount as before.
- *
- * 'api'-mode cards previously got nothing here — the assumption was they'd
- * "survive the CSS resize without a remount." That was never actually true:
- * a genuine layout resize (columns/size changing, or a card's own box
- * shrinking) can make Twitch's real player pause on its own, same as the
- * headers-hidden hover-toolbar resize did before it was eliminated (see
- * main.css). Nothing was checking for that pause here, so it sat until the
- * next 90s watchdog tick. Use the same gentle check-confirm-then-play() path
- * the mousemove nudge already uses (never escalates to a reconnect) — this
- * makes recovery automatic right after the layout settles, not dependent on
- * the user happening to move the mouse afterward.
+ * Fallback-mode Twitch (bare iframe) can pause after headers-hidden layout
+ * thrash with nothing to detect it — force-remount as before. 'api'-mode
+ * cards are trusted to survive the CSS resize without a remount (this is
+ * the one part of the swap that most needs live-browser confirmation).
  */
 export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
     if (card.dataset.platform !== 'twitch') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+    if (card.dataset.twitchMode !== 'fallback') continue;
 
-    if (card.dataset.twitchMode === 'fallback') {
-      const isFocused =
-        focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
-      mountTwitchIframeForced(card, isFocused ? false : preferredMuted(card));
-      continue;
-    }
-
-    if (card.dataset.twitchMode === 'api') {
-      verifyAndRecoverTwitchPlayer(card, false);
-    }
+    const isFocused =
+      focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
+    mountTwitchIframeForced(card, isFocused ? false : preferredMuted(card));
   }
 }
 
@@ -939,10 +1083,9 @@ function checkPaused(player: Twitch.Player, streamId: string): boolean | null {
 function rebuildTwitchPlayer(card: HTMLElement): void {
   const streamId = card.dataset.streamId ?? '';
 
+  logPlayerEvent('rebuild', { streamId, channel: card.dataset.channel });
   twitchPlayers.get(streamId)?.destroy();
-  twitchPlayers.delete(streamId);
-  twitchStallCounts.delete(streamId);
-  twitchExceptionCounts.delete(streamId);
+  forgetTwitchPlayer(streamId);
 
   const placeholder = card.querySelector<HTMLElement>('.stream-card__iframe');
   placeholder?.replaceWith(createTwitchMountPoint());
@@ -1095,6 +1238,138 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
   }, STALL_CONFIRM_DELAY_MS);
 }
 
+function cardForStream(streamId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    `.stream-card[data-stream-id="${CSS.escape(streamId)}"]`,
+  );
+}
+
+/**
+ * Bridges one api-mode player to the recovery coordinator.
+ *
+ * Everything is resolved lazily by stream id rather than captured, so a card
+ * that gets removed, rebuilt, or replaced mid-run is picked up correctly at
+ * the next pass instead of leaving the run holding a stale node or a
+ * destroyed player.
+ *
+ * `startedAt` is the moment the run was created, and exists only for the
+ * user-engagement check below.
+ */
+function createTwitchRecoveryTarget(streamId: string, startedAt: number): RecoveryTarget {
+  return {
+    id: streamId,
+
+    isEligible() {
+      const card = cardForStream(streamId);
+      if (!card?.isConnected) return false;
+      if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') return false;
+      if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return false;
+      if (focusedStreamId !== null && streamId === focusedStreamId) return false;
+      if (!twitchPlayers.has(streamId)) return false;
+      // Nothing to resume on a channel that is off the air.
+      if (twitchPlayback.get(streamId) === 'offline') return false;
+      /*
+       * The only way a user can pause a cross-origin Twitch player is to click
+       * inside its iframe, which moves focus into that iframe and is visible
+       * to us (see bindPlaybackRecovery). If that happened after this run
+       * started, the pause is theirs, not the resize's — leave it alone. A
+       * click from before the run does not disqualify the card, so recovery is
+       * never permanently disabled just because someone once clicked in to
+       * unmute.
+       */
+      if (Number(card.dataset.userEngagedAt ?? '0') >= startedAt) return false;
+      return true;
+    },
+
+    isPaused() {
+      const player = twitchPlayers.get(streamId);
+      if (!player) return null;
+      return checkPaused(player, streamId);
+    },
+
+    play() {
+      const player = twitchPlayers.get(streamId);
+      if (!player) return;
+      reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'add-remove' });
+      player.play();
+    },
+  };
+}
+
+/**
+ * Ids of api-mode Twitch players that Twitch itself has confirmed are playing
+ * right now. Must be called BEFORE the grid is mutated: it is the entire
+ * definition of "should still be playing afterwards", and a stream the user
+ * had already paused is simply absent from it.
+ */
+export function snapshotPlayingTwitchPlayers(container: HTMLElement): string[] {
+  const ids: string[] = [];
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+    const streamId = card.dataset.streamId ?? '';
+    if (!streamId || twitchPlayback.get(streamId) !== 'playing') continue;
+    ids.push(streamId);
+  }
+  logPlayerEvent('snapshot', { playing: ids });
+  return ids;
+}
+
+/**
+ * Start the bounded post-mutation checks. Call once the final grid layout has
+ * settled — every surviving player has its new box by then, which is the
+ * resize Twitch reacts to.
+ *
+ * Only ids from the pre-mutation snapshot are considered, and each is checked
+ * independently; see lib/playbackRecovery.ts for the pass schedule and the
+ * reasoning behind it.
+ */
+export function beginAddRemoveRecovery(
+  container: HTMLElement,
+  snapshotIds: readonly string[],
+  cause: 'add' | 'remove' | 'add-remove' = 'add-remove',
+): void {
+  const startedAt = Date.now();
+  const targets = snapshotIds
+    .filter((streamId) => {
+      const card = cardForStream(streamId);
+      return Boolean(card?.isConnected) && container.contains(card);
+    })
+    .map((streamId) => createTwitchRecoveryTarget(streamId, startedAt));
+
+  logPlayerEvent('layout-settled', {
+    cause,
+    survivors: targets.map((target) => target.id),
+    dropped: snapshotIds.filter((id) => !targets.some((target) => target.id === id)),
+  });
+
+  playbackRecovery.begin(targets, cause);
+}
+
+/**
+ * One-time bindings the recovery path needs.
+ *
+ * Clicking into a cross-origin iframe blurs the parent window and leaves
+ * document.activeElement pointing at that iframe — the only parent-side signal
+ * that a user is driving a specific player, and therefore the only way to tell
+ * a pause they chose from one the resize caused.
+ */
+let engagementBound = false;
+
+export function bindPlaybackRecovery(): void {
+  if (engagementBound) return;
+  engagementBound = true;
+
+  window.addEventListener('blur', () => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLIFrameElement)) return;
+    const card = active.closest<HTMLElement>('.stream-card');
+    if (!card) return;
+    card.dataset.userEngagedAt = String(Date.now());
+    logPlayerEvent('user-engaged', { streamId: card.dataset.streamId });
+  });
+}
+
 /**
  * 'api'-mode Twitch cards get real recovery via verifyAndRecoverTwitchPlayer.
  * Fallback-mode cards (script blocked/failed) keep the original blind
@@ -1210,10 +1485,9 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
     const id = card.dataset.streamId ?? '';
     if (!id || !nextIds.has(id) || seenIds.has(id)) {
       if (card.dataset.platform === 'twitch') {
+        logPlayerEvent('destroy', { streamId: id, channel: card.dataset.channel });
         twitchPlayers.get(id)?.destroy();
-        twitchPlayers.delete(id);
-        twitchStallCounts.delete(id);
-        twitchExceptionCounts.delete(id);
+        forgetTwitchPlayer(id);
       }
       card.remove();
       continue;
@@ -1291,7 +1565,6 @@ export function updateGridLayout(container: HTMLElement): void {
   if (isStackedStreamLayout() && !focusedStreamId) {
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
-    container.style.removeProperty('--card-height');
     container.style.removeProperty('--player-width');
     if (hasKick && areaWidth > 0) {
       setKickScaleVars(container, areaWidth);
@@ -1320,15 +1593,9 @@ export function updateGridLayout(container: HTMLElement): void {
   let bestHeight = 0;
 
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
-  // Focused card keeps its header (for ×); otherwise header-visible mode
-  // reserves the header and headers-hidden mode reserves the toolbar — both
-  // are real chrome the video's own 16:9 box must exclude up front, not
-  // borrow from later (see the comment above .stream-card in main.css).
-  const chromeHeight = focusedStreamId
-    ? CARD_HEADER_HEIGHT
-    : headersHidden
-      ? TOOLBAR_HEIGHT
-      : CARD_HEADER_HEIGHT;
+  // Headers-hidden: video alone (no chrome height). Focused keeps header for ×.
+  const chromeHeight =
+    !headersHidden || focusedStreamId ? CARD_HEADER_HEIGHT : 0;
 
   for (let columns = 1; columns <= Math.min(count, 4); columns += 1) {
     const rows = Math.ceil(count / columns);
@@ -1356,7 +1623,6 @@ export function updateGridLayout(container: HTMLElement): void {
   if (bestWidth <= 0 || bestHeight <= 0) {
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
-    container.style.removeProperty('--card-height');
     container.style.removeProperty('--player-width');
     return;
   }
@@ -1364,11 +1630,6 @@ export function updateGridLayout(container: HTMLElement): void {
   container.style.setProperty('--grid-columns', String(bestColumns));
   container.style.setProperty('--player-width', `${Math.floor(bestWidth)}px`);
   container.style.setProperty('--player-height', `${Math.floor(bestHeight)}px`);
-  // The card's own box = the video (--player-height) + whatever chrome was
-  // reserved above. Only headers-hidden's .stream-card rule reads this today
-  // (header-visible mode sizes the card implicitly, header + player stacked
-  // in normal flow) but it's set unconditionally for consistency.
-  container.style.setProperty('--card-height', `${Math.floor(bestHeight + chromeHeight)}px`);
 
   if (hasKick) {
     setKickScaleVars(container, bestWidth);

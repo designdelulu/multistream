@@ -7,6 +7,15 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
     />
     <meta name="theme-color" content="#0d0d0f" />
+    <!--
+      SVG is the primary icon and adapts to the tab bar's light/dark theme via
+      its own prefers-color-scheme rule. The .ico is the legacy fallback and
+      the .png is iOS home-screen; both are baked white-on-#0d0d0f because
+      neither format can adapt.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />

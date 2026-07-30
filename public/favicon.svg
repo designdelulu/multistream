@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MultiStream">
+  <style>
+    .ms-dot { fill: #0d0d0f; }
+    .ms-wave {
+      fill: none;
+      stroke: #0d0d0f;
+      stroke-width: 34;
+      stroke-linecap: round;
+    }
+    @media (prefers-color-scheme: dark) {
+      .ms-dot { fill: #ffffff; }
+      .ms-wave { stroke: #ffffff; }
+    }
+  </style>
+  <circle class="ms-dot" cx="256" cy="256" r="56" />
+  <path class="ms-wave" d="M175.86 185.10 A107 107 0 0 0 175.86 326.90" />
+  <path class="ms-wave" d="M336.14 185.10 A107 107 0 0 1 336.14 326.90" />
+  <path class="ms-wave" d="M172.52 114.84 A164 164 0 0 0 172.52 397.16" />
+  <path class="ms-wave" d="M339.48 114.84 A164 164 0 0 1 339.48 397.16" />
+</svg>
