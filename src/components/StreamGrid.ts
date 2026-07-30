@@ -1,4 +1,10 @@
-import { embedDebugEnabled, logEmbedEvent, reportEmbedRecovery } from '../lib/embedDebug';
+import {
+  embedDebugEnabled,
+  logEmbedEvent,
+  logStatsSample,
+  reportEmbedRecovery,
+  statsDebugEnabled,
+} from '../lib/embedDebug';
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import { twitchParentList } from '../platforms/twitch';
@@ -26,6 +32,8 @@ const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
+/** Spreads the watchdog's per-card checks so several stalled cards don't confirm/escalate in the same instant. */
+const RECOVERY_SPREAD_MAX_MS = 2000;
 
 type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
 
@@ -612,6 +620,9 @@ function createPlayerElement(
   card.dataset.platform = stream.platform;
   card.dataset.channel = stream.channel;
   card.dataset.embedMuted = '1';
+  // Stable per-card jitter so the watchdog sweep doesn't act on every stalled
+  // card in the same instant — see recoverStalledTwitchPlayers.
+  card.dataset.recoverySpreadMs = String(Math.floor(Math.random() * RECOVERY_SPREAD_MAX_MS));
 
   const header = document.createElement('div');
   header.className = 'stream-card__header';
@@ -1077,13 +1088,79 @@ export function recoverStalledTwitchPlayers(container: HTMLElement): void {
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) continue;
 
-    if (card.dataset.twitchMode === 'fallback') {
-      mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
-      continue;
-    }
+    const spreadMs = Number(card.dataset.recoverySpreadMs ?? '0');
 
-    verifyAndRecoverTwitchPlayer(card);
+    window.setTimeout(() => {
+      // Re-check: card state can change during the spread delay (tab hidden,
+      // focused, removed) between when the sweep started and this fires.
+      if (!card.isConnected) return;
+      if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
+      if (focusedStreamId !== null && card.dataset.streamId === focusedStreamId) return;
+
+      if (card.dataset.twitchMode === 'fallback') {
+        mountTwitchIframeForced(card, preferredMuted(card), 'watchdog');
+        return;
+      }
+
+      verifyAndRecoverTwitchPlayer(card);
+    }, spreadMs);
   }
+}
+
+const STATS_PROBE_INTERVAL_MS = 5000;
+
+/**
+ * Phase C2 diagnostic probe (see the plan) — samples every api-mode Twitch
+ * card's isPaused()/getCurrentTime()/getPlaybackStats() every ~5s and logs
+ * them via logStatsSample. Purpose: capture what a genuinely stuck player's
+ * signals actually look like before writing a stuck-detector, instead of
+ * guessing again. No-ops entirely unless ?debug=stats is active; read-only,
+ * never calls play()/pause()/setChannel().
+ */
+export function startStatsProbe(container: HTMLElement): void {
+  if (!statsDebugEnabled) return;
+
+  window.setInterval(() => {
+    for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+      if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
+
+      const streamId = card.dataset.streamId ?? '';
+      const player = twitchPlayers.get(streamId);
+      if (!player) continue;
+
+      let isPaused: boolean | 'error' = 'error';
+      let currentTime: number | 'error' = 'error';
+      let stats: unknown = 'error';
+
+      try {
+        isPaused = player.isPaused();
+      } catch {
+        // Leave as 'error' — an exception is itself a signal worth logging.
+      }
+      try {
+        currentTime = player.getCurrentTime();
+      } catch {
+        // Leave as 'error'.
+      }
+      try {
+        stats = player.getPlaybackStats();
+      } catch {
+        // Leave as 'error'.
+      }
+
+      const iframe = streamIframe(card);
+      const rect = iframe?.getBoundingClientRect();
+
+      logStatsSample({
+        streamId,
+        channel: card.dataset.channel,
+        isPaused,
+        currentTime,
+        stats,
+        size: rect ? `${Math.round(rect.width)}×${Math.round(rect.height)}` : undefined,
+      });
+    }
+  }, STATS_PROBE_INTERVAL_MS);
 }
 
 /**

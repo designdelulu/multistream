@@ -5,6 +5,7 @@ import {
   nudgeStalledTwitchPlayers,
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
+  startStatsProbe,
   syncStreamGrid,
   updateGridLayout,
 } from './components/StreamGrid';
@@ -178,12 +179,22 @@ resizeObserver.observe(streamAreaEl);
  * here was confirmed to reset its volume back to muted on every cycle
  * (no way to read back a live in-player unmute) far more often than it
  * ever fixed a real stall, so Kick gets no periodic watchdog at all.
+ *
+ * 30s (down from 90s): this is still the same confirm-then-escalate path in
+ * verifyAndRecoverTwitchPlayer, just running more often — the only thing
+ * that changes is how long a genuinely stalled card waits for its first
+ * check. recoverStalledTwitchPlayers spreads each card's check over a small
+ * random delay so several stalled cards can't confirm/escalate in the same
+ * instant at this shorter interval.
  */
-const WATCHDOG_INTERVAL_MS = 90_000;
+const WATCHDOG_INTERVAL_MS = 30_000;
 window.setInterval(() => {
   if (document.hidden || suppressLayout) return;
   recoverStalledTwitchPlayers(gridEl);
 }, WATCHDOG_INTERVAL_MS);
+
+// Phase C2 diagnostic probe — no-ops unless ?debug=stats is active.
+startStatsProbe(gridEl);
 
 /**
  * A tab-resume's (or fullscreen-exit's) own play() call isn't a genuine user

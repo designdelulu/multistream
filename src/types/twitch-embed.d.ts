@@ -18,6 +18,18 @@ declare global {
       autoplay?: boolean;
     }
 
+    /** Shape per dev.twitch.tv/docs/embed/video-and-clips — not all fields documented as guaranteed present. */
+    interface PlaybackStats {
+      backendVersion?: string;
+      bufferSize?: number;
+      codecs?: string;
+      fps?: number;
+      hlsLatencyBroadcaster?: number;
+      playbackRate?: number;
+      skippedFrames?: number;
+      videoResolution?: string;
+    }
+
     class Player {
       constructor(elementId: string, options: PlayerOptions);
       play(): void;
@@ -26,6 +38,8 @@ declare global {
       setMuted(muted: boolean): void;
       getMuted(): boolean;
       setChannel(channel: string): void;
+      getCurrentTime(): number;
+      getPlaybackStats(): PlaybackStats;
       addEventListener(event: string, callback: () => void): void;
       removeEventListener(event: string, callback: () => void): void;
       destroy(): void;
