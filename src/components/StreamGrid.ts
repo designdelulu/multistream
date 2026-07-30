@@ -23,15 +23,22 @@ import type { StreamStore } from '../state/streams';
  * a live check; 769 is the last known-good floor.
  *
  * Twitch Requirement 1.3: never obscure the embed. Headers-hidden keeps the
- * video alone at rest; on card hover the player shrinks and a toolbar opens
- * BELOW the iframe (not over it). Kick re-scales on hover so bottom chrome
- * still fits. No mouseleave remount — entering the iframe fires leave on the
- * parent and would reload mute controls in a loop.
+ * video alone at rest; hover reveals a toolbar permanently reserved BELOW the
+ * iframe (not over it, and not resized into on hover — see updateGridLayout's
+ * chromeHeight and the comment above .stream-card in main.css). No mouseleave
+ * remount — entering the iframe fires leave on the parent and would reload
+ * mute controls in a loop.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
 const GRID_GAP = 12;
 const GRID_PADDING = 24;
 const CARD_HEADER_HEIGHT = 42;
+/**
+ * Headers-hidden's toolbar (main.css) is a permanently reserved 40px strip
+ * below the player — never borrowed from it live on hover. Must match the
+ * toolbar's own CSS height exactly, or --card-height mis-sizes the card.
+ */
+const TOOLBAR_HEIGHT = 40;
 /** Spreads the watchdog's per-card checks so several stalled cards don't confirm/escalate in the same instant. */
 const RECOVERY_SPREAD_MAX_MS = 2000;
 
@@ -63,6 +70,7 @@ const TWITCH_SCRIPT_TIMEOUT_MS = 4000;
 function clearLayoutVars(container: HTMLElement): void {
   container.style.removeProperty('--grid-columns');
   container.style.removeProperty('--player-height');
+  container.style.removeProperty('--card-height');
   container.style.removeProperty('--player-width');
   container.style.removeProperty('--kick-col-min');
   container.style.removeProperty('--kick-render-width');
@@ -504,6 +512,9 @@ function scheduleGridLayout(container: HTMLElement): void {
     layoutFrame = requestAnimationFrame(() => {
       layoutFrame = 0;
       updateGridLayout(container);
+      // Focus/unfocus resizes every remaining card the same way add/remove
+      // does — same automatic recovery is needed here, not just there.
+      recoverTwitchPlayersAfterLayout(container);
     });
   });
 }
@@ -753,16 +764,6 @@ function createPlayerElement(
   toolbar.append(nameBadge, dragHandle, overlayControls);
   card.append(header, player, toolbar);
 
-  if (stream.platform === 'twitch') {
-    // Headers-hidden reveals this toolbar on hover by shrinking the player
-    // box (main.css) — a real iframe resize we otherwise never observe.
-    // Check once the shrink/grow settles instead of waiting on the watchdog.
-    toolbar.addEventListener('transitionend', (event) => {
-      if (event.propertyName !== 'height') return;
-      verifyAndRecoverTwitchPlayer(card, false);
-    });
-  }
-
   if (document.hidden) {
     card.dataset.tabFrozen = '1';
   } else {
@@ -868,20 +869,39 @@ export function isStreamFocused(): boolean {
 }
 
 /**
- * Fallback-mode Twitch (bare iframe) can pause after headers-hidden layout
- * thrash with nothing to detect it — force-remount as before. 'api'-mode
- * cards are trusted to survive the CSS resize without a remount (this is
- * the one part of the swap that most needs live-browser confirmation).
+ * Runs after any event that resizes cards in place — add/remove a stream,
+ * headers toggle, focus/unfocus, viewport or container resize. Two distinct
+ * recovery needs:
+ *
+ * Fallback-mode Twitch (bare iframe, no events) has no signal at all, so it
+ * gets the same blind force-remount as before.
+ *
+ * 'api'-mode cards previously got nothing here — the assumption was they'd
+ * "survive the CSS resize without a remount." That was never actually true:
+ * a genuine layout resize (columns/size changing, or a card's own box
+ * shrinking) can make Twitch's real player pause on its own, same as the
+ * headers-hidden hover-toolbar resize did before it was eliminated (see
+ * main.css). Nothing was checking for that pause here, so it sat until the
+ * next 90s watchdog tick. Use the same gentle check-confirm-then-play() path
+ * the mousemove nudge already uses (never escalates to a reconnect) — this
+ * makes recovery automatic right after the layout settles, not dependent on
+ * the user happening to move the mouse afterward.
  */
 export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
     if (card.dataset.platform !== 'twitch') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
-    if (card.dataset.twitchMode !== 'fallback') continue;
 
-    const isFocused =
-      focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
-    mountTwitchIframeForced(card, isFocused ? false : preferredMuted(card));
+    if (card.dataset.twitchMode === 'fallback') {
+      const isFocused =
+        focusedStreamId !== null && card.dataset.streamId === focusedStreamId;
+      mountTwitchIframeForced(card, isFocused ? false : preferredMuted(card));
+      continue;
+    }
+
+    if (card.dataset.twitchMode === 'api') {
+      verifyAndRecoverTwitchPlayer(card, false);
+    }
   }
 }
 
@@ -1271,6 +1291,7 @@ export function updateGridLayout(container: HTMLElement): void {
   if (isStackedStreamLayout() && !focusedStreamId) {
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
+    container.style.removeProperty('--card-height');
     container.style.removeProperty('--player-width');
     if (hasKick && areaWidth > 0) {
       setKickScaleVars(container, areaWidth);
@@ -1299,9 +1320,15 @@ export function updateGridLayout(container: HTMLElement): void {
   let bestHeight = 0;
 
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
-  // Headers-hidden: video alone (no chrome height). Focused keeps header for ×.
-  const chromeHeight =
-    !headersHidden || focusedStreamId ? CARD_HEADER_HEIGHT : 0;
+  // Focused card keeps its header (for ×); otherwise header-visible mode
+  // reserves the header and headers-hidden mode reserves the toolbar — both
+  // are real chrome the video's own 16:9 box must exclude up front, not
+  // borrow from later (see the comment above .stream-card in main.css).
+  const chromeHeight = focusedStreamId
+    ? CARD_HEADER_HEIGHT
+    : headersHidden
+      ? TOOLBAR_HEIGHT
+      : CARD_HEADER_HEIGHT;
 
   for (let columns = 1; columns <= Math.min(count, 4); columns += 1) {
     const rows = Math.ceil(count / columns);
@@ -1329,6 +1356,7 @@ export function updateGridLayout(container: HTMLElement): void {
   if (bestWidth <= 0 || bestHeight <= 0) {
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
+    container.style.removeProperty('--card-height');
     container.style.removeProperty('--player-width');
     return;
   }
@@ -1336,6 +1364,11 @@ export function updateGridLayout(container: HTMLElement): void {
   container.style.setProperty('--grid-columns', String(bestColumns));
   container.style.setProperty('--player-width', `${Math.floor(bestWidth)}px`);
   container.style.setProperty('--player-height', `${Math.floor(bestHeight)}px`);
+  // The card's own box = the video (--player-height) + whatever chrome was
+  // reserved above. Only headers-hidden's .stream-card rule reads this today
+  // (header-visible mode sizes the card implicitly, header + player stacked
+  // in normal flow) but it's set unconditionally for consistency.
+  container.style.setProperty('--card-height', `${Math.floor(bestHeight + chromeHeight)}px`);
 
   if (hasKick) {
     setKickScaleVars(container, bestWidth);

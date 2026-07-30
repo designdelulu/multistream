@@ -42,8 +42,10 @@ const mainLayoutEl = mainLayout;
  * cannot stall Twitch embeds.
  *
  * Twitch refuses muted autoplay when the embed is obscured. Headers-hidden
- * mode keeps the video alone at rest; hover shrinks the player slightly and
- * reveals a toolbar below the iframe (Kick re-scales so controls stay usable).
+ * mode keeps the video alone at rest; hover reveals a toolbar below the
+ * iframe (never stacked over it). Both Kick and Twitch iframes are rendered
+ * at a fixed size and CSS-scaled into the toolbar-shrunk box, so the reveal
+ * is paint-only — it never triggers a real resize of either embed.
  */
 let suppressLayout = false;
 let suppressLayoutTimer = 0;
@@ -63,11 +65,12 @@ function measureAndLayout(): void {
   updateGridLayout(gridEl);
 }
 
-function updateLayout(): void {
+function updateLayout(after?: () => void): void {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       if (suppressLayout) return;
       updateGridLayout(gridEl);
+      after?.();
     });
   });
 }
@@ -152,7 +155,7 @@ headersStore.subscribe(afterHeadersToggle);
 const phoneQuery = phoneMediaQuery();
 
 function handleViewportChange(): void {
-  updateLayout();
+  updateLayout(() => recoverTwitchPlayersAfterLayout(gridEl));
   armInteractionNudge();
 }
 
@@ -168,6 +171,7 @@ const resizeObserver = new ResizeObserver(() => {
     resizeDebounceTimer = 0;
     if (suppressLayout) return;
     updateGridLayout(gridEl);
+    afterLayoutPaint(() => recoverTwitchPlayersAfterLayout(gridEl));
   }, 120);
 });
 resizeObserver.observe(mainLayoutEl);
