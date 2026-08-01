@@ -1,4 +1,4 @@
-export type Platform = 'twitch' | 'kick';
+export type Platform = 'twitch' | 'kick' | 'youtube';
 
 export interface StreamRef {
   id: string;
@@ -11,6 +11,8 @@ export interface EmbedOptions {
   muted: boolean;
   parent: string;
   autoplay?: boolean;
+  /** Full origin (scheme + host), used only by adapters that need it (YouTube). */
+  origin?: string;
 }
 
 export interface PlatformAdapter {

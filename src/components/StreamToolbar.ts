@@ -9,7 +9,7 @@ const PLATFORM_STORAGE_KEY = 'multistream:add-platform';
 function loadPreferredPlatform(): Platform {
   try {
     const stored = localStorage.getItem(PLATFORM_STORAGE_KEY);
-    if (stored === 'kick' || stored === 'twitch') {
+    if (stored === 'kick' || stored === 'twitch' || stored === 'youtube') {
       return stored;
     }
   } catch {
@@ -32,10 +32,13 @@ function stripAtPrefix(value: string): string {
 
 function isExplicitStreamInput(value: string): boolean {
   return (
-    /^(?:t|k|twitch|kick):/i.test(value) ||
+    /^(?:t|k|y|yt|twitch|kick|youtube):/i.test(value) ||
     /^https?:\/\//i.test(value) ||
     /(?:^|\.)twitch\.tv\b/i.test(value) ||
-    /(?:^|\.)kick\.com\b/i.test(value)
+    /(?:^|\.)kick\.com\b/i.test(value) ||
+    /(?:^|\.)youtube\.com\b/i.test(value) ||
+    /(?:^|\.)youtube-nocookie\.com\b/i.test(value) ||
+    /(?:^|\.)youtu\.be\b/i.test(value)
   );
 }
 
@@ -58,7 +61,9 @@ export function resolveAddInput(raw: string, platform: Platform): string {
     return value;
   }
 
-  return platform === 'kick' ? `k:${value}` : value;
+  if (platform === 'kick') return `k:${value}`;
+  if (platform === 'youtube') return `y:handle:${value}`;
+  return value;
 }
 
 function iconButtonLabel(button: HTMLButtonElement): HTMLElement | null {
@@ -118,7 +123,7 @@ export function bindStreamToolbar(
   const formEl = form;
   const inputEl = input;
   const suggestionsEl = suggestions;
-  const suggestionPlatforms: Platform[] = ['twitch', 'kick'];
+  const suggestionPlatforms: Platform[] = ['twitch', 'kick', 'youtube'];
   let selectedPlatform = loadPreferredPlatform();
   let activeSuggestionIndex = -1;
   let shareResetTimer = 0;
@@ -179,7 +184,8 @@ export function bindStreamToolbar(
 
       const badge = document.createElement('span');
       badge.className = `toolbar__suggestion-platform toolbar__suggestion-platform--${platform}`;
-      badge.textContent = platform === 'twitch' ? 'TWITCH' : 'KICK';
+      badge.textContent =
+        platform === 'twitch' ? 'TWITCH' : platform === 'kick' ? 'KICK' : 'YOUTUBE';
 
       option.append(label, badge);
       option.addEventListener('mousedown', (event) => {

@@ -17,6 +17,10 @@ describe('getAdapter', () => {
   it('returns the kick adapter', () => {
     expect(getAdapter('kick').id).toBe('kick');
   });
+
+  it('returns the youtube adapter', () => {
+    expect(getAdapter('youtube').id).toBe('youtube');
+  });
 });
 
 describe('parseStreamInput', () => {
@@ -36,7 +40,18 @@ describe('parseStreamInput', () => {
   });
 
   it('returns null when no adapter matches', () => {
-    expect(parseStreamInput('https://youtube.com/watch?v=x')).toBeNull();
+    expect(parseStreamInput('https://vimeo.com/12345')).toBeNull();
+  });
+
+  it('resolves a youtube watch URL', () => {
+    expect(parseStreamInput('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toEqual({
+      platform: 'youtube',
+      channel: 'video:dQw4w9WgXcQ',
+    });
+  });
+
+  it('does not let youtube claim a bare username Twitch already owns', () => {
+    expect(parseStreamInput('shroud')).toEqual({ platform: 'twitch', channel: 'shroud' });
   });
 });
 
@@ -48,6 +63,15 @@ describe('serializeStream', () => {
   it('uses the k: prefix for kick', () => {
     expect(serializeStream({ platform: 'kick', channel: 'trainwreckstv' })).toBe(
       'k:trainwreckstv',
+    );
+  });
+
+  it('uses the y: prefix for youtube, with the composite token verbatim', () => {
+    expect(serializeStream({ platform: 'youtube', channel: 'handle:pewdiepie' })).toBe(
+      'y:handle:pewdiepie',
+    );
+    expect(serializeStream({ platform: 'youtube', channel: 'video:dQw4w9WgXcQ' })).toBe(
+      'y:video:dQw4w9WgXcQ',
     );
   });
 });
@@ -90,6 +114,29 @@ describe('deserializeStream', () => {
   it('returns null for an empty token', () => {
     expect(deserializeStream('')).toBeNull();
   });
+
+  it('parses a y: video token', () => {
+    expect(deserializeStream('y:video:dQw4w9WgXcQ')).toEqual({
+      platform: 'youtube',
+      channel: 'video:dQw4w9WgXcQ',
+    });
+  });
+
+  it('parses a y: handle token', () => {
+    expect(deserializeStream('y:handle:pewdiepie')).toEqual({
+      platform: 'youtube',
+      channel: 'handle:pewdiepie',
+    });
+  });
+
+  it('returns null for a y: token with a malformed inner payload', () => {
+    expect(deserializeStream('y:not-a-real-token')).toBeNull();
+  });
+
+  it('round-trips serializeStream -> deserializeStream for youtube', () => {
+    const ref = { platform: 'youtube' as const, channel: 'channelid:UC-lHJZR3Gqxm24_Vd_AJ5Yw' };
+    expect(deserializeStream(serializeStream(ref))).toEqual(ref);
+  });
 });
 
 describe('streamsFromPathname', () => {
@@ -110,6 +157,21 @@ describe('streamsFromPathname', () => {
   it('returns an empty array for the root path', () => {
     expect(streamsFromPathname('/')).toEqual([]);
   });
+
+  it('parses a mixed twitch/kick/youtube path unaffected by the new adapter', () => {
+    expect(streamsFromPathname('/t:shroud/k:trainwreckstv/y:handle:pewdiepie')).toEqual([
+      { platform: 'twitch', channel: 'shroud' },
+      { platform: 'kick', channel: 'trainwreckstv' },
+      { platform: 'youtube', channel: 'handle:pewdiepie' },
+    ]);
+  });
+
+  it('still parses an old twitch/kick-only path exactly as before (backward compat)', () => {
+    expect(streamsFromPathname('/t:shroud/k:trainwreckstv')).toEqual([
+      { platform: 'twitch', channel: 'shroud' },
+      { platform: 'kick', channel: 'trainwreckstv' },
+    ]);
+  });
 });
 
 describe('streamsFromSearch', () => {
@@ -129,6 +191,14 @@ describe('streamsFromSearch', () => {
       { platform: 'twitch', channel: 'shroud' },
     ]);
   });
+
+  it('parses a mixed twitch/kick/youtube query param', () => {
+    expect(streamsFromSearch('?streams=t:shroud,k:trainwreckstv,y:handle:pewdiepie')).toEqual([
+      { platform: 'twitch', channel: 'shroud' },
+      { platform: 'kick', channel: 'trainwreckstv' },
+      { platform: 'youtube', channel: 'handle:pewdiepie' },
+    ]);
+  });
 });
 
 describe('buildPathFromStreams', () => {
@@ -143,5 +213,14 @@ describe('buildPathFromStreams', () => {
         { platform: 'kick', channel: 'trainwreckstv' },
       ]),
     ).toBe('/t:shroud/k:trainwreckstv');
+  });
+
+  it('includes youtube streams in the path', () => {
+    expect(
+      buildPathFromStreams([
+        { platform: 'twitch', channel: 'shroud' },
+        { platform: 'youtube', channel: 'video:dQw4w9WgXcQ' },
+      ]),
+    ).toBe('/t:shroud/y:video:dQw4w9WgXcQ');
   });
 });

@@ -7,6 +7,7 @@
   --muted: #9b9ba8;
   --accent: #9146ff;
   --kick: #53fc18;
+  --youtube: #ff0033;
   --danger: #ff5d5d;
   /*
    * Height the headers-hidden hover toolbar opens to, and therefore exactly
@@ -184,6 +185,11 @@ body {
 .toolbar__suggestion-platform--kick {
   background: color-mix(in srgb, var(--kick) 22%, transparent);
   color: #c8ffb0;
+}
+
+.toolbar__suggestion-platform--youtube {
+  background: color-mix(in srgb, var(--youtube) 22%, transparent);
+  color: #ffb8c2;
 }
 
 .toolbar__mobile-note {
@@ -515,6 +521,11 @@ html.stream-focused .stream-card__header {
   color: #b8ff9d;
 }
 
+.stream-card__badge--youtube {
+  background: color-mix(in srgb, var(--youtube) 18%, transparent);
+  color: #ffb3bd;
+}
+
 .stream-card__title {
   flex: 1;
   min-width: 0;
@@ -729,6 +740,11 @@ html.headers-hidden .stream-card:focus-within .stream-card__toolbar {
   color: var(--kick);
 }
 
+.stream-card--youtube .stream-card__name-badge-dot {
+  background: var(--youtube);
+  color: var(--youtube);
+}
+
 @keyframes stream-card-live-pulse {
   0%,
   100% {
@@ -774,6 +790,11 @@ html.headers-hidden .stream-card:focus-within .stream-card__toolbar {
 .stream-card__name-badge-platform--kick {
   background: var(--kick);
   color: #000;
+}
+
+.stream-card__name-badge-platform--youtube {
+  background: var(--youtube);
+  color: white;
 }
 
 .stream-card__overlay-controls {
@@ -936,6 +957,33 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   height: calc(var(--kick-render-width, 769px) * 9 / 16);
   transform: translate(-50%, -50%) scale(var(--kick-scale, 1));
   transform-origin: 50% 50%;
+}
+
+/*
+ * YouTube's persistent wrapper (.stream-card__iframe carries the sizing
+ * above; this just holds it while empty of a real player). The mount
+ * target/status message are simple full-size children — no extra
+ * positioning of their own needed since the wrap already fills the tile.
+ */
+.stream-card__youtube-target {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.stream-card__youtube-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  background: var(--surface);
 }
 
 .empty-state {

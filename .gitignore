@@ -3,3 +3,4 @@ dist
 .upstream-reference
 .DS_Store
 *.local
+local-deploy-secrets/

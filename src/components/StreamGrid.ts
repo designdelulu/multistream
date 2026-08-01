@@ -10,6 +10,12 @@ import { createPlaybackRecovery, type RecoveryTarget } from '../lib/playbackReco
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import { twitchParentList } from '../platforms/twitch';
+import { parseYouTubeToken, type YouTubeParsedToken } from '../platforms/youtube';
+import {
+  resolveYouTubeChannelLive,
+  type YouTubeResolveMode,
+  type YouTubeResolveResult,
+} from '../platforms/youtubeResolver';
 import type { StreamRef } from '../types';
 import type { StreamStore } from '../state/streams';
 
@@ -113,6 +119,37 @@ const twitchExceptionCounts = new Map<string, number>();
 let twitchMountSeq = 0;
 let twitchScriptPromise: Promise<boolean> | null = null;
 const TWITCH_SCRIPT_TIMEOUT_MS = 4000;
+
+/**
+ * YouTube state. Deliberately minimal compared to Twitch's — YouTube has a
+ * real pause API (no Kick-style blank-src hack needed) and this app adds no
+ * watchdog/recovery loop for it at all (see the autoplay policy note above
+ * mountYouTubeMedia): a player is constructed once, paused on freeze, and
+ * only ever resumed by a genuine user gesture. There is nothing here for a
+ * timer to check.
+ */
+const youtubePlayers = new Map<string, YT.Player>();
+const youtubeResolveControllers = new Map<string, AbortController>();
+let youtubeScriptPromise: Promise<boolean> | null = null;
+const YOUTUBE_SCRIPT_TIMEOUT_MS = 4000;
+
+/**
+ * Exactly one YouTube player, ever, per page session, may be constructed
+ * with autoplay requested: the very first one mounted. YouTube's own policy
+ * forbids multiple simultaneously autoplaying embeds, and the only way to
+ * guarantee that deterministically — without inventing a "was this the one
+ * that was supposed to keep playing" bookkeeping system like Twitch's — is
+ * to grant the privilege exactly once and never again automatically. Every
+ * later start (additional adds, focus-exit, tab-resume) requires a real
+ * click; see mountYouTubeMedia and toggleStreamFocus's youtube branch.
+ */
+let youtubeAutoplayGranted = false;
+
+function grantYouTubeAutoplayOnce(): boolean {
+  if (youtubeAutoplayGranted) return false;
+  youtubeAutoplayGranted = true;
+  return true;
+}
 
 /**
  * Latched playback state per api-mode player, driven purely by Twitch's own
@@ -478,11 +515,355 @@ function mountKickIframe(
   iframe.src = nextSrc;
 }
 
+let youtubeMountTargetSeq = 0;
+
+function createYouTubeMountTarget(): HTMLDivElement {
+  const target = document.createElement('div');
+  target.id = `youtube-embed-${++youtubeMountTargetSeq}`;
+  target.className = 'stream-card__youtube-target';
+  return target;
+}
+
+/**
+ * Persistent, positioned wrapper — carries `.stream-card__iframe` (the
+ * shared absolute/full-size CSS rule) so sizing never depends on what's
+ * currently mounted inside it: a bare target div awaiting construction, a
+ * constructed YT.Player's own iframe, or a status message. Only this
+ * wrapper's *children* are ever swapped; the wrapper itself is created once
+ * and never replaced, so generic per-card lookups (`.stream-card__iframe`)
+ * keep working exactly as they do for Twitch/Kick.
+ */
+function createYouTubePlayerWrap(): HTMLDivElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'stream-card__iframe stream-card__youtube-wrap';
+  wrap.append(createYouTubeMountTarget());
+  return wrap;
+}
+
+function ensureYouTubeMountTarget(card: HTMLElement): HTMLElement | null {
+  const wrap = card.querySelector<HTMLElement>('.stream-card__youtube-wrap');
+  if (!wrap) return null;
+  wrap.replaceChildren();
+  const target = createYouTubeMountTarget();
+  wrap.append(target);
+  return target;
+}
+
+/** Placeholder / offline / error text — replaces the wrap's children, never stacks over a live player. */
+function showYouTubeMessage(card: HTMLElement, text: string): void {
+  const wrap = card.querySelector<HTMLElement>('.stream-card__youtube-wrap');
+  if (!wrap) return;
+  wrap.replaceChildren();
+  const message = document.createElement('div');
+  message.className = 'stream-card__youtube-status';
+  message.textContent = text;
+  wrap.append(message);
+}
+
+/** developers.google.com/youtube/iframe_api_reference#onError */
+function mapYouTubeErrorCode(code: number): string {
+  switch (code) {
+    case 2:
+      return "That doesn't look like a valid YouTube video.";
+    case 5:
+      return "This video can't be played right now.";
+    case 100:
+      return 'This video is unavailable or private.';
+    case 101:
+    case 150:
+      return 'The channel owner has disabled embedding for this video.';
+    default:
+      return "This YouTube video couldn't be loaded.";
+  }
+}
+
+/**
+ * Lazily loads YouTube's IFrame Player API once, shared by every YouTube
+ * card, mirroring ensureTwitchEmbedScript exactly (including the ad-blocker
+ * fallback path below).
+ */
+function ensureYouTubeIframeApi(): Promise<boolean> {
+  if (youtubeScriptPromise) return youtubeScriptPromise;
+
+  youtubeScriptPromise = new Promise<boolean>((resolve) => {
+    if (window.YT?.Player) {
+      resolve(true);
+      return;
+    }
+
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (!ok) {
+        logEmbedEvent('script-fallback', { platform: 'youtube' });
+        reportEmbedRecovery('script-fallback', { platform: 'youtube' });
+      }
+      resolve(ok);
+    };
+
+    const timer = window.setTimeout(() => finish(false), YOUTUBE_SCRIPT_TIMEOUT_MS);
+
+    const previousCallback = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      previousCallback?.();
+      window.clearTimeout(timer);
+      finish(Boolean(window.YT?.Player));
+    };
+
+    const script = document.createElement('script');
+    script.src = 'https://www.youtube.com/iframe_api';
+    script.async = true;
+    script.onerror = () => {
+      window.clearTimeout(timer);
+      finish(false);
+    };
+    document.head.append(script);
+  });
+
+  return youtubeScriptPromise;
+}
+
+/** Only place a bare YouTube iframe gets built — the script-load-failed path. No onError detection in this mode (same limitation Twitch's fallback mode already accepts). */
+function mountYouTubeFallbackIframe(
+  mountTarget: HTMLElement,
+  videoId: string,
+  autoplay: boolean,
+): void {
+  const iframe = document.createElement('iframe');
+  iframe.className = 'stream-card__youtube-target';
+  iframe.allowFullscreen = true;
+  iframe.title = `YouTube video: ${videoId}`;
+  iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+  iframe.setAttribute(
+    'allow',
+    autoplay
+      ? 'autoplay; fullscreen; picture-in-picture; encrypted-media'
+      : 'fullscreen; picture-in-picture; encrypted-media',
+  );
+  iframe.src = buildEmbedUrl({ platform: 'youtube', channel: `video:${videoId}` }, true, {
+    autoplay,
+  });
+  mountTarget.replaceWith(iframe);
+}
+
+function constructYouTubePlayer(
+  card: HTMLElement,
+  mountTarget: HTMLElement,
+  videoId: string,
+  autoplay: boolean,
+): void {
+  const streamId = card.dataset.streamId ?? '';
+  if (!streamId) return;
+
+  const player = new YT.Player(mountTarget.id, {
+    width: '100%',
+    height: '100%',
+    videoId,
+    playerVars: {
+      autoplay: autoplay ? 1 : 0,
+      mute: 1,
+      playsinline: 1,
+      modestbranding: 1,
+      rel: 0,
+      origin: window.location.origin,
+    },
+    events: {
+      onError: (event) => {
+        logEmbedEvent('player-blocked', { platform: 'youtube', channel: card.dataset.channel, card });
+        youtubePlayers.delete(streamId);
+        showYouTubeMessage(card, mapYouTubeErrorCode(event.data));
+      },
+    },
+  });
+
+  youtubePlayers.set(streamId, player);
+  card.dataset.embedMuted = '1';
+}
+
+/** Ends the async chain from mountYouTubeMedia's first-ever-mount branch, for both a direct video and a resolved-live channel. */
+async function startYouTubePlayer(card: HTMLElement, videoId: string, autoplay: boolean): Promise<void> {
+  const available = await ensureYouTubeIframeApi();
+  if (!card.isConnected) return;
+  if (card.dataset.youtubeMountState !== 'pending') return; // superseded meanwhile (removed/reloaded)
+
+  const mountTarget = ensureYouTubeMountTarget(card);
+  if (!mountTarget) return;
+
+  if (!available) {
+    mountYouTubeFallbackIframe(mountTarget, videoId, autoplay);
+    card.dataset.youtubeMode = 'fallback';
+    card.dataset.youtubeMountState = 'mounted';
+    card.dataset.embedMuted = '1';
+    return;
+  }
+
+  constructYouTubePlayer(card, mountTarget, videoId, autoplay);
+  card.dataset.youtubeMode = 'api';
+  card.dataset.youtubeMountState = 'mounted';
+}
+
+/**
+ * Channel/handle/username tokens need a live-video lookup before anything
+ * can be mounted — this is the one place in the whole YouTube path that
+ * calls the network (public/api/youtube-resolve.php). Direct video tokens
+ * never reach this function.
+ */
+async function resolveAndMountYouTubeChannel(
+  card: HTMLElement,
+  token: Extract<YouTubeParsedToken, { resolutionType: 'channel' }>,
+  autoplay: boolean,
+): Promise<void> {
+  const streamId = card.dataset.streamId ?? '';
+  showYouTubeMessage(card, 'Checking for live stream…');
+
+  const controller = new AbortController();
+  youtubeResolveControllers.set(streamId, controller);
+
+  const mode: YouTubeResolveMode = token.kind;
+  const value =
+    token.kind === 'handle' ? token.handle : token.kind === 'username' ? token.username : token.channelId;
+
+  let result: YouTubeResolveResult;
+  try {
+    result = await resolveYouTubeChannelLive(mode, value, controller.signal);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return; // card removed meanwhile
+    result = {
+      status: 'error',
+      code: 'network_error',
+      message: "Couldn't reach the stream lookup service.",
+    };
+  }
+
+  youtubeResolveControllers.delete(streamId);
+  if (!card.isConnected) return;
+  if (card.dataset.youtubeMountState !== 'pending') return; // superseded meanwhile
+
+  if (result.status === 'live') {
+    if (result.channelTitle) {
+      const title = card.querySelector<HTMLElement>('.stream-card__title');
+      const nameChannel = card.querySelector<HTMLElement>('.stream-card__name-badge-channel');
+      if (title) title.textContent = result.channelTitle;
+      if (nameChannel) nameChannel.textContent = result.channelTitle;
+    }
+    void startYouTubePlayer(card, result.videoId, autoplay);
+    return;
+  }
+
+  if (result.status === 'offline') {
+    showYouTubeMessage(card, "This channel isn't live right now.");
+    card.dataset.youtubeMountState = 'offline';
+    return;
+  }
+
+  showYouTubeMessage(card, result.message);
+  card.dataset.youtubeMountState = 'error';
+}
+
+function forgetYouTubePlayer(streamId: string): void {
+  youtubeResolveControllers.get(streamId)?.abort();
+  youtubeResolveControllers.delete(streamId);
+  youtubePlayers.get(streamId)?.destroy();
+  youtubePlayers.delete(streamId);
+}
+
+/**
+ * Dispatcher mirroring mountTwitchIframe/mountKickIframe's role, but with a
+ * genuinely different shape: a YouTube card is only ever *constructed* once
+ * ('mount', wherever it's first triggered from — fresh add, page-load
+ * restore, or a delayed first tab-resume for a card that started hidden).
+ * Every subsequent call for an already-mounted card is either a no-op
+ * ('tab-resume'/'focus-resume' — see the autoplay policy above) or a real
+ * user gesture ('focus-unmute').
+ */
+function mountYouTubeMedia(
+  card: HTMLElement,
+  reason: 'mount' | 'tab-resume' | 'focus-resume' | 'focus-unmute' = 'mount',
+): void {
+  const streamId = card.dataset.streamId ?? '';
+  if (!streamId) return;
+  if (card.dataset.tabFrozen === '1') return;
+
+  const alreadyMounted =
+    card.dataset.youtubeMountState === 'mounted' || card.dataset.youtubeMountState === 'pending';
+
+  if (!alreadyMounted) {
+    card.dataset.youtubeMountState = 'pending';
+    const token = parseYouTubeToken(card.dataset.channel ?? '');
+    if (!token) {
+      showYouTubeMessage(card, "This YouTube link couldn't be understood.");
+      card.dataset.youtubeMountState = 'error';
+      return;
+    }
+
+    const autoplay = grantYouTubeAutoplayOnce();
+    if (token.resolutionType === 'video') {
+      void startYouTubePlayer(card, token.videoId, autoplay);
+      return;
+    }
+    void resolveAndMountYouTubeChannel(card, token, autoplay);
+    return;
+  }
+
+  if (reason !== 'focus-unmute') {
+    // 'tab-resume' / 'focus-resume': deliberate no-op. Resuming every
+    // backgrounded YouTube card at once would itself be a simultaneous-
+    // autoplay violation, so paused stays paused until a real click.
+    return;
+  }
+
+  if (card.dataset.youtubeMode === 'fallback') {
+    const iframe = card.querySelector<HTMLIFrameElement>('.stream-card__youtube-wrap iframe');
+    const match = iframe?.src.match(/\/embed\/([^?]+)/);
+    if (iframe && match) {
+      iframe.src = buildEmbedUrl({ platform: 'youtube', channel: `video:${match[1]}` }, false, {
+        autoplay: true,
+      });
+    }
+    card.dataset.embedMuted = '0';
+    return;
+  }
+
+  const player = youtubePlayers.get(streamId);
+  player?.unMute();
+  player?.playVideo();
+  card.dataset.embedMuted = '0';
+}
+
+/**
+ * Manual per-card reload — always takes effect immediately (a real click),
+ * unlike the autoplay-once policy above: it does not consume or check
+ * youtubeAutoplayGranted, exactly mirroring reloadKickPlayer's "an explicit
+ * user action is a different case" reasoning.
+ */
+function reloadYouTubePlayer(card: HTMLElement): void {
+  const streamId = card.dataset.streamId ?? '';
+  const token = parseYouTubeToken(card.dataset.channel ?? '');
+  if (!streamId || !token) return;
+
+  forgetYouTubePlayer(streamId);
+  delete card.dataset.youtubeMode;
+  card.dataset.youtubeMountState = 'pending';
+
+  reportEmbedRecovery('forced-remount', { platform: 'youtube', reason: 'manual' });
+
+  if (token.resolutionType === 'video') {
+    void startYouTubePlayer(card, token.videoId, true);
+    return;
+  }
+  void resolveAndMountYouTubeChannel(card, token, true);
+}
+
 function mountStreamMedia(
   card: HTMLElement,
   muted: boolean,
   reason: 'mount' | 'tab-resume' | 'focus-resume' | 'focus-unmute' = 'mount',
 ): void {
+  if (card.dataset.platform === 'youtube') {
+    mountYouTubeMedia(card, reason);
+    return;
+  }
   if (card.dataset.platform === 'kick') {
     mountKickIframe(card, muted, reason);
     return;
@@ -546,6 +927,34 @@ function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): vo
         player.pause();
         continue;
       }
+    }
+
+    if (card.dataset.platform === 'youtube') {
+      // YouTube has a real pause API — no Kick-style blank-src hack needed,
+      // and pausing (not unmounting) is what keeps the iframe mounted per
+      // the "recreate only on identity change" rule.
+      const player = youtubePlayers.get(card.dataset.streamId ?? '');
+      if (player) {
+        logEmbedEvent('focus-freeze', { platform: 'youtube', channel: card.dataset.channel, card });
+        player.pauseVideo();
+        continue;
+      }
+      // Ad-blocked fallback mode has no pause API — reload muted/non-autoplay
+      // instead of blanking, so the embed URL (and its videoId) survives for
+      // a later focus-unmute to read back and resume from.
+      if (card.dataset.youtubeMode === 'fallback') {
+        const fallbackIframe = card.querySelector<HTMLIFrameElement>('.stream-card__youtube-wrap iframe');
+        const match = fallbackIframe?.src.match(/\/embed\/([^?]+)/);
+        if (fallbackIframe && match) {
+          logEmbedEvent('focus-freeze', { platform: 'youtube', channel: card.dataset.channel, card });
+          fallbackIframe.src = buildEmbedUrl(
+            { platform: 'youtube', channel: `video:${match[1]}` },
+            true,
+            { autoplay: false },
+          );
+        }
+      }
+      continue;
     }
 
     const iframe = streamIframe(card);
@@ -743,6 +1152,9 @@ export function toggleStreamFocus(container: HTMLElement, streamId: string): voi
     // mode === 'pending': the in-flight construction reads embedMuted once
     // the script settles — nothing to do here.
   }
+  if (focusedCard?.dataset.platform === 'youtube') {
+    mountYouTubeMedia(focusedCard, 'focus-unmute');
+  }
 }
 
 export function getFocusedStreamId(): string | null {
@@ -871,6 +1283,8 @@ function createPlayerElement(
     kickFrame.className = 'stream-card__kick-frame';
     kickFrame.append(iframe);
     player.append(kickFrame);
+  } else if (stream.platform === 'youtube') {
+    player.append(createYouTubePlayerWrap());
   } else {
     player.append(createTwitchMountPoint());
   }
@@ -1025,6 +1439,28 @@ export function freezeStreamPlayers(container: HTMLElement): void {
         player?.pause();
         continue;
       }
+    }
+
+    if (card.dataset.platform === 'youtube') {
+      const player = youtubePlayers.get(card.dataset.streamId ?? '');
+      if (player) {
+        logEmbedEvent('tab-freeze', { platform: 'youtube', channel: card.dataset.channel, card });
+        player.pauseVideo();
+        continue;
+      }
+      if (card.dataset.youtubeMode === 'fallback') {
+        const fallbackIframe = card.querySelector<HTMLIFrameElement>('.stream-card__youtube-wrap iframe');
+        const match = fallbackIframe?.src.match(/\/embed\/([^?]+)/);
+        if (fallbackIframe && match) {
+          logEmbedEvent('tab-freeze', { platform: 'youtube', channel: card.dataset.channel, card });
+          fallbackIframe.src = buildEmbedUrl(
+            { platform: 'youtube', channel: `video:${match[1]}` },
+            true,
+            { autoplay: false },
+          );
+        }
+      }
+      continue;
     }
 
     const iframe = streamIframe(card);
@@ -1203,6 +1639,10 @@ function reloadKickPlayer(card: HTMLElement): void {
 function reloadStreamCard(card: HTMLElement): void {
   if (card.dataset.platform === 'kick') {
     reloadKickPlayer(card);
+    return;
+  }
+  if (card.dataset.platform === 'youtube') {
+    reloadYouTubePlayer(card);
     return;
   }
   if (card.dataset.platform !== 'twitch') return;
@@ -1590,6 +2030,9 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
         logPlayerEvent('destroy', { streamId: id, channel: card.dataset.channel });
         twitchPlayers.get(id)?.destroy();
         forgetTwitchPlayer(id);
+      }
+      if (card.dataset.platform === 'youtube') {
+        forgetYouTubePlayer(id);
       }
       card.remove();
       continue;

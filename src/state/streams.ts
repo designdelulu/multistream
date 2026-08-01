@@ -34,7 +34,8 @@ function loadFromStorage(): Omit<StreamRef, 'id' | 'muted'>[] {
           item &&
             typeof item === 'object' &&
             ((item as { platform?: string }).platform === 'twitch' ||
-              (item as { platform?: string }).platform === 'kick') &&
+              (item as { platform?: string }).platform === 'kick' ||
+              (item as { platform?: string }).platform === 'youtube') &&
             typeof (item as { channel?: string }).channel === 'string',
         ),
     );

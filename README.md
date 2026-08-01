@@ -1,6 +1,6 @@
 # MultiStream.cc
 
-Watch **Twitch** and **Kick** streams online on one page — a responsive grid that keeps every player as large as possible at 16:9.
+Watch **Twitch**, **Kick**, and **YouTube** streams online on one page — a responsive grid that keeps every player as large as possible at 16:9.
 
 ![MultiStream.cc — Watch Twitch and Kick streams online](./public/og-image.png)
 
@@ -17,7 +17,8 @@ Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](http
 
 MultiStream.cc is a modern multi-stream viewer for Twitch and Kick — watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
 
-- **Twitch + Kick** on the same page via plain embed iframes (same approach as [MultistreamGrid](https://multistreamgrid.com))
+- **Twitch + Kick + YouTube** on the same page via official embeds (same approach as [MultistreamGrid](https://multistreamgrid.com))
+- **YouTube channels resolve to whatever's live right now** — a handle, username, channel ID, or channel URL is checked server-side on each load; a direct video/Shorts/live URL loads exactly that video, no lookup needed
 - **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
 - **Username dropdown** — type a name (or `@name`) and pick Twitch or Kick; Enter uses your last-chosen platform
@@ -28,8 +29,8 @@ MultiStream.cc is a modern multi-stream viewer for Twitch and Kick — watch par
 - **Shareable path URLs** like `/t:username/k:username`
 - **× close** and **focus** controls per stream — focus fills the area below the toolbar, opens that stream’s Twitch chat, and remounts unmuted (Kick has no chat panel)
 - **Twitch chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
-- **Streams always boot muted** — unmute on focus or from the Twitch/Kick player chrome
-- **No backend required** — static deploy, official embeds only
+- **Streams always boot muted** — unmute on focus or from the platform's own player chrome
+- **Static deploy for everything except one thing** — direct video URLs, and all of Twitch/Kick, need no backend at all. Resolving a YouTube handle/channel to its current live video needs a small server-side PHP endpoint (API keys can't live in client JS) — see [YouTube setup](#youtube-setup) below.
 
 Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) project, rebuilt for modern platforms and maintainability.
 
@@ -84,6 +85,8 @@ Upload everything inside **`dist/`** to your domain’s web root (e.g. `multistr
 dist/
 ├── index.html
 ├── assets/
+├── api/
+│   └── youtube-resolve.php
 ├── og-image.png
 ├── robots.txt
 ├── sitemap.xml
@@ -94,11 +97,35 @@ Steps:
 
 1. Run `npm run build` locally whenever you change the app.
 2. In DreamHost File Manager or FTP, open the folder for **multistream.cc**.
-3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root.
+3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes `api/youtube-resolve.php`.
 4. Confirm `index.html` sits directly in the domain root.
-5. Visit `https://multistream.cc/` — Twitch embeds will automatically use `multistream.cc` as the `parent` domain.
+5. Complete the one-time [YouTube setup](#youtube-setup) below (config file outside the web root) — YouTube channel/handle streams won't resolve until that's done, but direct video URLs and all Twitch/Kick behavior work without it.
+6. Visit `https://multistream.cc/` — Twitch embeds will automatically use `multistream.cc` as the `parent` domain.
 
-Path URLs like `/t:username/k:username` require the included `.htaccess` SPA fallback on Apache/DreamHost.
+Path URLs like `/t:username/k:username/y:handle:username` require the included `.htaccess` SPA fallback on Apache/DreamHost.
+
+---
+
+## YouTube setup
+
+Resolving a YouTube handle/username/channel-ID/channel-URL to its current live video needs the YouTube Data API v3, which needs an API key — and an API key must never live in client-side JavaScript. So this one lookup runs server-side, via `public/api/youtube-resolve.php` (deployed as a normal static file alongside the rest of `dist/`, since DreamHost runs PHP natively — no extra hosting, no database, no framework).
+
+**Direct video/Shorts/live/`youtu.be` URLs never need any of this** — they're parsed entirely in the browser.
+
+One-time setup on your DreamHost account, **after** you've uploaded `dist/`:
+
+1. Get a YouTube Data API v3 key from the [Google Cloud Console](https://console.cloud.google.com/) (enable the "YouTube Data API v3" on a project, create an API key).
+2. Create a file **outside** the `multistream.cc/` web root — e.g. at `~/multistream-secrets/youtube-config.php` in your DreamHost home directory (sibling to, not inside, `~/multistream.cc/`):
+   ```php
+   <?php
+   return [
+       'api_key' => 'YOUR_YOUTUBE_DATA_API_KEY_HERE',
+   ];
+   ```
+3. Open `dist/api/youtube-resolve.php` (before uploading, or edit it directly on the server) and check the `YOUTUBE_CONFIG_PATH`/`YOUTUBE_CACHE_DIR` constants near the top match where you put that file — the default assumes the common `~/<domain>/api/` DreamHost layout (two directories up from the PHP file, i.e. your home directory), but confirm it against your actual account.
+4. That's it — no restart needed. The cache directory (`~/multistream-secrets/cache/`) is created automatically on first use; if it can't be created/written, lookups still work, just without caching.
+
+If the key is missing or misconfigured, YouTube channel/handle streams show a clear "isn't configured yet" message in-tile — nothing else on the site is affected.
 
 ---
 
@@ -124,10 +151,12 @@ Type a username to open a Twitch / Kick dropdown (leading `@` is stripped). Ente
 
 | You enter | Result |
 |---|---|
-| Plain `username` / `@username` + dropdown | Twitch or Kick from the row you click |
+| Plain `username` / `@username` + dropdown | Twitch, Kick, or YouTube from the row you click |
 | Plain `username` + Enter | Last-used platform |
-| `t:username` / `k:username` | That platform |
+| `t:username` / `k:username` / `y:username` | That platform |
 | `twitch.tv/username` / `kick.com/username` | Platform from URL |
+| A YouTube video/Shorts/live/`youtu.be` URL | That exact video |
+| A YouTube `/@handle`, `/channel/UC…`, or channel URL | That channel's current live stream |
 
 Drag a card’s **header** to reorder streams (or the **drag** handle in the hover toolbar when headers are hidden); the path URL updates and players keep playing (DOM move only).
 
@@ -137,23 +166,30 @@ When you return to the site without a share URL in the path, your last lineup is
 
 ## Architecture
 
-Vanilla **TypeScript + Vite** — no React, no server.
+Vanilla **TypeScript + Vite** on the frontend — no React. One small PHP
+endpoint on the server, used only for YouTube channel/handle resolution (see
+[YouTube setup](#youtube-setup)); everything else is a static deploy.
 
 ```
 src/
-├── platforms/     # Twitch & Kick adapters (parse input, build embed URLs)
+├── platforms/     # Twitch, Kick & YouTube adapters (parse input, build embed URLs)
 ├── state/         # Stream list, chat visibility, headers mode, URL sync
 ├── components/    # Grid, toolbar, chat, reorder, player cards
 ├── lib/           # Viewport helpers
 └── styles/        # Layout and UI
+public/api/        # youtube-resolve.php — the one server-side piece
 ```
 
 Each platform implements a small adapter:
 
-- `parseInput()` — username, URL, or `t:` / `k:` prefix
+- `parseInput()` — username, URL, or `t:` / `k:` / `y:` prefix
 - `buildEmbedUrl()` — iframe src with correct embed parameters
 
-Adding a third platform later means adding one adapter file and registering it — no changes to the grid or state layer.
+YouTube's adapter additionally encodes its structured identity (video vs.
+channel, handle/username/channel-ID) into a compact token stored in the same
+`channel` field Twitch/Kick already use — no extra state, and channel-type
+tokens are resolved to a live video asynchronously at mount time rather than
+through `buildEmbedUrl` (which only handles the direct-video case).
 
 ---
 
@@ -165,8 +201,9 @@ Adding a third platform later means adding one adapter file and registering it �
 - **Kick** uses the official iframe embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
 - **Layout packing** follows MultiTwitch’s `optimize_size` idea: pick the column count and 16:9 size that fits *every* stream in the streams pane. Chat docks beside the grid and triggers a reflow — it does not cover players (Twitch pauses embeds that are clipped or scrolled off-screen).
 - **Kick volume / control size:** Kick’s embed switches UI by **iframe layout width**. Below **769px** it uses mobile/tablet chrome (tiny overlays, often no volume). At **769px+** it uses desktop chrome with a speaker icon — hover the video, then the speaker, for the volume slider. When the packed cell is narrower than 769px, MultiStream still renders the Kick iframe at ≥769px and **CSS-scales** it into the cell so desktop chrome (including volume) stays available while the grid fits on-screen.
-- **Mute on load:** Both platforms boot muted. Focus reloads the focused stream unmuted (user click); exit keeps that stream unmuted. Tab hide / focus-hide blanks background iframes and remounts with each card's saved mute preference on resume.
-- **Chat** is Twitch-only (Kick has no official chat embed). Hidden on phones.
+- **Mute on load:** All platforms boot muted. Focus reloads/unmutes the focused stream (user click); exit keeps that stream unmuted. Tab hide / focus-hide pauses or blanks background players depending on platform, and resumes with each card's saved mute preference — **except YouTube**, see below.
+- **YouTube** uses the official IFrame Player API (`www.youtube.com/iframe_api`), with a bare-iframe fallback if that script is blocked. Channel/handle inputs resolve to a live `videoId` server-side on every load (see [YouTube setup](#youtube-setup)); direct video/Shorts/live/`youtu.be` URLs resolve locally with no network call. **Autoplay:** YouTube's own policy forbids multiple simultaneously autoplaying embeds, so only the very first YouTube player mounted in a page session ever requests autoplay — every later one (additional adds, focus-exit, tab-resume) stays paused until a real click, either on this app's Focus control or YouTube's own native play button. Embedding-disabled or unavailable videos show a clear in-tile message via the player's `onError` event; an offline channel shows "isn't live right now" rather than loading anything else.
+- **Chat** is Twitch-only (Kick and YouTube have no equivalent panel in this app). Hidden on phones.
 
 ---
 

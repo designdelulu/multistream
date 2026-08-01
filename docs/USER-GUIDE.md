@@ -1,6 +1,6 @@
 # MultiStream.cc — User guide
 
-Watch Twitch and Kick on one page. MultiStream.cc is a modern multi-stream viewer — this guide covers the features and how to use them.
+Watch Twitch, Kick, and YouTube on one page. MultiStream.cc is a modern multi-stream viewer — this guide covers the features and how to use them.
 
 **Live site:** [multistream.cc](https://multistream.cc)
 
@@ -10,8 +10,8 @@ Watch Twitch and Kick on one page. MultiStream.cc is a modern multi-stream viewe
 
 | Feature | What it does |
 |---|---|
-| Twitch + Kick grid | Official player embeds side by side, packed at the largest 16:9 size that fits |
-| Username dropdown | Type a name (or `@name`) and choose Twitch or Kick |
+| Twitch + Kick + YouTube grid | Official player embeds side by side, packed at the largest 16:9 size that fits |
+| Username dropdown | Type a name (or `@name`) and choose Twitch, Kick, or YouTube |
 | Share link | Copy the current lineup URL from the toolbar |
 | Clear all | Remove every stream (with confirmation) |
 | Hide headers | Compact grid; hover a card to reveal controls below the video (never over it) |
@@ -27,13 +27,21 @@ Watch Twitch and Kick on one page. MultiStream.cc is a modern multi-stream viewe
 ## Adding streams
 
 1. Click the username field in the toolbar.
-2. Type a channel name. A dropdown offers **Twitch** and **Kick**.
-3. Click a row to add that platform, or use **ArrowDown** / **ArrowUp** to highlight Twitch or Kick and press **Enter**. Plain usernames require that explicit pick — **Enter** alone only works for URLs and `t:` / `k:` prefixes.
-4. You can also paste a Twitch/Kick URL or use `t:username` / `k:username`.
+2. Type a channel name. A dropdown offers **Twitch**, **Kick**, and **YouTube**.
+3. Click a row to add that platform, or use **ArrowDown** / **ArrowUp** to highlight one and press **Enter**. Plain usernames require that explicit pick — **Enter** alone only works for URLs and `t:` / `k:` / `y:` prefixes.
+4. You can also paste a Twitch/Kick/YouTube URL, or use `t:username` / `k:username`.
 
 Leading `@` is stripped automatically.
 
 **Add Stream** stays as a text button. Share, Clear, Headers, and Chat are icons that show their labels on hover.
+
+### YouTube
+
+YouTube accepts more input shapes than Twitch/Kick, since a channel and a video are different things there:
+
+- A direct video URL (`youtube.com/watch?v=…`, `youtu.be/…`, `/live/…`, `/shorts/…`) loads exactly that video.
+- A handle (`@name` or `name`), legacy username, channel ID, or channel URL loads that channel's **current live stream** — resolved fresh on each page load, never a cached recording. If the channel isn't live right now, the card says so clearly instead of loading something else.
+- Only the **first** YouTube player on the page autoplays (muted). Every other YouTube player waits for you to press play — this is a YouTube platform rule, not a MultiStream limitation, and it applies even after adding/removing streams or returning to the tab.
 
 ---
 
@@ -71,10 +79,10 @@ If you close the tab and come back to the home page without a path URL, your las
 You can also build URLs by hand:
 
 ```
-https://multistream.cc/t:username/k:username
+https://multistream.cc/t:username/k:username/y:handle:username
 ```
 
-- `t:` = Twitch, `k:` = Kick (lowercase preferred; uppercase still works)
+- `t:` = Twitch, `k:` = Kick, `y:` = YouTube (lowercase preferred; uppercase still works for `t:`/`k:`)
 - Legacy query form: `?streams=t:username,k:username`
 
 ---
