@@ -86,6 +86,14 @@ type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
 let focusedStreamId: string | null = null;
 let focusSessionActive = false;
 let focusChangeHandler: FocusChangeHandler | null = null;
+/**
+ * Api-mode Twitch players confirmed playing right before the current focus
+ * session started, captured before freezeFocusHiddenPlayers pauses anything —
+ * the only moment "should still be playing after exit" can be read. Cleared
+ * the instant it's consumed (or superseded by a new focus transaction), so it
+ * never outlives the session it describes.
+ */
+let focusEntrySnapshot: { ids: readonly string[]; startedAt: number } | null = null;
 let escapeBound = false;
 let layoutFrame = 0;
 let layoutRetries = 0;
@@ -632,7 +640,7 @@ function syncFocusDom(container: HTMLElement): void {
   }
 }
 
-function scheduleGridLayout(container: HTMLElement): void {
+function scheduleGridLayout(container: HTMLElement, onSettled?: () => void): void {
   layoutRetries = 0;
   if (layoutFrame) {
     cancelAnimationFrame(layoutFrame);
@@ -641,6 +649,12 @@ function scheduleGridLayout(container: HTMLElement): void {
     layoutFrame = requestAnimationFrame(() => {
       layoutFrame = 0;
       updateGridLayout(container);
+      // One more frame so the browser has applied the new box before anyone
+      // acts on it — same reasoning as the extra frame beginAddRemoveRecovery
+      // waits for after measureAndLayout.
+      if (onSettled) {
+        requestAnimationFrame(onSettled);
+      }
     });
   });
 }
@@ -658,6 +672,19 @@ function notifyFocusChange(prevFocusedId: string | null): void {
 
 export function setFocusedStream(container: HTMLElement, streamId: string | null): void {
   const prevFocusedId = focusedStreamId;
+  const isEntry = prevFocusedId === null && streamId !== null;
+  const isExit = prevFocusedId !== null && streamId === null;
+
+  // Must read "confirmed playing" here, before syncFocusPlayers below pauses
+  // every other api-mode Twitch player for the focus session — that pause is
+  // exactly what would make a later snapshot read empty.
+  if (isEntry) {
+    focusEntrySnapshot = {
+      ids: snapshotPlayingTwitchPlayers(container).filter((id) => id !== streamId),
+      startedAt: Date.now(),
+    };
+  }
+
   focusedStreamId = streamId;
   syncFocusDom(container);
   syncFocusPlayers(container, prevFocusedId);
@@ -670,7 +697,25 @@ export function setFocusedStream(container: HTMLElement, streamId: string | null
     notifyFocusChange(prevFocusedId);
   }
 
-  scheduleGridLayout(container);
+  // A genuine exit is the only transition that owes the snapshot a recovery
+  // pass. Every other path through here — including the entry that just set
+  // it above — leaves it alone or drops it, never acts on it.
+  if (isExit && focusEntrySnapshot && focusEntrySnapshot.ids.length > 0) {
+    const snapshot = focusEntrySnapshot;
+    focusEntrySnapshot = null;
+    logPlayerEvent('focus-exit-snapshot', { streamIds: snapshot.ids });
+    scheduleGridLayout(container, () =>
+      beginFocusExitRecovery(container, snapshot.ids, snapshot.startedAt),
+    );
+  } else {
+    if (!isEntry) {
+      // A new focus transaction (exit-with-nothing-to-restore, or a direct
+      // switch to another stream) invalidates whatever the previous session
+      // was still waiting to conclude.
+      focusEntrySnapshot = null;
+    }
+    scheduleGridLayout(container);
+  }
 }
 
 export function toggleStreamFocus(container: HTMLElement, streamId: string): void {
@@ -794,7 +839,9 @@ function createPlayerElement(
   removeButton.className = 'stream-card__close';
   removeButton.title = 'Remove stream';
   removeButton.setAttribute('aria-label', 'Remove stream');
-  removeButton.innerHTML = '<span aria-hidden="true">×</span>';
+  // Same icon and markup as the toolbar's overlayRemove below — one
+  // mathematically symmetric SVG, no text glyph, no per-location offset.
+  removeButton.innerHTML = ICON_CLOSE;
   removeButton.addEventListener('click', () => {
     if (focusedStreamId === stream.id) {
       setFocusedStream(container, null);
@@ -918,12 +965,35 @@ function createPlayerElement(
   card.append(header, player, toolbar);
 
   if (stream.platform === 'twitch') {
-    // Headers-hidden reveals this toolbar on hover by shrinking the player
-    // box (main.css) — a real iframe resize we otherwise never observe.
-    // Check once the shrink/grow settles instead of waiting on the watchdog.
+    /*
+     * Headers-hidden reveals this toolbar on hover by shrinking the player
+     * box (main.css) — a real iframe resize we otherwise never observe, on
+     * both open and close. A single check at transitionend used to be the
+     * only recovery for it, and that single 500ms window can race Twitch's
+     * own asynchronous pause reaction to a resize (same lag documented in
+     * lib/playbackRecovery.ts for add/remove) and miss it entirely. This
+     * runs the identical bounded, multi-pass schedule used there instead,
+     * gated the same way: only a card Twitch had itself confirmed playing
+     * right before the transition started is ever eligible to be nudged.
+     */
+    let toolbarTransitionWasPlaying = false;
+    toolbar.addEventListener('transitionstart', (event) => {
+      if (event.propertyName !== 'height') return;
+      toolbarTransitionWasPlaying = twitchPlayback.get(stream.id) === 'playing';
+      logPlayerEvent('toolbar-transition-start', {
+        streamId: stream.id,
+        mountId: card.querySelector<HTMLElement>('.stream-card__iframe')?.id,
+        wasPlaying: toolbarTransitionWasPlaying,
+      });
+    });
     toolbar.addEventListener('transitionend', (event) => {
       if (event.propertyName !== 'height') return;
-      verifyAndRecoverTwitchPlayer(card, false);
+      logPlayerEvent('toolbar-transition-end', {
+        streamId: stream.id,
+        mountId: card.querySelector<HTMLElement>('.stream-card__iframe')?.id,
+      });
+      if (!toolbarTransitionWasPlaying) return;
+      playbackRecovery.hover(createTwitchRecoveryTarget(stream.id, Date.now()), 'toolbar-hover');
     });
   }
 
@@ -1344,6 +1414,38 @@ export function beginAddRemoveRecovery(
   });
 
   playbackRecovery.begin(targets, cause);
+}
+
+/**
+ * Start the bounded post-focus-exit checks for exactly the api-mode Twitch
+ * players that were confirmed playing before the focus session began. Call
+ * once the grid has settled back into its pre-focus layout — that resize is
+ * what Twitch reacts to, same as add/remove.
+ *
+ * `startedAt` is the pre-focus snapshot time, not this call's time: a card
+ * clicked into (and thereby engaged) at any point during the focus session —
+ * not just after exit — must be excluded, and isEligible()'s engagement
+ * check compares against whatever startedAt it was given.
+ */
+export function beginFocusExitRecovery(
+  container: HTMLElement,
+  snapshotIds: readonly string[],
+  startedAt: number,
+): void {
+  const targets = snapshotIds
+    .filter((streamId) => {
+      const card = cardForStream(streamId);
+      return Boolean(card?.isConnected) && container.contains(card);
+    })
+    .map((streamId) => createTwitchRecoveryTarget(streamId, startedAt));
+
+  logPlayerEvent('layout-settled', {
+    cause: 'focus-exit',
+    survivors: targets.map((target) => target.id),
+    dropped: snapshotIds.filter((id) => !targets.some((target) => target.id === id)),
+  });
+
+  playbackRecovery.focusExit(targets, 'focus-exit');
 }
 
 /**

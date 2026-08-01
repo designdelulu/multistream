@@ -585,11 +585,6 @@ html.stream-focused .stream-card__header {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.stream-card__close span {
-  display: block;
-  margin-top: -1px;
-}
-
 .stream-card__player {
   position: relative;
   width: 100%;

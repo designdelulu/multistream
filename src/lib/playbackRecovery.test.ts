@@ -553,4 +553,312 @@ describe('createPlaybackRecovery', () => {
     expect(added.plays).toBe(3);
     expect(recovery.pendingIds()).toEqual([]);
   });
+
+  /*
+   * hover() backs the headers-hidden toolbar-transition recovery (open and
+   * close). It reuses the coordinator's own bounded schedule and safety
+   * rules — these tests pin the one new property it needs: it must never
+   * disturb a transaction or new-player run for the same id, only ever
+   * supersede a previous hover run.
+   */
+  describe('hover()', () => {
+    it('starts a bounded run using the default multi-pass schedule', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.hover(player, 'toolbar-hover');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      timers.advance(750);
+      expect(player.plays).toBe(2);
+      timers.advance(750);
+      expect(player.plays).toBe(3);
+      timers.advance(1500);
+      expect(player.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+
+      timers.advance(CONFIRM_TAIL_MS);
+      expect(recovery.pendingIds()).toEqual([]);
+      const exhausted = events.find((entry) => entry.event === 'exhausted');
+      expect(exhausted?.detail.reason).toBe('still-paused');
+    });
+
+    it('a later toolbar transition on the same card supersedes the earlier hover run', () => {
+      const { timers, recovery } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.hover(player, 'toolbar-open');
+      timers.advance(0);
+      expect(player.plays).toBe(1); // open run's immediate pass
+
+      // Close transition fires before the open run's next scheduled retry —
+      // same id, so start() replaces the run outright (clearing its pending
+      // timeout) rather than layering a second one alongside it.
+      timers.advance(400);
+      recovery.hover(player, 'toolbar-close');
+
+      // Run well past both a full new run AND what the superseded run's own
+      // remaining passes would have added, if it had wrongly kept running.
+      timers.advance(FULL_RUN_MS + 5000);
+
+      // 1 from the superseded open run's single completed pass, plus exactly
+      // one full run's worth from the close run — never a second full run's
+      // worth layered on top, which is what an uncancelled old run would add.
+      expect(player.plays).toBe(1 + RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+
+    it('does not cancel an in-flight transaction run for the same id', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.begin([player], 'add');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      // A toolbar transition happens to fire for the same card mid-transaction.
+      recovery.hover(player, 'toolbar-hover');
+      expect(events.some((entry) => entry.event === 'cancel')).toBe(false);
+
+      // The transaction run's own schedule keeps running untouched.
+      timers.advance(FULL_RUN_MS);
+      expect(player.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+    });
+
+    it('does not cancel an in-flight new-player run for the same id', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.track(player, 'new-player');
+      recovery.hover(player, 'toolbar-hover');
+
+      expect(events.some((entry) => entry.event === 'cancel')).toBe(false);
+
+      timers.advance(60_000);
+      expect(player.plays).toBe(3); // NEW_PLAYER_RETRY_OFFSETS_MS.length, untouched
+    });
+
+    it('hover runs for separate cards do not cancel each other', () => {
+      const { timers, recovery } = setup();
+      const first = createFakePlayer('a', true);
+      const second = createFakePlayer('b', true);
+
+      recovery.hover(first, 'toolbar-hover');
+      recovery.hover(second, 'toolbar-hover');
+
+      timers.advance(60_000);
+      expect(first.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(second.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+    });
+
+    it('never restarts a player that was never paused', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', false);
+
+      recovery.hover(player, 'toolbar-hover');
+      timers.advance(FULL_RUN_MS + 5000);
+
+      expect(player.plays).toBe(0);
+      const success = events.find((entry) => entry.event === 'success');
+      expect(success?.detail.reason).toBe('never-paused');
+    });
+
+    it('a card removed or its player replaced mid-run receives no further play()', () => {
+      const { timers, recovery } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.hover(player, 'toolbar-hover');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      player.eligible = false; // card removed / player instance replaced
+      timers.advance(FULL_RUN_MS + 60_000);
+
+      expect(player.plays).toBe(1);
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+
+    it('an offline target is skipped without a play() call', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+      player.eligible = false; // offline in the real target's isEligible()
+
+      recovery.hover(player, 'toolbar-hover');
+      timers.advance(FULL_RUN_MS + 60_000);
+
+      expect(player.plays).toBe(0);
+      const skip = events.find((entry) => entry.event === 'skip');
+      expect(skip?.detail.reason).toBe('ineligible');
+    });
+
+    it('stops on PLAYBACK_BLOCKED rather than retrying play()', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.hover(player, 'toolbar-hover');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      recovery.markBlocked('a');
+      timers.advance(FULL_RUN_MS);
+
+      expect(player.plays).toBe(1);
+      expect(events.some((entry) => entry.event === 'blocked')).toBe(true);
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+
+    it('every hover run terminates — bounded, no infinite retry', () => {
+      const { timers, recovery } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.hover(player, 'toolbar-hover');
+      timers.advance(FULL_RUN_MS + 120_000);
+
+      expect(player.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+  });
+
+  /*
+   * focusExit() covers the regression where exiting focus mode left every
+   * non-focused stream paused: freezeFocusHiddenPlayers pauses them on entry,
+   * and the bare play() resumeFocusHiddenPlayers issues on exit races the
+   * same async post-resize Twitch pause that begin()/hover() already exist to
+   * catch — with nothing rechecking it, streams sat paused until the next
+   * watchdog tick. These tests pin the one property that matters for that
+   * fix: a stale toolbar-hover run must never survive to block it, while an
+   * in-flight transaction or new-player run always does.
+   */
+  describe('focusExit()', () => {
+    it('starts bounded runs for every target using the default multi-pass schedule', () => {
+      const { timers, recovery } = setup();
+      const first = createFakePlayer('a', true);
+      const second = createFakePlayer('b', true);
+
+      recovery.focusExit([first, second], 'focus-exit');
+      timers.advance(FULL_RUN_MS);
+
+      expect(first.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(second.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+
+    it('begins recovery immediately on call, not after a long delay', () => {
+      const { timers, recovery } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.focusExit([player], 'focus-exit');
+      // Pass 0 is offset 0ms — no need to advance the clock at all for the
+      // first attempt, unlike the 15-20s the watchdog/nudge fallback needed.
+      timers.advance(0);
+
+      expect(player.plays).toBe(1);
+    });
+
+    it('supersedes a stale toolbar-hover run for the same id', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.hover(player, 'toolbar-hover');
+      timers.advance(0);
+      expect(player.plays).toBe(1); // the stale hover run's own immediate pass
+
+      recovery.focusExit([player], 'focus-exit');
+      timers.advance(FULL_RUN_MS);
+
+      // 1 from the superseded hover run, plus exactly one full run's worth
+      // from focus-exit — never blocked, never layered into a second run on
+      // top of a hover run left running.
+      expect(player.plays).toBe(1 + RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(recovery.pendingIds()).toEqual([]);
+      expect(events.filter((entry) => entry.event === 'track' && entry.detail.cause === 'focus-exit')).toHaveLength(1);
+    });
+
+    it('does not disturb an in-flight transaction run for the same id', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.begin([player], 'add');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      recovery.focusExit([player], 'focus-exit');
+      expect(events.some((entry) => entry.event === 'cancel')).toBe(false);
+
+      // The transaction run's own schedule keeps running untouched.
+      timers.advance(FULL_RUN_MS);
+      expect(player.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+    });
+
+    it('does not disturb an in-flight new-player run for the same id', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.track(player, 'new-player');
+      recovery.focusExit([player], 'focus-exit');
+
+      expect(events.some((entry) => entry.event === 'cancel')).toBe(false);
+
+      timers.advance(60_000);
+      expect(player.plays).toBe(3); // NEW_PLAYER_RETRY_OFFSETS_MS.length, untouched
+    });
+
+    it('a stream not in the target list (paused before focus entry) is never touched', () => {
+      const { recovery, timers } = setup();
+      const untouched = createFakePlayer('paused-before-entry', true);
+
+      // Only players confirmed playing before entry are ever passed in —
+      // this one simply never appears in the call.
+      recovery.focusExit([], 'focus-exit');
+      timers.advance(FULL_RUN_MS);
+
+      expect(untouched.plays).toBe(0);
+    });
+
+    it('a target that goes ineligible mid-run (engaged, removed, or refocused) receives no further play()', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.focusExit([player], 'focus-exit');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      player.eligible = false;
+      timers.advance(FULL_RUN_MS + 60_000);
+
+      expect(player.plays).toBe(1);
+      expect(events.some((entry) => entry.event === 'skip' && entry.detail.reason === 'ineligible')).toBe(
+        true,
+      );
+    });
+
+    it('separate players recover independently', () => {
+      const { timers, recovery } = setup();
+      const first = createFakePlayer('a', true);
+      const second = createFakePlayer('b', false); // was never actually paused
+
+      recovery.focusExit([first, second], 'focus-exit');
+      timers.advance(FULL_RUN_MS);
+
+      expect(first.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(second.plays).toBe(0);
+    });
+
+    it('every focus-exit run terminates — bounded, no infinite retry', () => {
+      const { timers, recovery } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.focusExit([player], 'focus-exit');
+      timers.advance(FULL_RUN_MS + 120_000);
+
+      expect(player.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+
+    it('focusExit() with an empty target list is a no-op', () => {
+      const { recovery } = setup();
+      recovery.focusExit([], 'focus-exit');
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+  });
 });

@@ -101,6 +101,24 @@ export interface PlaybackRecovery {
   begin(targets: readonly RecoveryTarget[], cause: string): void;
   /** Start a run for a single target without disturbing runs already in flight. */
   track(target: RecoveryTarget, cause: string, offsets?: readonly number[]): void;
+  /**
+   * Start a bounded run for one target following a headers-hidden toolbar
+   * height transition (open or close). Uses the same default schedule as
+   * `begin`. Supersedes only a previous hover run for the same id — an
+   * in-flight 'transaction' or 'new-player' run for that id is left alone,
+   * since a real grid mutation or a freshly mounted card's own autoplay
+   * check both outrank a hover-triggered resize.
+   */
+  hover(target: RecoveryTarget, cause: string): void;
+  /**
+   * Start bounded runs for the exact pre-focus set of Twitch players after
+   * focus mode exits. Supersedes a stale 'toolbar-hover' (or prior
+   * 'focus-exit') run for the same id — a resize caused by leaving focus mode
+   * always outranks a leftover hover check — but never disturbs an in-flight
+   * 'transaction' or 'new-player' run for that id, the same rule `hover`
+   * already enforces in the other direction.
+   */
+  focusExit(targets: readonly RecoveryTarget[], cause: string): void;
   /** A real PLAYING event arrived — positive confirmation, stop chasing this id. */
   confirmPlaying(id: string): void;
   /**
@@ -128,7 +146,7 @@ interface Pass {
  * lands mid-transaction. Cancelling those together would mean a stream added
  * during another change silently loses its only autoplay check.
  */
-type RunKind = 'transaction' | 'new-player';
+type RunKind = 'transaction' | 'new-player' | 'toolbar-hover' | 'focus-exit';
 
 interface Run {
   readonly target: RecoveryTarget;
@@ -290,6 +308,30 @@ export function createPlaybackRecovery(options: {
     track(target, cause, offsets) {
       log('track', { id: target.id, cause });
       start(target, cause, 'new-player', offsets ?? newPlayerOffsets);
+    },
+
+    hover(target, cause) {
+      // Never disturb a real grid mutation or a fresh card's own autoplay
+      // check — only ever supersede a previous hover run for this same id.
+      const existing = runs.get(target.id);
+      if (existing && existing.kind !== 'toolbar-hover') return;
+      log('track', { id: target.id, cause });
+      start(target, cause, 'toolbar-hover', defaultOffsets);
+    },
+
+    focusExit(targets, cause) {
+      // Mirrors hover()'s rule in the other direction: a real grid mutation
+      // or a fresh card's own autoplay check is left alone, but a stale
+      // toolbar-hover (or leftover focus-exit) run for this same id never
+      // gets to suppress the restoration this focus session owes it.
+      for (const target of targets) {
+        const existing = runs.get(target.id);
+        if (existing && (existing.kind === 'transaction' || existing.kind === 'new-player')) {
+          continue;
+        }
+        log('track', { id: target.id, cause });
+        start(target, cause, 'focus-exit', defaultOffsets);
+      }
     },
 
     confirmPlaying(id) {
