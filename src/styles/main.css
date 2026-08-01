@@ -596,6 +596,113 @@ html.stream-focused .stream-card__header {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+/*
+ * External YouTube volume control (header and headers-hidden hover toolbar
+ * each render one copy — see createYouTubeVolumeControl). This button is
+ * the compact status/trigger that lives among the footer's other action
+ * buttons; clicking it opens the full-width `.stream-card__youtube-volume-
+ * panel` below, which is also styled with this class for its own mute
+ * button, so the two look identical.
+ */
+.stream-card__youtube-volume-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  line-height: 0;
+  cursor: pointer;
+}
+
+.stream-card__youtube-volume-btn svg {
+  display: block;
+}
+
+.stream-card__youtube-volume-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.stream-card__youtube-volume-btn:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 70%, white);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Only ever rendered inside .stream-card__youtube-volume-panel now, which
+   is always full-width when open — so this takes up the panel's available
+   space rather than a fixed width. */
+.stream-card__youtube-volume-slider {
+  flex: 1 1 auto;
+  width: auto;
+  height: 26px;
+  margin: 0;
+  accent-color: var(--youtube);
+  cursor: pointer;
+}
+
+.stream-card__youtube-volume-btn:disabled,
+.stream-card__youtube-volume-slider:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/*
+ * Dense grids and narrow tiles never have room for a mute button + full
+ * slider alongside drag/focus/reload/remove, so the footer no longer tries
+ * to fit both at once. The compact button above is a status/trigger only;
+ * clicking it opens this full-width panel, which takes over the entire
+ * footer (see the `is-volume-mode` rules below) regardless of tile size —
+ * the fix for "no room" is giving the slider its own row, not shrinking or
+ * hiding it.
+ */
+.stream-card__youtube-volume-panel {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.stream-card__header.is-volume-mode > *:not(.stream-card__youtube-volume-panel),
+.stream-card__toolbar.is-volume-mode > *:not(.stream-card__youtube-volume-panel) {
+  display: none;
+}
+
+.stream-card__header.is-volume-mode .stream-card__youtube-volume-panel,
+.stream-card__toolbar.is-volume-mode .stream-card__youtube-volume-panel {
+  display: flex;
+}
+
+.stream-card__youtube-volume-panel-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  line-height: 0;
+  cursor: pointer;
+}
+
+.stream-card__youtube-volume-panel-close:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .stream-card__player {
   position: relative;
   width: 100%;
@@ -698,6 +805,20 @@ html.headers-hidden .stream-card__toolbar {
 
 html.headers-hidden .stream-card:hover .stream-card__toolbar,
 html.headers-hidden .stream-card:focus-within .stream-card__toolbar {
+  height: var(--toolbar-open-height);
+  min-height: var(--toolbar-open-height);
+  max-height: var(--toolbar-open-height);
+  opacity: 1;
+  border-top: 1px solid var(--border);
+}
+
+/*
+ * The volume panel must stay open for the whole interaction regardless of
+ * hover/focus — Safari in particular doesn't focus range inputs on pointer
+ * interaction, so :focus-within alone can't be relied on to hold the
+ * toolbar open through a mouse drag that starts by leaving :hover.
+ */
+html.headers-hidden .stream-card__toolbar.is-volume-mode {
   height: var(--toolbar-open-height);
   min-height: var(--toolbar-open-height);
   max-height: var(--toolbar-open-height);
@@ -1449,6 +1570,16 @@ html.show-welcome .welcome-modal {
   .stream-card__reload svg {
     width: 12px;
     height: 12px;
+  }
+
+  .stream-card__youtube-volume-btn,
+  .stream-card__youtube-volume-panel-close {
+    width: 24px;
+    height: 24px;
+  }
+
+  .stream-card__youtube-volume-slider {
+    height: 24px;
   }
 }
 

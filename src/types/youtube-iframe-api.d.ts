@@ -50,6 +50,10 @@ declare global {
       mute(): void;
       unMute(): void;
       isMuted(): boolean;
+      getVolume(): number;
+      setVolume(volume: number): void;
+      getCurrentTime(): number;
+      getDuration(): number;
       destroy(): void;
     }
   }

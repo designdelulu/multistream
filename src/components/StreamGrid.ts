@@ -87,6 +87,23 @@ const ICON_DRAG =
   '<circle cx="6" cy="12" r="1.3" fill="currentColor"/><circle cx="10" cy="12" r="1.3" fill="currentColor"/>' +
   '</svg>';
 
+/**
+ * External YouTube volume control icons (see createYouTubeVolumeControl).
+ * Same 16x16 box and stroke weight as the other toolbar glyphs so the
+ * control reads as part of the same icon set, not a bolted-on import.
+ */
+const ICON_VOLUME_ON =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">' +
+  '<path d="M2 6.25h2.4L8 3.25v9.5L4.4 9.75H2v-3.5Z" fill="currentColor"/>' +
+  '<path d="M10.3 5.3c.9.75 1.4 1.7 1.4 2.7s-.5 1.95-1.4 2.7M12 3.6c1.4 1.2 2.2 2.75 2.2 4.4s-.8 3.2-2.2 4.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+  '</svg>';
+
+const ICON_VOLUME_OFF =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">' +
+  '<path d="M2 6.25h2.4L8 3.25v9.5L4.4 9.75H2v-3.5Z" fill="currentColor"/>' +
+  '<path d="M10.6 5.4 14 8.8M14 5.4l-3.4 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+  '</svg>';
+
 type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
 
 let focusedStreamId: string | null = null;
@@ -132,6 +149,19 @@ const youtubePlayers = new Map<string, YT.Player>();
 const youtubeResolveControllers = new Map<string, AbortController>();
 let youtubeScriptPromise: Promise<boolean> | null = null;
 const YOUTUBE_SCRIPT_TIMEOUT_MS = 4000;
+
+/**
+ * External volume control state, tracked locally rather than re-read from
+ * the player after every change. The IFrame API's mute()/unMute()/setVolume()
+ * are fire-and-forget postMessage calls to the embed's own document —
+ * isMuted()/getVolume() reflect the reply, which has not necessarily arrived
+ * yet in the same tick a click handler calls mute() and then immediately
+ * wants to paint the new state. Since this app is the only thing that ever
+ * calls these setters, our own intent is authoritative and reading it back
+ * from the map avoids that race entirely. The one place a live read is
+ * trustworthy is the player's onReady — its first, definitive state.
+ */
+const youtubeVolumeState = new Map<string, { muted: boolean; volume: number }>();
 
 /**
  * Exactly one YouTube player, ever, per page session, may be constructed
@@ -577,6 +607,25 @@ function mapYouTubeErrorCode(code: number): string {
   }
 }
 
+/** developers.google.com/youtube/iframe_api_reference#onStateChange */
+const YT_STATE_NAMES: Record<number, string> = {
+  [-1]: 'unstarted',
+  0: 'ended',
+  1: 'playing',
+  2: 'paused',
+  3: 'buffering',
+  5: 'cued',
+};
+
+/** Diagnostic-only: a getter can throw mid-teardown; never let that break playback. */
+function safeCall<T>(fn: () => T): T | undefined {
+  try {
+    return fn();
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Lazily loads YouTube's IFrame Player API once, shared by every YouTube
  * card, mirroring ensureTwitchEmbedScript exactly (including the ad-blocker
@@ -669,6 +718,39 @@ function constructYouTubePlayer(
       origin: window.location.origin,
     },
     events: {
+      onReady: () => {
+        // The one point a live read is trustworthy — see youtubeVolumeState.
+        try {
+          youtubeVolumeState.set(streamId, {
+            muted: player.isMuted(),
+            volume: Math.round(player.getVolume()),
+          });
+        } catch {
+          // Leave unset; syncYouTubeVolumeUi treats a missing entry as
+          // "not available yet" and disables the control.
+        }
+        syncYouTubeVolumeUi(card);
+      },
+      onStateChange: (event) => {
+        // Diagnostic-only: never call playVideo()/pauseVideo() from here —
+        // this handler only observes and logs, it must not react.
+        logPlayerEvent('yt-state', {
+          streamId,
+          state: YT_STATE_NAMES[event.data] ?? event.data,
+          currentTime: safeCall(() => player.getCurrentTime()),
+          duration: safeCall(() => player.getDuration()),
+          muted: safeCall(() => player.isMuted()),
+          volume: safeCall(() => player.getVolume()),
+          iframeId: mountTarget.id,
+          visibility: document.visibilityState,
+          hasFocus: document.hasFocus(),
+          fullscreen: Boolean(document.fullscreenElement),
+          cardFocused: card.matches(':focus-within'),
+          headersHidden: document.documentElement.classList.contains('headers-hidden'),
+          tileSize: `${Math.round(card.clientWidth)}x${Math.round(card.clientHeight)}`,
+          playerCount: youtubePlayers.size,
+        });
+      },
       onError: (event) => {
         logEmbedEvent('player-blocked', { platform: 'youtube', channel: card.dataset.channel, card });
         youtubePlayers.delete(streamId);
@@ -679,6 +761,253 @@ function constructYouTubePlayer(
 
   youtubePlayers.set(streamId, player);
   card.dataset.embedMuted = '1';
+}
+
+/**
+ * Reflects live player state (or a disabled placeholder while no player is
+ * attached yet) into every external volume control rendered for this card —
+ * there are up to two: the header's and the headers-hidden hover toolbar's,
+ * only one of which is ever visible at a time, but both must stay correct
+ * since either can become visible without a remount (Show headers toggle).
+ *
+ * Reads from youtubeVolumeState, never the live player — see that map's own
+ * comment for why a synchronous re-read right after our own mute()/unMute()/
+ * setVolume() call would race the postMessage round trip. Never touches
+ * playback either way. The slider always displays 0 while muted
+ * (independent of the underlying volume level YouTube remembers), which is
+ * the conventional "muted reads as silent" meter behavior and avoids
+ * implying a click on the slider will unmute.
+ */
+function syncYouTubeVolumeUi(card: HTMLElement): void {
+  const streamId = card.dataset.streamId ?? '';
+  const state = youtubeVolumeState.get(streamId);
+  const available = state !== undefined && youtubePlayers.has(streamId);
+  const muted = state?.muted ?? true;
+  const displayedVolume = muted ? 0 : (state?.volume ?? 0);
+
+  // Up to 4 buttons per card: header/toolbar triggers (open the panel, keep
+  // a static "open controls" label — see createYouTubeVolumeControl) and
+  // header/toolbar panel mute buttons (a real toggle, label follows state).
+  for (const button of card.querySelectorAll<HTMLButtonElement>('.stream-card__youtube-volume-btn')) {
+    button.disabled = !available;
+    button.setAttribute('aria-pressed', muted ? 'true' : 'false');
+    button.innerHTML = muted ? ICON_VOLUME_OFF : ICON_VOLUME_ON;
+    if (button.dataset.role === 'trigger') continue;
+    const label = muted ? 'Unmute YouTube video' : 'Mute YouTube video';
+    button.title = muted ? 'Unmute' : 'Mute';
+    button.setAttribute('aria-label', label);
+  }
+
+  for (const slider of card.querySelectorAll<HTMLInputElement>('.stream-card__youtube-volume-slider')) {
+    slider.disabled = !available;
+    slider.value = String(displayedVolume);
+    slider.setAttribute('aria-valuenow', String(displayedVolume));
+    slider.setAttribute('aria-valuetext', `${displayedVolume}%`);
+  }
+}
+
+/**
+ * External YouTube volume control for one card footer (header or the
+ * headers-hidden hover toolbar): a compact status/trigger button that sits
+ * among the footer's other action buttons, plus a full-width adjustment
+ * panel that takes over the whole footer while open. Only mute()/unMute()/
+ * setVolume()/getVolume() are ever called here — deliberately never
+ * playVideo/pauseVideo/cueVideoById/loadVideoById/destroy, and never the
+ * iframe's src — so adjusting volume, or opening/closing the panel, can
+ * never pause, restart, or reconstruct the player.
+ *
+ * `footer` is the caller's `.stream-card__header` or `.stream-card__toolbar`
+ * element. Open/close state lives on it as an `is-volume-mode` class (see
+ * main.css) rather than in a JS map — the caller appends `panel` as an
+ * extra direct child of `footer`, and CSS hides `footer`'s other children
+ * while that class is present, so there's nothing to keep in sync beyond
+ * the DOM itself.
+ *
+ * Disabled (and left at 0%) until a live player is actually attached for
+ * this stream — see syncYouTubeVolumeUi, called on the player's onReady and
+ * after every mute/unmute/volume change so both rendered copies (header,
+ * hover toolbar) never drift out of sync with each other or the player.
+ */
+function createYouTubeVolumeControl(
+  streamId: string,
+  footer: HTMLElement,
+): { trigger: HTMLButtonElement; panel: HTMLDivElement } {
+  function currentState(): { muted: boolean; volume: number } {
+    return youtubeVolumeState.get(streamId) ?? { muted: true, volume: 0 };
+  }
+
+  function syncCard(): void {
+    const card = cardForStream(streamId);
+    if (card) syncYouTubeVolumeUi(card);
+  }
+
+  // --- trigger: compact status button, opens the panel ---------------
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'stream-card__youtube-volume-btn';
+  trigger.dataset.role = 'trigger';
+  trigger.title = 'Volume';
+  trigger.setAttribute('aria-label', 'Open YouTube volume controls');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.disabled = true;
+  trigger.innerHTML = ICON_VOLUME_OFF;
+  // Mirrors the panel controls' own stopPropagation below — without this, a
+  // pointerdown-then-move on the trigger (not just a click) is unprotected
+  // against SortableJS's drag-start detection in headers-visible mode,
+  // since the trigger lives inside the header (the drag handle there) and
+  // isn't in Sortable's `filter` list.
+  trigger.addEventListener('pointerdown', (event) => event.stopPropagation());
+  trigger.addEventListener('mousedown', (event) => event.stopPropagation());
+  trigger.addEventListener('touchstart', (event) => event.stopPropagation());
+  trigger.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openPanel();
+  });
+
+  // --- panel: mute button, full-width slider, close ------------------
+
+  const panel = document.createElement('div');
+  panel.className = 'stream-card__youtube-volume-panel';
+
+  const panelButton = document.createElement('button');
+  panelButton.type = 'button';
+  panelButton.className = 'stream-card__youtube-volume-btn';
+  panelButton.title = 'Mute';
+  panelButton.setAttribute('aria-label', 'Mute YouTube video');
+  panelButton.setAttribute('aria-pressed', 'true');
+  panelButton.disabled = true;
+  panelButton.innerHTML = ICON_VOLUME_OFF;
+  panelButton.addEventListener('pointerdown', (event) => event.stopPropagation());
+  panelButton.addEventListener('mousedown', (event) => event.stopPropagation());
+  panelButton.addEventListener('touchstart', (event) => event.stopPropagation());
+  panelButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const player = youtubePlayers.get(streamId);
+    if (!player) return;
+    const state = currentState();
+    const nextMuted = !state.muted;
+    if (nextMuted) {
+      player.mute();
+    } else {
+      player.unMute();
+    }
+    youtubeVolumeState.set(streamId, { muted: nextMuted, volume: state.volume });
+    syncCard();
+  });
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.className = 'stream-card__youtube-volume-slider';
+  slider.min = '0';
+  slider.max = '100';
+  slider.step = '1';
+  slider.value = '0';
+  slider.disabled = true;
+  slider.setAttribute('aria-label', 'YouTube volume');
+  slider.setAttribute('aria-valuemin', '0');
+  slider.setAttribute('aria-valuemax', '100');
+  slider.setAttribute('aria-valuenow', '0');
+  slider.setAttribute('aria-valuetext', '0%');
+  // Reordering (SortableJS) and card-level pointer handling live above this
+  // control in the tree — stop propagation so a drag never starts, and a
+  // click never bubbles into anything else, while dragging the thumb.
+  // Pointer capture keeps input/pointerup targeting the slider even if a
+  // fast or sloppy drag carries the pointer outside its bounding box.
+  slider.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    try {
+      slider.setPointerCapture(event.pointerId);
+    } catch {
+      // Not supported for this pointer type — drag still works via normal
+      // event bubbling, capture is a reliability improvement, not a
+      // requirement.
+    }
+  });
+  slider.addEventListener('mousedown', (event) => event.stopPropagation());
+  slider.addEventListener('touchstart', (event) => event.stopPropagation());
+  slider.addEventListener('click', (event) => event.stopPropagation());
+  slider.addEventListener('input', (event) => {
+    event.stopPropagation();
+    const player = youtubePlayers.get(streamId);
+    if (!player) return;
+    const value = Number(slider.value);
+    const state = currentState();
+    const nextMuted = value === 0;
+    player.setVolume(value);
+    if (nextMuted !== state.muted) {
+      if (nextMuted) {
+        player.mute();
+      } else {
+        player.unMute();
+      }
+    }
+    // Dragging to 0 mutes but must not forget the level to restore on
+    // unmute — only a genuine nonzero position updates the stored volume.
+    const nextVolume = value === 0 ? state.volume : value;
+    youtubeVolumeState.set(streamId, { muted: nextMuted, volume: nextVolume });
+    syncCard();
+  });
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'stream-card__youtube-volume-panel-close';
+  closeButton.title = 'Close volume controls';
+  closeButton.setAttribute('aria-label', 'Close volume controls');
+  closeButton.innerHTML = ICON_CLOSE;
+  closeButton.addEventListener('pointerdown', (event) => event.stopPropagation());
+  closeButton.addEventListener('mousedown', (event) => event.stopPropagation());
+  closeButton.addEventListener('touchstart', (event) => event.stopPropagation());
+  closeButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closePanel();
+  });
+
+  panel.append(panelButton, slider, closeButton);
+
+  // --- open/close state, kept on the DOM via `is-volume-mode` ---------
+
+  let outsidePointerDownTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function onOutsidePointerDown(event: PointerEvent): void {
+    const target = event.target as Node | null;
+    if (target && footer.contains(target)) return;
+    closePanel();
+  }
+
+  function openPanel(): void {
+    if (footer.classList.contains('is-volume-mode')) return;
+    footer.classList.add('is-volume-mode');
+    trigger.setAttribute('aria-expanded', 'true');
+    slider.focus();
+    // Deferred so the same click that opened the panel (still bubbling to
+    // `document` at this point) doesn't immediately close it again.
+    outsidePointerDownTimer = setTimeout(() => {
+      document.addEventListener('pointerdown', onOutsidePointerDown, true);
+    }, 0);
+  }
+
+  function closePanel(): void {
+    if (!footer.classList.contains('is-volume-mode')) return;
+    footer.classList.remove('is-volume-mode');
+    trigger.setAttribute('aria-expanded', 'false');
+    clearTimeout(outsidePointerDownTimer);
+    document.removeEventListener('pointerdown', onOutsidePointerDown, true);
+    trigger.focus();
+  }
+
+  // Bubble-phase listener on the footer itself: fires regardless of which
+  // element inside the panel has focus, and stopPropagation here keeps
+  // Escape from also reaching any card/global Escape handler (e.g.
+  // exit-focus-mode) while the panel is open.
+  footer.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (!footer.classList.contains('is-volume-mode')) return;
+    event.stopPropagation();
+    closePanel();
+  });
+
+  return { trigger, panel };
 }
 
 /** Ends the async chain from mountYouTubeMedia's first-ever-mount branch, for both a direct video and a resolved-live channel. */
@@ -766,6 +1095,7 @@ function forgetYouTubePlayer(streamId: string): void {
   youtubeResolveControllers.delete(streamId);
   youtubePlayers.get(streamId)?.destroy();
   youtubePlayers.delete(streamId);
+  youtubeVolumeState.delete(streamId);
 }
 
 /**
@@ -829,6 +1159,11 @@ function mountYouTubeMedia(
   player?.unMute();
   player?.playVideo();
   card.dataset.embedMuted = '0';
+  if (player) {
+    const prevVolume = youtubeVolumeState.get(streamId)?.volume ?? 100;
+    youtubeVolumeState.set(streamId, { muted: false, volume: prevVolume });
+  }
+  syncYouTubeVolumeUi(card);
 }
 
 /**
@@ -845,6 +1180,7 @@ function reloadYouTubePlayer(card: HTMLElement): void {
   forgetYouTubePlayer(streamId);
   delete card.dataset.youtubeMode;
   card.dataset.youtubeMountState = 'pending';
+  syncYouTubeVolumeUi(card); // no player until the new one's onReady fires
 
   reportEmbedRecovery('forced-remount', { platform: 'youtube', reason: 'manual' });
 
@@ -1271,8 +1607,15 @@ function createPlayerElement(
     '<span aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 7A5 5 0 1 1 10.5 3.4M12 1.5V4.5H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
   reloadButton.addEventListener('click', () => reloadStreamCard(card));
 
+  let headerVolumePanel: HTMLDivElement | undefined;
+  if (stream.platform === 'youtube') {
+    const { trigger, panel } = createYouTubeVolumeControl(stream.id, header);
+    controls.append(trigger);
+    headerVolumePanel = panel;
+  }
   controls.append(focusButton, reloadButton, removeButton);
   header.append(badge, title, controls);
+  if (headerVolumePanel) header.append(headerVolumePanel);
 
   const player = document.createElement('div');
   player.className = 'stream-card__player';
@@ -1373,9 +1716,17 @@ function createPlayerElement(
     store.removeStream(stream.id);
   });
 
+  let toolbarVolumePanel: HTMLDivElement | undefined;
+  if (stream.platform === 'youtube') {
+    const { trigger, panel } = createYouTubeVolumeControl(stream.id, toolbar);
+    overlayControls.append(trigger);
+    toolbarVolumePanel = panel;
+  }
   overlayControls.append(overlayDrag, overlayFocus, overlayReload, overlayRemove);
 
   toolbar.append(nameBadge, overlayControls);
+  if (toolbarVolumePanel) toolbar.append(toolbarVolumePanel);
+
   card.append(header, player, toolbar);
 
   if (stream.platform === 'twitch') {
