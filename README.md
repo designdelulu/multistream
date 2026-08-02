@@ -86,7 +86,8 @@ dist/
 ├── index.html
 ├── assets/
 ├── api/
-│   └── youtube-resolve.php
+│   ├── youtube-resolve.php
+│   └── twitch-status.php
 ├── og-image.png
 ├── robots.txt
 ├── sitemap.xml
@@ -97,9 +98,9 @@ Steps:
 
 1. Run `npm run build` locally whenever you change the app.
 2. In DreamHost File Manager or FTP, open the folder for **multistream.cc**.
-3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes `api/youtube-resolve.php`.
+3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes `api/youtube-resolve.php` and `api/twitch-status.php`.
 4. Confirm `index.html` sits directly in the domain root.
-5. Complete the one-time [YouTube setup](#youtube-setup) below (config file outside the web root) — YouTube channel/handle streams won't resolve until that's done, but direct video URLs and all Twitch/Kick behavior work without it.
+5. Complete the one-time [YouTube setup](#youtube-setup) and [Twitch setup](#twitch-setup) below (both are config files outside the web root) — channel/handle resolution and live-status checks won't work until that's done, but direct video URLs and the Twitch/Kick/YouTube embeds themselves all work without it.
 6. Visit `https://multistream.cc/` — Twitch embeds will automatically use `multistream.cc` as the `parent` domain.
 
 Path URLs like `/t:username/k:username/y:handle:username` require the included `.htaccess` SPA fallback on Apache/DreamHost.
@@ -126,6 +127,30 @@ One-time setup on your DreamHost account, **after** you've uploaded `dist/`:
 4. That's it — no restart needed. The cache directory (`~/multistream-secrets/cache/`) is created automatically on first use; if it can't be created/written, lookups still work, just without caching.
 
 If the key is missing or misconfigured, YouTube channel/handle streams show a clear "isn't configured yet" message in-tile — nothing else on the site is affected.
+
+---
+
+## Twitch setup
+
+Checking whether a Twitch channel exists and whether it's currently live uses the Twitch Helix API, which needs an app access token — and that token flow needs a Client Secret, which must never live in client-side JavaScript. So this check runs server-side too, via `public/api/twitch-status.php` (same deployment story as the YouTube resolver: a normal static file inside `dist/`, no extra hosting).
+
+**This is advisory only.** A missing/misconfigured key, a Twitch API outage, or a network hiccup never blocks anything — the real Twitch embed still mounts and plays normally; you just won't see a Live/Offline/Not found badge on the card.
+
+One-time setup on your DreamHost account, **after** you've uploaded `dist/`:
+
+1. Create a Twitch application at the [Twitch Developer Console](https://dev.twitch.tv/console/apps) to get a **Client ID** and **Client Secret**. No OAuth redirect URI or user login is needed — this only ever uses the app-only client-credentials flow, so nobody visiting multistream.cc is asked to log into Twitch.
+2. Create a file **outside** the `multistream.cc/` web root — e.g. at `~/multistream-secrets/twitch-config.php`, the same directory `youtube-config.php` already lives in:
+   ```php
+   <?php
+   return [
+       'client_id' => 'YOUR_TWITCH_CLIENT_ID_HERE',
+       'client_secret' => 'YOUR_TWITCH_CLIENT_SECRET_HERE',
+   ];
+   ```
+3. Open `dist/api/twitch-status.php` (before uploading, or edit it directly on the server) and check the `TWITCH_CONFIG_PATH`/`TWITCH_CACHE_DIR` constants near the top match your account's layout — same `~/<domain>/api/` assumption as the YouTube resolver, and the two scripts share the same cache directory.
+4. That's it — no restart needed. If the cache directory can't be created/written, checks still work, just without caching.
+
+If the config is missing or Twitch rejects the credentials, every Twitch card just shows no status badge (an "unavailable" result) rather than any error — the embed itself is completely unaffected.
 
 ---
 
@@ -166,9 +191,10 @@ When you return to the site without a share URL in the path, your last lineup is
 
 ## Architecture
 
-Vanilla **TypeScript + Vite** on the frontend — no React. One small PHP
-endpoint on the server, used only for YouTube channel/handle resolution (see
-[YouTube setup](#youtube-setup)); everything else is a static deploy.
+Vanilla **TypeScript + Vite** on the frontend — no React. Two small PHP
+endpoints on the server: YouTube channel/handle resolution (see
+[YouTube setup](#youtube-setup)) and Twitch channel existence/live-status
+(see [Twitch setup](#twitch-setup)); everything else is a static deploy.
 
 ```
 src/
@@ -177,7 +203,7 @@ src/
 ├── components/    # Grid, toolbar, chat, reorder, player cards
 ├── lib/           # Viewport helpers
 └── styles/        # Layout and UI
-public/api/        # youtube-resolve.php — the one server-side piece
+public/api/        # youtube-resolve.php + twitch-status.php — the server-side pieces
 ```
 
 Each platform implements a small adapter:

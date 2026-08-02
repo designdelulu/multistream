@@ -1,5 +1,5 @@
 import { parseStreamInput } from '../platforms';
-import { isStreamFocused } from './StreamGrid';
+import { isStreamFocused, refreshTwitchStatus } from './StreamGrid';
 import type { Platform } from '../types';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
@@ -105,6 +105,15 @@ function tryAddStream(
   return true;
 }
 
+/** After a successful add, kick off a single-channel advisory status check — Twitch only. */
+function checkTwitchStatusAfterAdd(resolved: string): void {
+  const parsed = parseStreamInput(resolved);
+  if (!parsed || parsed.platform !== 'twitch') return;
+  const gridEl = document.querySelector<HTMLElement>('#stream-grid');
+  if (!gridEl) return;
+  refreshTwitchStatus(gridEl, [parsed.channel]);
+}
+
 export function bindStreamToolbar(
   store: StreamStore,
   headersStore: HeadersStore,
@@ -159,6 +168,7 @@ export function bindStreamToolbar(
     const resolved = resolveAddInput(username, platform);
     if (tryAddStream(store, inputEl, resolved)) {
       hideSuggestions();
+      checkTwitchStatusAfterAdd(resolved);
     }
   }
 
@@ -228,6 +238,7 @@ export function bindStreamToolbar(
     const resolved = resolveAddInput(value, selectedPlatform);
     if (tryAddStream(store, inputEl, resolved)) {
       hideSuggestions();
+      checkTwitchStatusAfterAdd(resolved);
     }
   });
 

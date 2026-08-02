@@ -9,6 +9,7 @@
   --kick: #53fc18;
   --youtube: #ff0033;
   --danger: #ff5d5d;
+  --status-live: #3ddc84;
   /*
    * Height the headers-hidden hover toolbar opens to, and therefore exactly
    * how much height the player gives up during a hover. Read in two places
@@ -524,6 +525,34 @@ html.stream-focused .stream-card__header {
 .stream-card__badge--youtube {
   background: color-mix(in srgb, var(--youtube) 18%, transparent);
   color: #ffb3bd;
+}
+
+/* Compact Twitch live/offline/not-found/unavailable pill — absent entirely
+   until a status check resolves, so a card never shows a stale/loading pill. */
+.stream-card__status-pill {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stream-card__status-pill--live {
+  background: color-mix(in srgb, var(--status-live) 20%, transparent);
+  color: var(--status-live);
+}
+
+.stream-card__status-pill--offline,
+.stream-card__status-pill--unavailable {
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  color: var(--muted);
+}
+
+.stream-card__status-pill--not_found {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
 }
 
 .stream-card__title {

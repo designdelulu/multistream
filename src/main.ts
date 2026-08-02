@@ -7,6 +7,7 @@ import {
   nudgeStalledTwitchPlayers,
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
+  refreshTwitchStatus,
   snapshotPlayingTwitchPlayers,
   startStatsProbe,
   syncStreamGrid,
@@ -298,3 +299,14 @@ window.addEventListener('mousemove', nudgeOnInteraction, { passive: true });
 window.addEventListener('pointerdown', nudgeOnInteraction, { passive: true });
 
 renderStreams();
+
+// One batched advisory status check for every Twitch channel restored from
+// the URL/localStorage at startup — never one request per tile. Streams
+// added later go through StreamToolbar's own single-channel check instead.
+refreshTwitchStatus(
+  gridEl,
+  store
+    .getStreams()
+    .filter((stream) => stream.platform === 'twitch')
+    .map((stream) => stream.channel),
+);

@@ -16,6 +16,7 @@ import {
   type YouTubeResolveMode,
   type YouTubeResolveResult,
 } from '../platforms/youtubeResolver';
+import { checkTwitchStatus, type TwitchStatusResult } from '../platforms/twitchStatus';
 import type { StreamRef } from '../types';
 import type { StreamStore } from '../state/streams';
 
@@ -1565,6 +1566,15 @@ function createPlayerElement(
   badge.className = `stream-card__badge stream-card__badge--${stream.platform}`;
   badge.textContent = adapter.label;
 
+  // Twitch-only: hidden until a status check resolves (advisory, never
+  // blocks or alters the embed below — see applyTwitchStatus).
+  let statusPill: HTMLSpanElement | undefined;
+  if (stream.platform === 'twitch') {
+    statusPill = document.createElement('span');
+    statusPill.className = 'stream-card__status-pill';
+    statusPill.hidden = true;
+  }
+
   const title = document.createElement('span');
   title.className = 'stream-card__title';
   title.textContent = adapter.displayName(stream);
@@ -1614,7 +1624,9 @@ function createPlayerElement(
     headerVolumePanel = panel;
   }
   controls.append(focusButton, reloadButton, removeButton);
-  header.append(badge, title, controls);
+  header.append(badge);
+  if (statusPill) header.append(statusPill);
+  header.append(title, controls);
   if (headerVolumePanel) header.append(headerVolumePanel);
 
   const player = document.createElement('div');
@@ -1998,6 +2010,11 @@ function reloadStreamCard(card: HTMLElement): void {
   }
   if (card.dataset.platform !== 'twitch') return;
 
+  // Advisory status re-check alongside (not instead of) the player reload
+  // below — never touches twitchMode/twitchPlayers, purely updates the pill.
+  const container = card.parentElement;
+  if (container) refreshTwitchStatus(container, [card.dataset.channel ?? '']);
+
   const mode = card.dataset.twitchMode;
 
   if (mode === 'api') {
@@ -2019,6 +2036,93 @@ function reloadStreamCard(card: HTMLElement): void {
   delete card.dataset.twitchMode;
   reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'manual-retry' });
   mountStreamMedia(card, preferredMuted(card));
+}
+
+/**
+ * Pure status -> pill (text/modifier class/tooltip) mapping, kept separate
+ * from any DOM code so it's unit-testable on its own. `null` means "don't
+ * show a pill" — currently only invalid_input, which the frontend already
+ * prevents from ever being submitted, so it should never actually surface.
+ */
+export function twitchStatusPillProps(
+  result: TwitchStatusResult,
+): { text: string; modifier: string; title?: string } | null {
+  switch (result.status) {
+    case 'live': {
+      const tooltipParts = [result.title, result.category].filter(
+        (part): part is string => Boolean(part),
+      );
+      return {
+        text: 'Live',
+        modifier: 'live',
+        title: tooltipParts.length > 0 ? tooltipParts.join(' — ') : undefined,
+      };
+    }
+    case 'offline':
+      return { text: 'Offline', modifier: 'offline' };
+    case 'not_found':
+      return { text: 'Not found', modifier: 'not_found' };
+    case 'unavailable':
+      return { text: 'Unavailable', modifier: 'unavailable' };
+    case 'invalid_input':
+      return null;
+  }
+}
+
+/**
+ * Applies already-fetched status results to whatever matching Twitch cards
+ * currently exist. Only ever touches `.stream-card__status-pill` — never
+ * mountStreamMedia, twitchPlayers, or any iframe/player state. A card with
+ * no matching result (e.g. that one lookup failed on its own) is left
+ * exactly as it was, not cleared — purely additive, purely advisory.
+ */
+export function applyTwitchStatus(
+  container: HTMLElement,
+  results: Map<string, TwitchStatusResult>,
+): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card[data-platform="twitch"]')) {
+    const channel = card.dataset.channel ?? '';
+    const result = results.get(channel);
+    if (!result) continue;
+
+    const pill = card.querySelector<HTMLElement>('.stream-card__status-pill');
+    if (!pill) continue;
+
+    const props = twitchStatusPillProps(result);
+    if (!props) {
+      pill.hidden = true;
+      pill.textContent = '';
+      pill.removeAttribute('title');
+      pill.className = 'stream-card__status-pill';
+      continue;
+    }
+
+    pill.hidden = false;
+    pill.textContent = props.text;
+    pill.className = `stream-card__status-pill stream-card__status-pill--${props.modifier}`;
+    if (props.title) {
+      pill.title = props.title;
+    } else {
+      pill.removeAttribute('title');
+    }
+  }
+}
+
+/**
+ * Fire-and-forget: checks status for the given Twitch channels in one
+ * batched request, then applies whatever comes back. Safe to call with any
+ * number of channels — the add/reload paths call this with one, initial
+ * restore calls it with the whole grid at once. Never blocks or delays
+ * anything else; `checkTwitchStatus` itself never throws except on abort,
+ * which this doesn't use, so there's nothing here to catch.
+ */
+export function refreshTwitchStatus(container: HTMLElement, channels: string[]): void {
+  const wanted = channels.filter(Boolean);
+  if (wanted.length === 0) return;
+  void checkTwitchStatus(wanted).then((results) => {
+    if (!container.isConnected) return;
+    applyTwitchStatus(container, results);
+  });
 }
 
 /**
