@@ -477,6 +477,8 @@ html.stream-focused .stream-card__header {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  container-type: inline-size;
+  container-name: stream-card;
 }
 
 /* Kick tracks use the optimized cell width (may be <769 when chat is open). */
@@ -945,6 +947,21 @@ html.headers-hidden .stream-card__toolbar.is-volume-mode {
   white-space: nowrap;
   font-size: 0.72rem;
   color: var(--muted);
+}
+
+/*
+ * Flexbox line-breaking decides wrap based on each item's content
+ * ("hypothetical") size, not its post-shrink size — so a narrow card can
+ * still force `.stream-card__header` onto two rows even though the meta
+ * span and channel name are both shrinkable. Drop the meta text outright
+ * once the card is too narrow to hold it, well before the row would need
+ * to wrap: the pill's `title` attribute (see twitchStatusPillProps) already
+ * carries the full "Live · Category · 2h 14m" text as a hover fallback.
+ */
+@container stream-card (max-width: 460px) {
+  .stream-card__name-badge-meta {
+    display: none;
+  }
 }
 
 .stream-card__overlay-controls {

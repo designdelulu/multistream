@@ -1559,8 +1559,10 @@ function createTwitchMountPoint(): HTMLDivElement {
  * app, so their dot keeps the original decorative always-pulsing look.
  *
  * `includeMeta` adds a trailing "· Category · 2h 14m" span, populated only
- * for the header instance — the card is never narrow enough to need this
- * hidden anywhere (unlike the toolbar, which stays identity-only by design).
+ * for the header instance — hidden below a width threshold via the
+ * `@container stream-card` rule on `.stream-card__name-badge-meta` in
+ * main.css, so a narrow card never has to wrap the header onto two rows.
+ * The toolbar instance stays identity-only by design and never gets one.
  */
 function createNameBadge(
   stream: StreamRef,
