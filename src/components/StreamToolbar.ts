@@ -1,8 +1,15 @@
 import { parseStreamInput } from '../platforms';
+import type { TwitchStatusRefreshResult } from '../lib/twitchStatusCoordinator';
 import { isStreamFocused, refreshTwitchStatus } from './StreamGrid';
 import type { Platform } from '../types';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
+
+/** Dependencies for the global "Refresh Twitch statuses" action — kept separate from store/headersStore since it's backed by main.ts's shared coordinator/scheduler, not toolbar-local state. */
+export interface TwitchStatusRefreshDeps {
+  refresh(): Promise<TwitchStatusRefreshResult>;
+  isRefreshInFlight(): boolean;
+}
 
 const PLATFORM_STORAGE_KEY = 'multistream:add-platform';
 
@@ -117,6 +124,7 @@ function checkTwitchStatusAfterAdd(resolved: string): void {
 export function bindStreamToolbar(
   store: StreamStore,
   headersStore: HeadersStore,
+  twitchStatusRefresh: TwitchStatusRefreshDeps,
 ): { sync: () => void } {
   const form = document.querySelector<HTMLFormElement>('#add-stream-form');
   const input = document.querySelector<HTMLInputElement>('#stream-input');
@@ -124,6 +132,8 @@ export function bindStreamToolbar(
   const shareButton = document.querySelector<HTMLButtonElement>('#share-link');
   const clearButton = document.querySelector<HTMLButtonElement>('#clear-streams');
   const headersButton = document.querySelector<HTMLButtonElement>('#headers-toggle');
+  const refreshTwitchButton = document.querySelector<HTMLButtonElement>('#refresh-twitch-status');
+  const twitchStatusAnnouncer = document.querySelector<HTMLElement>('#twitch-status-announcer');
 
   if (!form || !input || !suggestions) {
     throw new Error('Stream toolbar elements not found');
@@ -306,6 +316,18 @@ export function bindStreamToolbar(
     const hasStreams = store.getStreams().length > 0;
     if (shareButton) shareButton.hidden = !hasStreams;
     if (clearButton) clearButton.hidden = !hasStreams;
+    if (refreshTwitchButton) {
+      refreshTwitchButton.hidden = !store.getStreams().some((stream) => stream.platform === 'twitch');
+    }
+  }
+
+  /** Visually-hidden aria-live text — never a modal/alert. Re-triggers even for a repeated message. */
+  function announceTwitchStatus(message: string): void {
+    if (!twitchStatusAnnouncer) return;
+    twitchStatusAnnouncer.textContent = '';
+    window.requestAnimationFrame(() => {
+      twitchStatusAnnouncer.textContent = message;
+    });
   }
 
   function syncHeadersButton(): void {
@@ -348,6 +370,44 @@ export function bindStreamToolbar(
   headersButton?.addEventListener('click', () => {
     if (isStreamFocused()) return;
     headersStore.toggle();
+  });
+
+  /**
+   * The global "Refresh Twitch statuses" action. Only ever calls the injected
+   * coordinator-backed refresh (status/metadata only — see
+   * refreshAllTwitchStatuses's own doc comment in StreamGrid.ts for why it
+   * can never touch a player or iframe) and updates this button's own
+   * disabled/label state plus the aria-live announcer. The in-flight check
+   * up front, together with disabling the button before the request starts,
+   * is what prevents a double-click from creating overlapping requests.
+   */
+  refreshTwitchButton?.addEventListener('click', () => {
+    if (twitchStatusRefresh.isRefreshInFlight()) return;
+
+    const previousLabel = iconButtonLabel(refreshTwitchButton)?.textContent ?? 'Refresh Twitch statuses';
+    refreshTwitchButton.disabled = true;
+    refreshTwitchButton.setAttribute('aria-busy', 'true');
+    setIconButtonLabel(refreshTwitchButton, 'Refreshing…');
+
+    void twitchStatusRefresh.refresh().then((result) => {
+      refreshTwitchButton.disabled = false;
+      refreshTwitchButton.removeAttribute('aria-busy');
+      setIconButtonLabel(refreshTwitchButton, previousLabel);
+
+      if (result.outcome !== 'ok') {
+        // 'skipped-inflight' shouldn't happen given the guard above, and
+        // 'skipped-empty' means the button should already be hidden — either
+        // way, nothing useful to announce.
+        return;
+      }
+
+      const allUnavailable =
+        result.results.size > 0 &&
+        [...result.results.values()].every((entry) => entry.status === 'unavailable');
+      announceTwitchStatus(
+        allUnavailable ? 'Twitch status temporarily unavailable' : 'Twitch statuses updated',
+      );
+    });
   });
 
   function sync(): void {

@@ -32,6 +32,7 @@
   },
   "devDependencies": {
     "@types/sortablejs": "^1.15.9",
+    "jsdom": "^29.1.1",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",
     "vitest": "^4.1.10"

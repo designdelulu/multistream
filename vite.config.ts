@@ -20,4 +20,7 @@ export default defineConfig({
     port: 5173,
   },
   appType: 'spa',
+  test: {
+    environment: 'jsdom',
+  },
 });

@@ -21,6 +21,7 @@ Watch Twitch, Kick, and YouTube on one page. MultiStream.cc is a modern multi-st
 | Focus mode | Expand one stream, unmute it, open Twitch chat when available |
 | Twitch chat | Docked sidebar on desktop/tablet (Kick has no official chat embed) |
 | Muted by default | Every stream boots muted; unmute via focus or the player’s own controls |
+| Twitch status | Live/offline/not-found/unavailable dot + category/viewers/duration on every Twitch card, refreshed automatically and on demand |
 
 ---
 
@@ -62,9 +63,15 @@ YouTube accepts more input shapes than Twitch/Kick, since a channel and a video 
 
 ### Hide headers
 
-- Toolbar **Show headers** / **Hide headers** toggles card top bars (preference is remembered; headers hidden by default).
+- Toolbar **Show headers** / **Hide headers** toggles card top bars (preference is remembered; headers shown by default).
 - At rest the card is **video only**. Hover the card and the player shrinks slightly so a control strip appears **below** the iframe (name, drag, focus, remove) — never stacked over the embed (Twitch requirement 1.3). Kick embeds re-scale on hover so volume / pause stay inside the smaller player.
 - This avoids Chrome pause-on-overlay and the mute-control refresh loop from remounting embeds.
+
+### Twitch status
+
+Every Twitch card shows a small dot next to its name — pulsing red for **live**, muted gray for **offline**, red-orange for **not found** (no such account), muted gray for **unavailable** (MultiStream couldn't check right now). When live, the header also shows the category, viewer count, and how long it's been live right next to the platform badge, e.g. "Twitch · Just Chatting · 12.4K viewers · 2h 14m". Hover the dot for the same info as an accessible tooltip.
+
+Use the toolbar's **Refresh Twitch statuses** button to re-check every Twitch card at once. It only updates the status dot and header text — it never reloads or restarts a player. If a channel you're watching goes live while you're on this page, its dot updates, but you'll still need the card's own **reload** button to actually connect to the stream. Status also refreshes automatically every few minutes while the tab is open and visible; it pauses while the tab is in the background so it never fights for bandwidth with the streams you're actually watching. A Twitch status failure never affects the embed itself — the video keeps working normally either way.
 
 ---
 

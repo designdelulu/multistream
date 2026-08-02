@@ -7,6 +7,13 @@ import {
   statsDebugEnabled,
 } from '../lib/embedDebug';
 import { createPlaybackRecovery, type RecoveryTarget } from '../lib/playbackRecovery';
+import { formatTwitchLiveDuration } from '../lib/twitchDuration';
+import { formatTwitchViewerCount } from '../lib/twitchViewerCount';
+import {
+  createTwitchStatusCoordinator,
+  type TwitchStatusRefreshReason,
+  type TwitchStatusRefreshResult,
+} from '../lib/twitchStatusCoordinator';
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import { twitchParentList } from '../platforms/twitch';
@@ -1072,10 +1079,10 @@ async function resolveAndMountYouTubeChannel(
 
   if (result.status === 'live') {
     if (result.channelTitle) {
-      const title = card.querySelector<HTMLElement>('.stream-card__title');
-      const nameChannel = card.querySelector<HTMLElement>('.stream-card__name-badge-channel');
-      if (title) title.textContent = result.channelTitle;
-      if (nameChannel) nameChannel.textContent = result.channelTitle;
+      // Two independent instances per card (header + hover toolbar) — update both.
+      for (const nameChannel of card.querySelectorAll<HTMLElement>('.stream-card__name-badge-channel')) {
+        nameChannel.textContent = result.channelTitle;
+      }
     }
     void startYouTubePlayer(card, result.videoId, autoplay);
     return;
@@ -1538,6 +1545,59 @@ function createTwitchMountPoint(): HTMLDivElement {
   return mount;
 }
 
+/**
+ * Dot + channel name + platform badge — the "who's broadcasting" identity
+ * strip. Originally only the headers-hidden hover toolbar's look; now also
+ * used in the header itself so both places read identically. Each card gets
+ * two independent instances (header + toolbar), which is why every consumer
+ * that needs to update one afterward (YouTube title resolution, Twitch status)
+ * uses querySelectorAll and updates every match rather than assuming one.
+ *
+ * For Twitch the dot starts neutral (no status yet) and only becomes a real
+ * live/offline/not-found/unavailable indicator once applyTwitchStatus runs —
+ * see twitchStatusDotProps. Kick and YouTube have no status system in this
+ * app, so their dot keeps the original decorative always-pulsing look.
+ *
+ * `includeMeta` adds a trailing "· Category · 2h 14m" span, populated only
+ * for the header instance — the card is never narrow enough to need this
+ * hidden anywhere (unlike the toolbar, which stays identity-only by design).
+ */
+function createNameBadge(
+  stream: StreamRef,
+  adapter: ReturnType<typeof getAdapter>,
+  includeMeta = false,
+): { root: HTMLDivElement; dot: HTMLSpanElement; channel: HTMLSpanElement; meta?: HTMLSpanElement } {
+  const root = document.createElement('div');
+  root.className = 'stream-card__name-badge';
+
+  const dot = document.createElement('span');
+  dot.className = 'stream-card__name-badge-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  if (stream.platform !== 'twitch') {
+    dot.classList.add('stream-card__name-badge-dot--pulse');
+  }
+
+  const channel = document.createElement('span');
+  channel.className = 'stream-card__name-badge-channel';
+  channel.textContent = adapter.displayName(stream);
+
+  const platform = document.createElement('span');
+  platform.className = `stream-card__name-badge-platform stream-card__name-badge-platform--${stream.platform}`;
+  platform.textContent = adapter.label;
+
+  root.append(dot, channel, platform);
+
+  let meta: HTMLSpanElement | undefined;
+  if (includeMeta) {
+    meta = document.createElement('span');
+    meta.className = 'stream-card__name-badge-meta';
+    meta.hidden = true;
+    root.append(meta);
+  }
+
+  return { root, dot, channel, meta };
+}
+
 function createPlayerElement(
   stream: StreamRef,
   store: StreamStore,
@@ -1562,22 +1622,12 @@ function createPlayerElement(
   const header = document.createElement('div');
   header.className = 'stream-card__header';
 
-  const badge = document.createElement('span');
-  badge.className = `stream-card__badge stream-card__badge--${stream.platform}`;
-  badge.textContent = adapter.label;
-
-  // Twitch-only: hidden until a status check resolves (advisory, never
-  // blocks or alters the embed below — see applyTwitchStatus).
-  let statusPill: HTMLSpanElement | undefined;
-  if (stream.platform === 'twitch') {
-    statusPill = document.createElement('span');
-    statusPill.className = 'stream-card__status-pill';
-    statusPill.hidden = true;
-  }
-
-  const title = document.createElement('span');
-  title.className = 'stream-card__title';
-  title.textContent = adapter.displayName(stream);
+  // Twitch-only: category + "Live for…" duration, appended inline after the
+  // platform badge once a live status check resolves — see
+  // applyTwitchStatus/renderTwitchCardStatus. Hidden (no text) for every
+  // other state; the dot itself plus its title/aria-label carry the full
+  // status for offline/not_found/unavailable.
+  const headerNameBadge = createNameBadge(stream, adapter, stream.platform === 'twitch');
 
   const controls = document.createElement('div');
   controls.className = 'stream-card__controls';
@@ -1624,9 +1674,7 @@ function createPlayerElement(
     headerVolumePanel = panel;
   }
   controls.append(focusButton, reloadButton, removeButton);
-  header.append(badge);
-  if (statusPill) header.append(statusPill);
-  header.append(title, controls);
+  header.append(headerNameBadge.root, controls);
   if (headerVolumePanel) header.append(headerVolumePanel);
 
   const player = document.createElement('div');
@@ -1664,22 +1712,7 @@ function createPlayerElement(
    * `.stream-card__player`. Painting controls over a live Twitch iframe was
    * confirmed to pause it on hover — keep them out of the player subtree.
    */
-  const nameBadge = document.createElement('div');
-  nameBadge.className = 'stream-card__name-badge';
-
-  const nameDot = document.createElement('span');
-  nameDot.className = 'stream-card__name-badge-dot';
-  nameDot.setAttribute('aria-hidden', 'true');
-
-  const nameChannel = document.createElement('span');
-  nameChannel.className = 'stream-card__name-badge-channel';
-  nameChannel.textContent = adapter.displayName(stream);
-
-  const namePlatform = document.createElement('span');
-  namePlatform.className = `stream-card__name-badge-platform stream-card__name-badge-platform--${stream.platform}`;
-  namePlatform.textContent = adapter.label;
-
-  nameBadge.append(nameDot, nameChannel, namePlatform);
+  const toolbarNameBadge = createNameBadge(stream, adapter);
 
   const overlayControls = document.createElement('div');
   overlayControls.className = 'stream-card__overlay-controls';
@@ -1736,7 +1769,7 @@ function createPlayerElement(
   }
   overlayControls.append(overlayDrag, overlayFocus, overlayReload, overlayRemove);
 
-  toolbar.append(nameBadge, overlayControls);
+  toolbar.append(toolbarNameBadge.root, overlayControls);
   if (toolbarVolumePanel) toolbar.append(toolbarVolumePanel);
 
   card.append(header, player, toolbar);
@@ -2039,82 +2072,198 @@ function reloadStreamCard(card: HTMLElement): void {
 }
 
 /**
- * Pure status -> pill (text/modifier class/tooltip) mapping, kept separate
- * from any DOM code so it's unit-testable on its own. `null` means "don't
- * show a pill" — currently only invalid_input, which the frontend already
- * prevents from ever being submitted, so it should never actually surface.
+ * Pure status -> dot modifier/label mapping, kept separate from any DOM code
+ * so it's unit-testable on its own. `null` means "no real status to show" —
+ * currently only invalid_input, which the frontend already prevents from
+ * ever being submitted, so it should never actually surface; the dot stays
+ * in its neutral pending look in that case.
  */
-export function twitchStatusPillProps(
+const DOT_STATUS_MODIFIERS = ['live', 'offline', 'not_found', 'unavailable'] as const;
+type TwitchDotModifier = (typeof DOT_STATUS_MODIFIERS)[number];
+
+const DOT_STATUS_LABELS: Record<TwitchDotModifier, string> = {
+  live: 'Live',
+  offline: 'Offline',
+  not_found: 'Not found',
+  unavailable: 'Unavailable',
+};
+
+export function twitchStatusDotProps(
   result: TwitchStatusResult,
-): { text: string; modifier: string; title?: string } | null {
-  switch (result.status) {
-    case 'live': {
-      const tooltipParts = [result.title, result.category].filter(
-        (part): part is string => Boolean(part),
-      );
-      return {
-        text: 'Live',
-        modifier: 'live',
-        title: tooltipParts.length > 0 ? tooltipParts.join(' — ') : undefined,
-      };
+): { modifier: TwitchDotModifier; label: string } | null {
+  if (result.status === 'invalid_input') return null;
+  const modifier = result.status;
+  return { modifier, label: DOT_STATUS_LABELS[modifier] };
+}
+
+/**
+ * Builds the "Live · Category · 12.4K viewers · 2h 14m" text used for both
+ * the dot's title/aria-label (always, for accessibility) and the inline meta
+ * span appended after the platform badge in the header. Category/viewer
+ * count/duration only ever apply to a live result.
+ */
+function twitchStatusText(
+  props: ReturnType<typeof twitchStatusDotProps>,
+  category: string | undefined,
+  viewers: string | null,
+  duration: string | null,
+): { tooltip: string; meta: string } {
+  if (!props) return { tooltip: '', meta: '' };
+  if (props.modifier !== 'live') return { tooltip: props.label, meta: '' };
+  const metaParts = [category, viewers, duration].filter((part): part is string => Boolean(part));
+  const meta = metaParts.join(' · ');
+  return { tooltip: meta ? `${props.label} · ${meta}` : props.label, meta };
+}
+
+/**
+ * Renders one card's already-known status (from its `data-twitch-*` dataset,
+ * set by applyTwitchStatus) at the given point in time. Split out from
+ * applyTwitchStatus so the shared minute timer can re-render just the
+ * duration text without re-fetching or re-applying a status result.
+ */
+function isTwitchDotModifier(value: string | undefined): value is TwitchDotModifier {
+  return !!value && (DOT_STATUS_MODIFIERS as readonly string[]).includes(value);
+}
+
+function renderTwitchCardStatus(card: HTMLElement, nowMs: number): void {
+  const statusValue = card.dataset.twitchStatus;
+  const props = isTwitchDotModifier(statusValue)
+    ? { modifier: statusValue, label: DOT_STATUS_LABELS[statusValue] }
+    : null;
+
+  const category = card.dataset.twitchCategory;
+  const viewers = formatTwitchViewerCount(
+    card.dataset.twitchViewerCount === undefined ? undefined : Number(card.dataset.twitchViewerCount),
+  );
+  const duration = formatTwitchLiveDuration(card.dataset.twitchStartedAt, nowMs);
+  const { tooltip, meta } = twitchStatusText(props, category, viewers, duration);
+
+  for (const dot of card.querySelectorAll<HTMLElement>('.stream-card__name-badge-dot')) {
+    for (const modifier of DOT_STATUS_MODIFIERS) {
+      dot.classList.remove(`stream-card__name-badge-dot--${modifier}`);
     }
-    case 'offline':
-      return { text: 'Offline', modifier: 'offline' };
-    case 'not_found':
-      return { text: 'Not found', modifier: 'not_found' };
-    case 'unavailable':
-      return { text: 'Unavailable', modifier: 'unavailable' };
-    case 'invalid_input':
-      return null;
+    dot.classList.remove('stream-card__name-badge-dot--pulse');
+
+    if (props) {
+      dot.classList.add(`stream-card__name-badge-dot--${props.modifier}`);
+      if (props.modifier === 'live') dot.classList.add('stream-card__name-badge-dot--pulse');
+      dot.setAttribute('role', 'img');
+      dot.setAttribute('aria-hidden', 'false');
+      dot.setAttribute('aria-label', tooltip);
+      dot.title = tooltip;
+    } else {
+      dot.removeAttribute('role');
+      dot.removeAttribute('aria-label');
+      dot.removeAttribute('title');
+      dot.setAttribute('aria-hidden', 'true');
+    }
   }
+
+  const metaEl = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+  if (metaEl) {
+    metaEl.textContent = meta ? `· ${meta}` : '';
+    metaEl.hidden = meta.length === 0;
+  }
+}
+
+let twitchDurationTimerId = 0;
+
+/**
+ * Test-only: clears the shared duration timer's handle between test cases so
+ * one test's real-or-fake interval can't starve the next test's
+ * syncTwitchDurationTimer call (which no-ops whenever a handle is already
+ * set). Not called anywhere in production code.
+ */
+export function __resetTwitchDurationTimerForTests(): void {
+  if (twitchDurationTimerId) {
+    window.clearInterval(twitchDurationTimerId);
+    twitchDurationTimerId = 0;
+  }
+}
+
+/** One shared 60s timer for every live Twitch card's duration text — never one per card. */
+function syncTwitchDurationTimer(container: HTMLElement): void {
+  const hasLiveDuration =
+    container.querySelector('.stream-card[data-platform="twitch"][data-twitch-started-at]') !== null;
+
+  if (!hasLiveDuration) {
+    if (twitchDurationTimerId) {
+      window.clearInterval(twitchDurationTimerId);
+      twitchDurationTimerId = 0;
+    }
+    return;
+  }
+
+  if (twitchDurationTimerId) return;
+  twitchDurationTimerId = window.setInterval(() => {
+    if (!container.isConnected) {
+      window.clearInterval(twitchDurationTimerId);
+      twitchDurationTimerId = 0;
+      return;
+    }
+    const now = Date.now();
+    for (const card of container.querySelectorAll<HTMLElement>(
+      '.stream-card[data-platform="twitch"][data-twitch-started-at]',
+    )) {
+      renderTwitchCardStatus(card, now);
+    }
+  }, 60_000);
 }
 
 /**
  * Applies already-fetched status results to whatever matching Twitch cards
- * currently exist. Only ever touches `.stream-card__status-pill` — never
- * mountStreamMedia, twitchPlayers, or any iframe/player state. A card with
- * no matching result (e.g. that one lookup failed on its own) is left
+ * currently exist. Only ever touches `.stream-card__name-badge-dot`,
+ * `.stream-card__name-badge-meta`, and `data-twitch-*` dataset attributes —
+ * never mountStreamMedia, twitchPlayers, or any iframe/player state. A card
+ * with no matching result (e.g. that one lookup failed on its own) is left
  * exactly as it was, not cleared — purely additive, purely advisory.
  */
 export function applyTwitchStatus(
   container: HTMLElement,
   results: Map<string, TwitchStatusResult>,
 ): void {
+  const nowMs = Date.now();
+
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card[data-platform="twitch"]')) {
     const channel = card.dataset.channel ?? '';
     const result = results.get(channel);
     if (!result) continue;
 
-    const pill = card.querySelector<HTMLElement>('.stream-card__status-pill');
-    if (!pill) continue;
-
-    const props = twitchStatusPillProps(result);
-    if (!props) {
-      pill.hidden = true;
-      pill.textContent = '';
-      pill.removeAttribute('title');
-      pill.className = 'stream-card__status-pill';
-      continue;
-    }
-
-    pill.hidden = false;
-    pill.textContent = props.text;
-    pill.className = `stream-card__status-pill stream-card__status-pill--${props.modifier}`;
-    if (props.title) {
-      pill.title = props.title;
+    const props = twitchStatusDotProps(result);
+    if (props) {
+      card.dataset.twitchStatus = props.modifier;
     } else {
-      pill.removeAttribute('title');
+      delete card.dataset.twitchStatus;
     }
+
+    if (result.status === 'live' && result.startedAt) {
+      card.dataset.twitchStartedAt = result.startedAt;
+    } else {
+      delete card.dataset.twitchStartedAt;
+    }
+    if (result.status === 'live' && result.category) {
+      card.dataset.twitchCategory = result.category;
+    } else {
+      delete card.dataset.twitchCategory;
+    }
+    if (result.status === 'live' && result.viewerCount !== undefined) {
+      card.dataset.twitchViewerCount = String(result.viewerCount);
+    } else {
+      delete card.dataset.twitchViewerCount;
+    }
+
+    renderTwitchCardStatus(card, nowMs);
   }
+
+  syncTwitchDurationTimer(container);
 }
 
 /**
  * Fire-and-forget: checks status for the given Twitch channels in one
  * batched request, then applies whatever comes back. Safe to call with any
- * number of channels — the add/reload paths call this with one, initial
- * restore calls it with the whole grid at once. Never blocks or delays
- * anything else; `checkTwitchStatus` itself never throws except on abort,
- * which this doesn't use, so there's nothing here to catch.
+ * number of channels — the add/reload paths call this with one. Never blocks
+ * or delays anything else; `checkTwitchStatus` itself never throws except on
+ * abort, which this doesn't use, so there's nothing here to catch.
  */
 export function refreshTwitchStatus(container: HTMLElement, channels: string[]): void {
   const wanted = channels.filter(Boolean);
@@ -2123,6 +2272,39 @@ export function refreshTwitchStatus(container: HTMLElement, channels: string[]):
     if (!container.isConnected) return;
     applyTwitchStatus(container, results);
   });
+}
+
+const twitchStatusCoordinator = createTwitchStatusCoordinator({
+  checkStatus: checkTwitchStatus,
+  onResult: (results, _reason) => {
+    const container = document.querySelector<HTMLElement>('#stream-grid');
+    if (!container || !container.isConnected) return;
+    applyTwitchStatus(container, results);
+  },
+});
+
+/**
+ * The single coordinator-backed entry point for "recheck every Twitch card at
+ * once" — used by initial restore, the manual refresh button, the periodic
+ * scheduler, and visibility-resume. Collects the current Twitch channels
+ * straight from the store (source of truth), not the DOM, dedupes them, and
+ * defers to the coordinator's in-flight gate so only one such batched request
+ * is ever active app-wide. Does not touch any player/iframe — see
+ * applyTwitchStatus's own doc comment for the boundary this respects.
+ */
+export function refreshAllTwitchStatuses(
+  store: StreamStore,
+  reason: TwitchStatusRefreshReason,
+): Promise<TwitchStatusRefreshResult> {
+  const channels = store
+    .getStreams()
+    .filter((stream) => stream.platform === 'twitch')
+    .map((stream) => stream.channel);
+  return twitchStatusCoordinator.refresh(channels, reason);
+}
+
+export function isTwitchStatusRefreshInFlight(): boolean {
+  return twitchStatusCoordinator.isInFlight();
 }
 
 /**

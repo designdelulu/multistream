@@ -4,10 +4,11 @@ import {
   bindPlaybackRecovery,
   bindStreamFocus,
   bindTabVisibilityPlayers,
+  isTwitchStatusRefreshInFlight,
   nudgeStalledTwitchPlayers,
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
-  refreshTwitchStatus,
+  refreshAllTwitchStatuses,
   snapshotPlayingTwitchPlayers,
   startStatsProbe,
   syncStreamGrid,
@@ -16,11 +17,18 @@ import {
 import { bindStreamReorder } from './components/StreamReorder';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
 import { bindWelcomeModal } from './components/WelcomeModal';
-import { announceEmbedDebug } from './lib/embedDebug';
+import { announceEmbedDebug, twitchStatusFastPollEnabled } from './lib/embedDebug';
+import {
+  createTwitchStatusScheduler,
+  TWITCH_STATUS_POLL_INTERVAL_MS,
+} from './lib/twitchStatusScheduler';
 import { phoneMediaQuery } from './lib/viewport';
 import { createChatStore } from './state/chat';
 import { createHeadersStore } from './state/headers';
 import { createStreamStore } from './state/streams';
+
+/** Dev-only (?debug=twitch-fast-poll, gated on import.meta.env.DEV): compresses manual testing of multiple automatic cycles into a short session. Never reachable in production. */
+const DEV_FAST_TWITCH_POLL_INTERVAL_MS = 15_000;
 
 announceEmbedDebug();
 
@@ -147,8 +155,47 @@ function renderStreams(): void {
 
 let chatSnapshotBeforeFocus: { visible: boolean; selectedId: string | null } | null = null;
 
+/**
+ * Shared Twitch status scheduler — one for the whole app, armed only while at
+ * least one Twitch card exists (see syncTwitchStatusScheduler below) and
+ * paused while the tab is hidden or offline. Never touches players/iframes:
+ * `run` only calls refreshAllTwitchStatuses, which in turn only updates
+ * status dots/metadata — see StreamGrid.ts's applyTwitchStatus doc comment.
+ */
+const twitchStatusScheduler = createTwitchStatusScheduler({
+  intervalMs: twitchStatusFastPollEnabled
+    ? DEV_FAST_TWITCH_POLL_INTERVAL_MS
+    : TWITCH_STATUS_POLL_INTERVAL_MS,
+  hasTwitchCards: () => store.getStreams().some((stream) => stream.platform === 'twitch'),
+  isHidden: () => document.hidden,
+  isOnline: () => navigator.onLine,
+  run: (reason) => refreshAllTwitchStatuses(store, reason).then((result) => result.outcome),
+  now: () => Date.now(),
+  setInterval: (handler, ms) => window.setInterval(handler, ms),
+  clearInterval: (handle) => window.clearInterval(handle),
+});
+
+function syncTwitchStatusScheduler(): void {
+  const hasTwitchCards = store.getStreams().some((stream) => stream.platform === 'twitch');
+  if (hasTwitchCards) {
+    twitchStatusScheduler.start();
+  } else {
+    twitchStatusScheduler.stop();
+  }
+}
+
+/** The manual "Refresh Twitch statuses" action — resets the periodic clock only on success, per the scheduler's own contract. */
+async function manualTwitchStatusRefresh(): Promise<Awaited<ReturnType<typeof refreshAllTwitchStatuses>>> {
+  const result = await refreshAllTwitchStatuses(store, 'manual');
+  if (result.outcome === 'ok') twitchStatusScheduler.notifyManualRefresh();
+  return result;
+}
+
 bindWelcomeModal();
-const toolbar = bindStreamToolbar(store, headersStore);
+const toolbar = bindStreamToolbar(store, headersStore, {
+  refresh: manualTwitchStatusRefresh,
+  isRefreshInFlight: isTwitchStatusRefreshInFlight,
+});
 const reorder = bindStreamReorder(gridEl, store, headersStore);
 reorder.sync();
 bindChatToggle(chatStore);
@@ -189,6 +236,7 @@ bindStreamFocus((focused, streamId) => {
   updateLayout();
 });
 store.subscribe(renderStreams);
+store.subscribe(syncTwitchStatusScheduler);
 chatStore.subscribe(() => {
   quietLayout(1500);
   updateLayout();
@@ -290,8 +338,14 @@ function nudgeOnInteraction(): void {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) armInteractionNudge();
+  if (!document.hidden) {
+    armInteractionNudge();
+    // Refresh once only if the previous check is older than the normal
+    // interval — never a burst on every tab-foreground.
+    twitchStatusScheduler.notifyVisible();
+  }
 });
+window.addEventListener('online', () => twitchStatusScheduler.notifyVisible());
 // Exiting fullscreen has the same lost-gesture problem, and was previously
 // only ever fixed by incidental mouse movement — there was no listener for it.
 document.addEventListener('fullscreenchange', armInteractionNudge);
@@ -303,10 +357,5 @@ renderStreams();
 // One batched advisory status check for every Twitch channel restored from
 // the URL/localStorage at startup — never one request per tile. Streams
 // added later go through StreamToolbar's own single-channel check instead.
-refreshTwitchStatus(
-  gridEl,
-  store
-    .getStreams()
-    .filter((stream) => stream.platform === 'twitch')
-    .map((stream) => stream.channel),
-);
+void refreshAllTwitchStatuses(store, 'initial-restore');
+syncTwitchStatusScheduler();

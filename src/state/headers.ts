@@ -5,10 +5,10 @@ const STORAGE_KEY = 'multistream:headers-hidden';
 function loadHidden(): boolean {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === null) return true;
+    if (stored === null) return false;
     return stored === '1';
   } catch {
-    return true;
+    return false;
   }
 }
 

@@ -23,7 +23,7 @@ MultiStream.cc is a modern multi-stream viewer for Twitch and Kick — watch par
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
 - **Username dropdown** — type a name (or `@name`) and pick Twitch or Kick; Enter uses your last-chosen platform
 - **Share link / Clear all** in the toolbar
-- **Hide headers** — compact mode is **on by default** (remembered in `localStorage`); at rest each card is video-only; hover a card and a toolbar opens **below** the embed (name, drag, focus, remove) so Twitch is never obscured
+- **Hide headers** — headers are shown by default (remembered in `localStorage` once toggled); in compact mode each card is video-only at rest, and hovering a card opens a toolbar **below** the embed (name, drag, focus, remove) so Twitch is never obscured
 - **Drag to reorder** stream cards (drag the card header, or the drag handle in the hover toolbar when headers are hidden); URL updates without remounting players
 - **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
 - **Shareable path URLs** like `/t:username/k:username`
@@ -134,7 +134,30 @@ If the key is missing or misconfigured, YouTube channel/handle streams show a cl
 
 Checking whether a Twitch channel exists and whether it's currently live uses the Twitch Helix API, which needs an app access token — and that token flow needs a Client Secret, which must never live in client-side JavaScript. So this check runs server-side too, via `public/api/twitch-status.php` (same deployment story as the YouTube resolver: a normal static file inside `dist/`, no extra hosting).
 
-**This is advisory only.** A missing/misconfigured key, a Twitch API outage, or a network hiccup never blocks anything — the real Twitch embed still mounts and plays normally; you just won't see a Live/Offline/Not found badge on the card.
+**This is advisory only.** A missing/misconfigured key, a Twitch API outage, or a network hiccup never blocks anything — the real Twitch embed still mounts and plays normally; you just get a status dot of `unavailable` instead of `live`/`offline`.
+
+### Status states
+
+Each Twitch card shows a small dot next to its name (in the header, and in the hover toolbar when headers are hidden). The header instance also shows, for a live channel, category, viewer count, and "Live for…" duration inline after the platform badge:
+
+| State | Dot | Meaning |
+|---|---|---|
+| `live` | pulsing red | The account exists and is currently broadcasting. Category, viewer count, and "Live for…" duration are shown when Twitch provides them. |
+| `offline` | muted gray | The account exists but isn't currently broadcasting. |
+| `not_found` | steady red-orange | Twitch confirms no account exists for that login. |
+| `unavailable` | muted gray | Status couldn't be determined (endpoint, credentials, network, Twitch API, or rate limit) — never removes the card or affects the embed. |
+
+The dot's tooltip and accessible label always carry the full text (e.g. "Live · Just Chatting · 12.4K viewers · 2h 14m").
+
+### Refreshing status
+
+**Refresh Twitch statuses**, in the toolbar, re-checks every Twitch card's status in one batched request. It only ever updates the status dot and header meta text — it never reloads, remounts, or otherwise touches any player or iframe. If an offline channel comes back live, its dot updates immediately, but the embed itself isn't restarted; use the card's own reload control if you want to actually (re)connect to the now-live stream.
+
+The same check also runs automatically every 3 minutes while the tab is open, visible, and online, and once more when you return to a backgrounded tab if the last check is stale — never while the tab is hidden, offline, or if a check is already in progress.
+
+### Cache
+
+`public/api/twitch-status.php` caches live lookups for 60 seconds and offline lookups for 3 minutes (channel-existence lookups are cached far longer: 24h if found, 1h if not). The 3-minute automatic interval above is chosen to match that: it's never faster than the offline cache window, and always slower than the live one, so automatic refreshes reliably see fresh data without hammering Twitch's API.
 
 One-time setup on your DreamHost account, **after** you've uploaded `dist/`:
 
@@ -168,7 +191,7 @@ Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:use
 
 Use **Share link** in the toolbar to copy the current URL. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Clear, Headers, Chat) are icons that expand their labels on hover.
 
-**Hide headers** collapses each card’s top bar for a denser grid. At rest you see **video only**. Hover a card and the player shrinks slightly so a control strip opens **below** the iframe — channel name, **drag to reorder**, magnifying-glass **Focus**, and **×** remove. Controls never stack over the embed (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)). Live viewer counts beside names are planned for a follow-up.
+**Hide headers** collapses each card’s top bar for a denser grid. At rest you see **video only**. Hover a card and the player shrinks slightly so a control strip opens **below** the iframe — channel name, **drag to reorder**, magnifying-glass **Focus**, and **×** remove. Controls never stack over the embed (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)).
 
 ### Add streams from the toolbar
 

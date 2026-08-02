@@ -7,11 +7,15 @@
  * ?debugPlayers=1 is an alias for ?debug=players, kept because it is the
  * spelling the add/remove recovery work is documented under.
  *
+ * ?debug=twitch-fast-poll shortens the Twitch status polling interval for
+ * manual testing — see twitchStatusFastPollEnabled below for why this one is
+ * also gated behind import.meta.env.DEV, unlike the others.
+ *
  * No playback behavior — console diagnostics only.
  */
 
 const SESSION_KEY = 'multistream:debug-flags';
-const KNOWN_FLAGS = ['embeds', 'stats', 'players'] as const;
+const KNOWN_FLAGS = ['embeds', 'stats', 'players', 'twitch-fast-poll'] as const;
 type DebugFlag = (typeof KNOWN_FLAGS)[number];
 
 function isDebugFlag(value: string): value is DebugFlag {
@@ -83,6 +87,16 @@ const counts: Record<string, number> = Object.create(null) as Record<string, num
 export const embedDebugEnabled = enabledDebugFlags.has('embeds');
 export const statsDebugEnabled = enabledDebugFlags.has('stats');
 export const playersDebugEnabled = enabledDebugFlags.has('players');
+
+/**
+ * Dev-only accelerated Twitch status poll interval, for manually compressing
+ * "10 automatic cycles" of testing into a short session. Gated on
+ * import.meta.env.DEV in addition to the ?debug flag so the accelerated
+ * cadence is unreachable in the production build regardless of query string
+ * — never shipped, per the task's explicit requirement.
+ */
+export const twitchStatusFastPollEnabled =
+  import.meta.env.DEV && enabledDebugFlags.has('twitch-fast-poll');
 
 /**
  * Player-lifecycle trace for the add/remove recovery path (?debugPlayers=1).
@@ -201,6 +215,12 @@ export function announceEmbedDebug(): void {
   if (playersDebugEnabled) {
     console.info(
       '[players-debug] enabled — Twitch player lifecycle and add/remove recovery. Disable with ?debug=off.',
+    );
+  }
+
+  if (twitchStatusFastPollEnabled) {
+    console.info(
+      '[twitch-status-debug] fast-poll enabled (dev build only) — status polling interval shortened. Disable with ?debug=off.',
     );
   }
 }
