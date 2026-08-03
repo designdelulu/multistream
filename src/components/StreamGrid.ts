@@ -14,6 +14,11 @@ import {
   type TwitchStatusRefreshReason,
   type TwitchStatusRefreshResult,
 } from '../lib/twitchStatusCoordinator';
+import {
+  createYouTubeStatusCoordinator,
+  type YouTubeStatsRefreshReason,
+  type YouTubeStatsRefreshResult,
+} from '../lib/youtubeStatusCoordinator';
 import { isStackedStreamLayout } from '../lib/viewport';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import { twitchParentList } from '../platforms/twitch';
@@ -24,6 +29,7 @@ import {
   type YouTubeResolveResult,
 } from '../platforms/youtubeResolver';
 import { checkTwitchStatus, type TwitchStatusResult } from '../platforms/twitchStatus';
+import { checkYouTubeStats, type YouTubeStatsResult } from '../platforms/youtubeStats';
 import type { StreamRef } from '../types';
 import type { StreamStore } from '../state/streams';
 
@@ -366,6 +372,7 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
   twitchPlayback.set(streamId, 'unknown');
   card.dataset.twitchMode = 'api';
   card.dataset.embedMuted = muted ? '1' : '0';
+  syncTwitchMuteUi(card);
 
   logEmbedEvent('player-ready', { platform: 'twitch', channel, action: 'src', muted, card });
   logPlayerEvent('construct', { streamId, channel, mountId: mountEl.id, muted });
@@ -441,6 +448,7 @@ function mountTwitchIframe(
   delete iframe.dataset.focusFrozen;
   iframe.dataset.embedMuted = muted ? '1' : '0';
   card.dataset.embedMuted = muted ? '1' : '0';
+  syncTwitchMuteUi(card);
 
   if (!isBlankIframeSrc(iframe.src)) {
     try {
@@ -486,6 +494,7 @@ function mountTwitchIframeForced(
   delete iframe.dataset.focusFrozen;
   iframe.dataset.embedMuted = muted ? '1' : '0';
   card.dataset.embedMuted = muted ? '1' : '0';
+  syncTwitchMuteUi(card);
 
   logEmbedEvent(reason, {
     platform: 'twitch',
@@ -796,7 +805,7 @@ function syncYouTubeVolumeUi(card: HTMLElement): void {
   // Up to 4 buttons per card: header/toolbar triggers (open the panel, keep
   // a static "open controls" label — see createYouTubeVolumeControl) and
   // header/toolbar panel mute buttons (a real toggle, label follows state).
-  for (const button of card.querySelectorAll<HTMLButtonElement>('.stream-card__youtube-volume-btn')) {
+  for (const button of card.querySelectorAll<HTMLButtonElement>('.stream-card__mute-btn')) {
     button.disabled = !available;
     button.setAttribute('aria-pressed', muted ? 'true' : 'false');
     button.innerHTML = muted ? ICON_VOLUME_OFF : ICON_VOLUME_ON;
@@ -853,7 +862,7 @@ function createYouTubeVolumeControl(
 
   const trigger = document.createElement('button');
   trigger.type = 'button';
-  trigger.className = 'stream-card__youtube-volume-btn';
+  trigger.className = 'stream-card__mute-btn';
   trigger.dataset.role = 'trigger';
   trigger.title = 'Volume';
   trigger.setAttribute('aria-label', 'Open YouTube volume controls');
@@ -880,7 +889,7 @@ function createYouTubeVolumeControl(
 
   const panelButton = document.createElement('button');
   panelButton.type = 'button';
-  panelButton.className = 'stream-card__youtube-volume-btn';
+  panelButton.className = 'stream-card__mute-btn';
   panelButton.title = 'Mute';
   panelButton.setAttribute('aria-label', 'Mute YouTube video');
   panelButton.setAttribute('aria-pressed', 'true');
@@ -1018,6 +1027,65 @@ function createYouTubeVolumeControl(
   return { trigger, panel };
 }
 
+/**
+ * Plain Twitch mute toggle: button only, no slider/panel — setMuted()/
+ * getMuted() cover mute, and there's no adjustable-volume API to expose the
+ * way YouTube's is. Shares .stream-card__mute-btn (and its icon set) with
+ * the YouTube volume trigger so a muted/unmuted stream reads identically
+ * across platforms, including at a glance across several streams left
+ * unmuted at once.
+ */
+function createTwitchMuteButton(streamId: string): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'stream-card__mute-btn';
+  // Mirrors the YouTube trigger's own stopPropagation — the button lives in
+  // the header, Sortable's drag handle in headers-visible mode.
+  button.addEventListener('pointerdown', (event) => event.stopPropagation());
+  button.addEventListener('mousedown', (event) => event.stopPropagation());
+  button.addEventListener('touchstart', (event) => event.stopPropagation());
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const card = cardForStream(streamId);
+    if (card) toggleTwitchMute(card);
+  });
+  return button;
+}
+
+/**
+ * Toggles the current card's Twitch mute state. 'api' mode mutes live via
+ * the player, no reload; 'fallback' (embed script blocked) has no such API,
+ * so it goes through mountTwitchIframe's normal reload-with-new-mute-param
+ * path instead — the same mechanism focus-unmute already uses for fallback
+ * mode. 'pending' just records the preference for the in-flight mount to
+ * read once it resolves (see mountStreamMedia).
+ */
+function toggleTwitchMute(card: HTMLElement): void {
+  const streamId = card.dataset.streamId ?? '';
+  const nextMuted = !preferredMuted(card);
+  const mode = card.dataset.twitchMode;
+
+  if (mode === 'fallback') {
+    mountTwitchIframe(card, nextMuted, 'focus-unmute');
+  } else {
+    twitchPlayers.get(streamId)?.setMuted(nextMuted);
+    card.dataset.embedMuted = nextMuted ? '1' : '0';
+  }
+  syncTwitchMuteUi(card);
+}
+
+/** Keeps every rendered copy of the Twitch mute button (header, headers-hidden hover toolbar) in sync with card.dataset.embedMuted. */
+function syncTwitchMuteUi(card: HTMLElement): void {
+  const muted = preferredMuted(card);
+  const label = muted ? 'Unmute stream' : 'Mute stream';
+  for (const button of card.querySelectorAll<HTMLButtonElement>('.stream-card__mute-btn')) {
+    button.setAttribute('aria-pressed', muted ? 'true' : 'false');
+    button.innerHTML = muted ? ICON_VOLUME_OFF : ICON_VOLUME_ON;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  }
+}
+
 /** Ends the async chain from mountYouTubeMedia's first-ever-mount branch, for both a direct video and a resolved-live channel. */
 async function startYouTubePlayer(card: HTMLElement, videoId: string, autoplay: boolean): Promise<void> {
   const available = await ensureYouTubeIframeApi();
@@ -1026,6 +1094,12 @@ async function startYouTubePlayer(card: HTMLElement, videoId: string, autoplay: 
 
   const mountTarget = ensureYouTubeMountTarget(card);
   if (!mountTarget) return;
+
+  // The videoId a periodic stats refresh polls for this card — see
+  // refreshAllYouTubeStats, which reads this dataset attribute rather than
+  // re-deriving it from the stream's token (a channel token's live videoId
+  // can change between refreshes; a direct-video token's cannot).
+  card.dataset.youtubeVideoId = videoId;
 
   if (!available) {
     mountYouTubeFallbackIframe(mountTarget, videoId, autoplay);
@@ -1084,6 +1158,26 @@ async function resolveAndMountYouTubeChannel(
         nameChannel.textContent = result.channelTitle;
       }
     }
+
+    // First paint of viewer count/duration — this same request already
+    // fetched them (see resolve_live_video's follow-up in
+    // youtube-resolve.php), so there's no reason to wait for the periodic
+    // scheduler's next tick just to show them. Set videoId synchronously
+    // (ahead of startYouTubePlayer's own, later, identical assignment) so a
+    // stats refresh racing this mount always has something to match against.
+    card.dataset.youtubeVideoId = result.videoId;
+    if (result.viewerCount != null) {
+      card.dataset.youtubeViewerCount = String(result.viewerCount);
+    }
+    if (result.startedAt) {
+      card.dataset.youtubeStartedAt = result.startedAt;
+    }
+    const gridContainer = card.closest<HTMLElement>('#stream-grid');
+    if (gridContainer) {
+      renderYouTubeCardMeta(card, Date.now());
+      syncYouTubeDurationTimer(gridContainer);
+    }
+
     void startYouTubePlayer(card, result.videoId, autoplay);
     return;
   }
@@ -1137,7 +1231,17 @@ function mountYouTubeMedia(
 
     const autoplay = grantYouTubeAutoplayOnce();
     if (token.resolutionType === 'video') {
+      // A direct video link never touches youtube-resolve.php (see the
+      // module doc comment on parseYouTubeToken), so unlike the channel
+      // path above there's no free viewer-count/duration data to seed from —
+      // fire the same one-off stats check refreshAllYouTubeStats' periodic
+      // tick would eventually make anyway, just sooner. Set videoId
+      // synchronously first so that request has something to match once it
+      // resolves, same reasoning as resolveAndMountYouTubeChannel's.
+      card.dataset.youtubeVideoId = token.videoId;
       void startYouTubePlayer(card, token.videoId, autoplay);
+      const gridContainer = card.closest<HTMLElement>('#stream-grid');
+      if (gridContainer) refreshYouTubeStats(gridContainer, [token.videoId]);
       return;
     }
     void resolveAndMountYouTubeChannel(card, token, autoplay);
@@ -1222,6 +1326,7 @@ function mountStreamMedia(
     player?.setMuted(muted);
     player?.play();
     card.dataset.embedMuted = muted ? '1' : '0';
+    syncTwitchMuteUi(card);
     return;
   }
 
@@ -1495,6 +1600,7 @@ export function toggleStreamFocus(container: HTMLElement, streamId: string): voi
     }
     // mode === 'pending': the in-flight construction reads embedMuted once
     // the script settles — nothing to do here.
+    syncTwitchMuteUi(focusedCard);
   }
   if (focusedCard?.dataset.platform === 'youtube') {
     mountYouTubeMedia(focusedCard, 'focus-unmute');
@@ -1555,13 +1661,16 @@ function createTwitchMountPoint(): HTMLDivElement {
  *
  * For Twitch the dot starts neutral (no status yet) and only becomes a real
  * live/offline/not-found/unavailable indicator once applyTwitchStatus runs —
- * see twitchStatusDotProps. Kick and YouTube have no status system in this
- * app, so their dot keeps the original decorative always-pulsing look.
+ * see twitchStatusDotProps. Kick has no status system in this app, so its
+ * dot keeps the original decorative always-pulsing look; YouTube's dot is
+ * the same decorative always-pulsing look too — only its meta span is
+ * populated, by applyYouTubeStats.
  *
- * `includeMeta` adds a trailing "· Category · 2h 14m" span, populated only
- * for the header instance — hidden below a width threshold via the
- * `@container stream-card` rule on `.stream-card__name-badge-meta` in
- * main.css, so a narrow card never has to wrap the header onto two rows.
+ * `includeMeta` adds a trailing "· Category · 2h 14m" span (Twitch) or
+ * "· 12.4K viewers · 2h 14m" (YouTube), populated only for the header
+ * instance — hidden below a width threshold via the `@container stream-card`
+ * rule on `.stream-card__name-badge-meta` in main.css, so a narrow card
+ * never has to wrap the header onto two rows.
  * The toolbar instance stays identity-only by design and never gets one.
  */
 function createNameBadge(
@@ -1629,7 +1738,11 @@ function createPlayerElement(
   // applyTwitchStatus/renderTwitchCardStatus. Hidden (no text) for every
   // other state; the dot itself plus its title/aria-label carry the full
   // status for offline/not_found/unavailable.
-  const headerNameBadge = createNameBadge(stream, adapter, stream.platform === 'twitch');
+  const headerNameBadge = createNameBadge(
+    stream,
+    adapter,
+    stream.platform === 'twitch' || stream.platform === 'youtube',
+  );
 
   const controls = document.createElement('div');
   controls.className = 'stream-card__controls';
@@ -1674,6 +1787,8 @@ function createPlayerElement(
     const { trigger, panel } = createYouTubeVolumeControl(stream.id, header);
     controls.append(trigger);
     headerVolumePanel = panel;
+  } else if (stream.platform === 'twitch') {
+    controls.append(createTwitchMuteButton(stream.id));
   }
   controls.append(focusButton, reloadButton, removeButton);
   header.append(headerNameBadge.root, controls);
@@ -1768,6 +1883,8 @@ function createPlayerElement(
     const { trigger, panel } = createYouTubeVolumeControl(stream.id, toolbar);
     overlayControls.append(trigger);
     toolbarVolumePanel = panel;
+  } else if (stream.platform === 'twitch') {
+    overlayControls.append(createTwitchMuteButton(stream.id));
   }
   overlayControls.append(overlayDrag, overlayFocus, overlayReload, overlayRemove);
 
@@ -1777,6 +1894,8 @@ function createPlayerElement(
   card.append(header, player, toolbar);
 
   if (stream.platform === 'twitch') {
+    syncTwitchMuteUi(card);
+
     /*
      * Headers-hidden reveals this toolbar on hover by shrinking the player
      * box (main.css) — a real iframe resize we otherwise never observe, on
@@ -2307,6 +2426,148 @@ export function refreshAllTwitchStatuses(
 
 export function isTwitchStatusRefreshInFlight(): boolean {
   return twitchStatusCoordinator.isInFlight();
+}
+
+/**
+ * Renders one YouTube card's already-known stats (from its `data-youtube-*`
+ * dataset) into its header meta span — the same span Twitch uses for
+ * "Category · 2h 14m", here "12.4K viewers · 2h 14m" instead. Split out from
+ * applyYouTubeStats so the shared minute timer can re-render just the
+ * duration text without re-fetching anything, mirroring
+ * renderTwitchCardStatus.
+ */
+function renderYouTubeCardMeta(card: HTMLElement, nowMs: number): void {
+  const viewers = formatTwitchViewerCount(
+    card.dataset.youtubeViewerCount === undefined ? undefined : Number(card.dataset.youtubeViewerCount),
+  );
+  const duration = formatTwitchLiveDuration(card.dataset.youtubeStartedAt, nowMs);
+  const meta = [viewers, duration].filter((part): part is string => Boolean(part)).join(' · ');
+
+  const metaEl = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+  if (metaEl) {
+    metaEl.textContent = meta ? `· ${meta}` : '';
+    metaEl.hidden = meta.length === 0;
+  }
+}
+
+let youtubeDurationTimerId = 0;
+
+/** Test-only: mirrors __resetTwitchDurationTimerForTests. Not called anywhere in production code. */
+export function __resetYouTubeDurationTimerForTests(): void {
+  if (youtubeDurationTimerId) {
+    window.clearInterval(youtubeDurationTimerId);
+    youtubeDurationTimerId = 0;
+  }
+}
+
+/** One shared 60s timer for every live YouTube card's duration text — never one per card. Mirrors syncTwitchDurationTimer. */
+function syncYouTubeDurationTimer(container: HTMLElement): void {
+  const hasLiveDuration =
+    container.querySelector('.stream-card[data-platform="youtube"][data-youtube-started-at]') !== null;
+
+  if (!hasLiveDuration) {
+    if (youtubeDurationTimerId) {
+      window.clearInterval(youtubeDurationTimerId);
+      youtubeDurationTimerId = 0;
+    }
+    return;
+  }
+
+  if (youtubeDurationTimerId) return;
+  youtubeDurationTimerId = window.setInterval(() => {
+    if (!container.isConnected) {
+      window.clearInterval(youtubeDurationTimerId);
+      youtubeDurationTimerId = 0;
+      return;
+    }
+    const now = Date.now();
+    for (const card of container.querySelectorAll<HTMLElement>(
+      '.stream-card[data-platform="youtube"][data-youtube-started-at]',
+    )) {
+      renderYouTubeCardMeta(card, now);
+    }
+  }, 60_000);
+}
+
+/**
+ * Applies already-fetched stats to whatever currently-mounted YouTube cards
+ * have a matching `data-youtube-video-id` (set by startYouTubePlayer/
+ * resolveAndMountYouTubeChannel — see their own comments on why that, not
+ * the stream's token, is the source of truth for "which video is this card
+ * showing right now"). Only ever touches `.stream-card__name-badge-meta` and
+ * `data-youtube-*` dataset attributes — never mountYouTubeMedia,
+ * youtubePlayers, or any iframe/player state. Mirrors applyTwitchStatus.
+ */
+export function applyYouTubeStats(container: HTMLElement, results: Map<string, YouTubeStatsResult>): void {
+  const nowMs = Date.now();
+
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card[data-platform="youtube"]')) {
+    const videoId = card.dataset.youtubeVideoId;
+    const result = videoId ? results.get(videoId) : undefined;
+    if (!result) continue;
+
+    if (result.status === 'live' && result.viewerCount != null) {
+      card.dataset.youtubeViewerCount = String(result.viewerCount);
+    } else {
+      delete card.dataset.youtubeViewerCount;
+    }
+    if (result.status === 'live' && result.startedAt) {
+      card.dataset.youtubeStartedAt = result.startedAt;
+    } else {
+      delete card.dataset.youtubeStartedAt;
+    }
+
+    renderYouTubeCardMeta(card, nowMs);
+  }
+
+  syncYouTubeDurationTimer(container);
+}
+
+/**
+ * Fire-and-forget single-batch stats check, mirroring refreshTwitchStatus —
+ * used for a card's first paint right after mount, ahead of the periodic
+ * scheduler's next tick.
+ */
+export function refreshYouTubeStats(container: HTMLElement, videoIds: string[]): void {
+  const wanted = videoIds.filter(Boolean);
+  if (wanted.length === 0) return;
+  void checkYouTubeStats(wanted).then((results) => {
+    if (!container.isConnected) return;
+    applyYouTubeStats(container, results);
+  });
+}
+
+const youtubeStatusCoordinator = createYouTubeStatusCoordinator({
+  checkStats: checkYouTubeStats,
+  onResult: (results, _reason) => {
+    const container = document.querySelector<HTMLElement>('#stream-grid');
+    if (!container || !container.isConnected) return;
+    applyYouTubeStats(container, results);
+  },
+});
+
+/**
+ * The single coordinator-backed entry point for "recheck every mounted
+ * YouTube card's stats at once" — used by initial restore and the periodic
+ * scheduler. Unlike refreshAllTwitchStatuses, this reads videoIds from the
+ * DOM (`container`), not the store: the store only knows each stream's
+ * token (a channel handle, or a fixed video id), never the currently-live
+ * videoId a channel token resolved to — that only exists once mounted.
+ */
+export function refreshAllYouTubeStats(
+  container: HTMLElement,
+  reason: YouTubeStatsRefreshReason,
+): Promise<YouTubeStatsRefreshResult> {
+  const videoIds: string[] = [];
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card[data-platform="youtube"]')) {
+    const videoId = card.dataset.youtubeVideoId;
+    if (videoId) videoIds.push(videoId);
+  }
+  return youtubeStatusCoordinator.refresh(videoIds, reason);
+}
+
+export function isYouTubeStatsRefreshInFlight(): boolean {
+  return youtubeStatusCoordinator.isInFlight();
 }
 
 /**

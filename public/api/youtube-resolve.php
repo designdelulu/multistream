@@ -290,6 +290,53 @@ function resolve_channel_id(string $mode, string $value, string $apiKey): array
     }
 }
 
+/**
+ * Batched liveStreamingDetails lookup — videos.list costs 1 quota unit
+ * regardless of how many ids are packed into one `id=` CSV param (up to
+ * 50), so this is the cheap call every periodic stats refresh uses instead
+ * of ever repeating the 100-unit `search` call resolve_live_video makes.
+ *
+ * @param string[] $videoIds
+ * @return array{ok:true,data:array<string,array{status:string,viewerCount:?int,startedAt:?string,title:?string}>}|array{ok:false,code:string}
+ */
+function fetch_video_stats(array $videoIds, string $apiKey): array
+{
+    if (empty($videoIds)) {
+        return ['ok' => true, 'data' => []];
+    }
+
+    $result = youtube_api_get('videos', [
+        'id' => implode(',', $videoIds),
+        'part' => 'liveStreamingDetails,snippet',
+        'maxResults' => count($videoIds),
+    ], $apiKey);
+
+    if (!$result['ok']) {
+        return $result;
+    }
+
+    $byId = [];
+    foreach ($result['data']['items'] ?? [] as $item) {
+        $id = $item['id'] ?? null;
+        if (!$id) continue;
+
+        $details = $item['liveStreamingDetails'] ?? null;
+        // A video with no actualEndTime yet (or no liveStreamingDetails at
+        // all, for a plain non-live upload) is not "live" for our purposes —
+        // concurrentViewers only exists while a broadcast is actually live.
+        $isLive = $details !== null && isset($details['concurrentViewers']) && empty($details['actualEndTime']);
+
+        $byId[$id] = [
+            'status' => $isLive ? 'live' : 'ended',
+            'viewerCount' => $isLive ? (int) $details['concurrentViewers'] : null,
+            'startedAt' => $details['actualStartTime'] ?? null,
+            'title' => $item['snippet']['title'] ?? null,
+        ];
+    }
+
+    return ['ok' => true, 'data' => $byId];
+}
+
 /** @return array (the final response body) */
 function resolve_live_video(string $channelId, string $apiKey): array
 {
@@ -348,6 +395,16 @@ function resolve_live_video(string $channelId, string $apiKey): array
             return ['status' => 'error', 'code' => 'api_error', 'message' => api_error_message('api_error')];
         }
 
+        // Best-effort: viewer count/start time are a nice-to-have, not the
+        // reason this call resolves live/offline — a failed or empty stats
+        // lookup just leaves the video without them rather than erroring out.
+        $statsResult = fetch_video_stats([$body['videoId']], $apiKey);
+        if ($statsResult['ok'] && isset($statsResult['data'][$body['videoId']])) {
+            $stats = $statsResult['data'][$body['videoId']];
+            $body['viewerCount'] = $stats['viewerCount'];
+            $body['startedAt'] = $stats['startedAt'];
+        }
+
         cache_set($cacheKey, $body, LIVE_CACHE_TTL);
         return $body;
     } finally {
@@ -371,6 +428,52 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
 }
 
 $mode = $_GET['mode'] ?? '';
+
+// Batched periodic stats refresh (viewer count + duration) for videoIds
+// already known to the frontend — see checkYouTubeStats. Separate branch,
+// distinct params (`ids`, not `value`): never touches channel resolution.
+if ($mode === 'stats') {
+    $idsParam = $_GET['ids'] ?? '';
+    if (!is_string($idsParam) || $idsParam === '') {
+        respond_error('invalid_input', 'Missing ids.');
+    }
+
+    $videoIds = array_values(array_unique(array_filter(
+        array_map('trim', explode(',', $idsParam)),
+        static fn(string $id): bool => (bool) preg_match('/^[A-Za-z0-9_-]{11}$/', $id),
+    )));
+
+    if (empty($videoIds) || count($videoIds) > 50) {
+        respond_error('invalid_input', 'ids must be 1-50 valid YouTube video ids.');
+    }
+
+    $apiKey = load_api_key();
+    if ($apiKey === null) {
+        respond_error('config_missing', "YouTube isn't configured on this server yet.");
+    }
+
+    $statsResult = fetch_video_stats($videoIds, $apiKey);
+    if (!$statsResult['ok']) {
+        respond_error($statsResult['code'], api_error_message($statsResult['code']));
+    }
+
+    $results = [];
+    foreach ($videoIds as $id) {
+        $entry = $statsResult['data'][$id] ?? null;
+        $results[] = $entry === null
+            ? ['videoId' => $id, 'status' => 'not_found']
+            : [
+                'videoId' => $id,
+                'status' => $entry['status'],
+                'viewerCount' => $entry['viewerCount'],
+                'startedAt' => $entry['startedAt'],
+                'title' => $entry['title'],
+            ];
+    }
+
+    respond(['status' => 'ok', 'results' => $results]);
+}
+
 $value = $_GET['value'] ?? '';
 
 if (!in_array($mode, ['handle', 'username', 'channelId'], true) || !is_string($value)) {

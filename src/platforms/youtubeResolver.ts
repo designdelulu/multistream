@@ -15,6 +15,9 @@ export interface YouTubeLiveResult {
   title?: string;
   channelId: string;
   channelTitle?: string;
+  /** From a best-effort liveStreamingDetails follow-up — absent if that call failed, live but not yet reporting a count, or genuinely unavailable. */
+  viewerCount?: number | null;
+  startedAt?: string | null;
 }
 
 export interface YouTubeOfflineResult {

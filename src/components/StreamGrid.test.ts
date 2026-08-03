@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetTwitchDurationTimerForTests,
+  __resetYouTubeDurationTimerForTests,
   applyTwitchStatus,
+  applyYouTubeStats,
   refreshAllTwitchStatuses,
+  refreshAllYouTubeStats,
   refreshTwitchStatus,
+  refreshYouTubeStats,
   twitchStatusDotProps,
 } from './StreamGrid';
 import { createStreamStore, type StreamStore } from '../state/streams';
 import type { TwitchStatusResult } from '../platforms/twitchStatus';
+import type { YouTubeStatsResult } from '../platforms/youtubeStats';
 
 function liveResult(channel: string, overrides: Partial<TwitchStatusResult> = {}): TwitchStatusResult {
   return {
@@ -87,10 +92,54 @@ function jsonResponse(body: unknown, ok = true): Response {
   return { ok, status: ok ? 200 : 500, json: async () => body } as Response;
 }
 
+/**
+ * Builds a DOM subtree shaped like a real YouTube stream-card: a header-only
+ * .stream-card__name-badge-meta (see createNameBadge's includeMeta), and
+ * `data-youtube-video-id` already set the way startYouTubePlayer/
+ * resolveAndMountYouTubeChannel set it once mounted — applyYouTubeStats
+ * matches results against that, never the stream's raw channel token.
+ */
+function buildYouTubeCard(videoId: string): { card: HTMLElement } {
+  const card = document.createElement('article');
+  card.className = 'stream-card stream-card--youtube';
+  card.dataset.platform = 'youtube';
+  card.dataset.channel = `video:${videoId}`;
+  card.dataset.youtubeVideoId = videoId;
+
+  const header = document.createElement('div');
+  header.className = 'stream-card__header';
+  const headerBadge = document.createElement('div');
+  headerBadge.className = 'stream-card__name-badge';
+  const headerMeta = document.createElement('span');
+  headerMeta.className = 'stream-card__name-badge-meta';
+  headerMeta.hidden = true;
+  headerBadge.append(headerMeta);
+  header.append(headerBadge);
+
+  card.append(header);
+  return { card };
+}
+
+function liveStats(videoId: string, overrides: Partial<YouTubeStatsResult> = {}): YouTubeStatsResult {
+  return {
+    videoId,
+    status: 'live',
+    viewerCount: 42,
+    startedAt: new Date(Date.now() - 37 * 60_000).toISOString(),
+    title: 'Some stream',
+    ...overrides,
+  };
+}
+
+function endedStats(videoId: string): YouTubeStatsResult {
+  return { videoId, status: 'ended' };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   __resetTwitchDurationTimerForTests();
+  __resetYouTubeDurationTimerForTests();
   document.body.innerHTML = '';
 });
 
@@ -356,6 +405,159 @@ describe('refreshTwitchStatus / refreshAllTwitchStatuses — batching', () => {
     ]);
 
     const result = await refreshAllTwitchStatuses(store, 'manual');
+
+    expect(result.outcome).toBe('skipped-empty');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyYouTubeStats — meta rendering', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.append(container);
+  });
+
+  it('renders viewer count + duration on the header meta span for a live result', () => {
+    const { card } = buildYouTubeCard('abc123');
+    container.append(card);
+
+    applyYouTubeStats(container, new Map([['abc123', liveStats('abc123')]]));
+
+    const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+    expect(meta?.hidden).toBe(false);
+    expect(meta?.textContent).toBe('· 42 viewers · 37m');
+  });
+
+  it('clears viewer count + duration once the video is no longer live', () => {
+    const { card } = buildYouTubeCard('abc123');
+    container.append(card);
+
+    applyYouTubeStats(container, new Map([['abc123', liveStats('abc123')]]));
+    expect(card.dataset.youtubeStartedAt).toBeDefined();
+
+    applyYouTubeStats(container, new Map([['abc123', endedStats('abc123')]]));
+
+    expect(card.dataset.youtubeViewerCount).toBeUndefined();
+    expect(card.dataset.youtubeStartedAt).toBeUndefined();
+    const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+    expect(meta?.hidden).toBe(true);
+    expect(meta?.textContent).toBe('');
+  });
+
+  it('leaves a card whose videoId has no matching result untouched', () => {
+    const { card } = buildYouTubeCard('abc123');
+    container.append(card);
+    applyYouTubeStats(container, new Map([['abc123', liveStats('abc123')]]));
+    const before = card.querySelector('.stream-card__name-badge-meta')?.textContent;
+
+    applyYouTubeStats(container, new Map()); // no result for 'abc123' this time
+
+    expect(card.querySelector('.stream-card__name-badge-meta')?.textContent).toBe(before);
+  });
+
+  it('ignores a card with no data-youtube-video-id yet (not mounted/resolved)', () => {
+    const { card } = buildYouTubeCard('abc123');
+    delete card.dataset.youtubeVideoId;
+    container.append(card);
+
+    expect(() =>
+      applyYouTubeStats(container, new Map([['abc123', liveStats('abc123')]])),
+    ).not.toThrow();
+    expect(card.querySelector<HTMLElement>('.stream-card__name-badge-meta')?.hidden).toBe(true);
+  });
+});
+
+describe('applyYouTubeStats — shared duration timer', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.append(container);
+  });
+
+  it('updates the meta line on a 60s tick without any new network request', () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { card } = buildYouTubeCard('abc123');
+    container.append(card);
+    applyYouTubeStats(container, new Map([['abc123', liveStats('abc123')]]));
+    expect(card.querySelector('.stream-card__name-badge-meta')?.textContent).toBe('· 42 viewers · 37m');
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(card.querySelector('.stream-card__name-badge-meta')?.textContent).toBe('· 42 viewers · 38m');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('stops the timer once no live YouTube card remains', () => {
+    vi.useFakeTimers();
+    const clearSpy = vi.spyOn(window, 'clearInterval');
+
+    const { card } = buildYouTubeCard('abc123');
+    container.append(card);
+    applyYouTubeStats(container, new Map([['abc123', liveStats('abc123')]]));
+
+    applyYouTubeStats(container, new Map([['abc123', endedStats('abc123')]]));
+
+    expect(clearSpy).toHaveBeenCalled();
+  });
+});
+
+describe('refreshYouTubeStats / refreshAllYouTubeStats — batching', () => {
+  it('refreshYouTubeStats sends exactly one batched request for many videoIds', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: 'ok', results: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const container = document.createElement('div');
+    document.body.append(container);
+    const cards = ['a', 'b', 'c'].map((id) => buildYouTubeCard(id).card);
+    container.append(...cards);
+
+    refreshYouTubeStats(container, ['a', 'b', 'c']);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    document.body.innerHTML = '';
+  });
+
+  it('refreshYouTubeStats with an empty videoId list makes no request', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const container = document.createElement('div');
+
+    refreshYouTubeStats(container, []);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshAllYouTubeStats collects videoIds from mounted DOM cards, not the store', async () => {
+    const grid = document.createElement('div');
+    grid.id = 'stream-grid';
+    document.body.append(grid);
+    for (const id of ['vid1', 'vid2']) grid.append(buildYouTubeCard(id).card);
+
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: 'ok', results: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await refreshAllYouTubeStats(grid, 'periodic');
+
+    expect(result.outcome).toBe('ok');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('ids=vid1%2Cvid2');
+
+    document.body.innerHTML = '';
+  });
+
+  it('refreshAllYouTubeStats with no YouTube cards resolves to skipped-empty and makes no request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const grid = document.createElement('div');
+
+    const result = await refreshAllYouTubeStats(grid, 'periodic');
 
     expect(result.outcome).toBe('skipped-empty');
     expect(fetchMock).not.toHaveBeenCalled();

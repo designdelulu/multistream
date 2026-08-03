@@ -590,14 +590,14 @@ html.stream-focused .stream-card__header {
 }
 
 /*
- * External YouTube volume control (header and headers-hidden hover toolbar
- * each render one copy — see createYouTubeVolumeControl). This button is
- * the compact status/trigger that lives among the footer's other action
- * buttons; clicking it opens the full-width `.stream-card__youtube-volume-
- * panel` below, which is also styled with this class for its own mute
- * button, so the two look identical.
+ * Shared 26x26 speaker/mute icon-button look, used by both the YouTube
+ * volume trigger (header and headers-hidden hover toolbar each render one
+ * copy — see createYouTubeVolumeControl; the panel's own mute button reuses
+ * it too, so trigger and panel look identical) and the plain Twitch mute
+ * toggle (see createTwitchMuteButton) — same icon set, same button chrome,
+ * across every platform that gets one.
  */
-.stream-card__youtube-volume-btn {
+.stream-card__mute-btn {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -613,17 +613,17 @@ html.stream-focused .stream-card__header {
   cursor: pointer;
 }
 
-.stream-card__youtube-volume-btn svg {
+.stream-card__mute-btn svg {
   display: block;
 }
 
-.stream-card__youtube-volume-btn:hover:not(:disabled) {
+.stream-card__mute-btn:hover:not(:disabled) {
   color: var(--text);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.stream-card__youtube-volume-btn:focus-visible {
+.stream-card__mute-btn:focus-visible {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 70%, white);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
@@ -641,7 +641,7 @@ html.stream-focused .stream-card__header {
   cursor: pointer;
 }
 
-.stream-card__youtube-volume-btn:disabled,
+.stream-card__mute-btn:disabled,
 .stream-card__youtube-volume-slider:disabled {
   opacity: 0.4;
   cursor: default;
@@ -857,8 +857,8 @@ html.headers-hidden .stream-card__toolbar.is-volume-mode {
 }
 
 .stream-card__name-badge-dot--live {
-  background: #ff4444;
-  color: #ff4444;
+  background: var(--accent);
+  color: var(--accent);
 }
 
 .stream-card__name-badge-dot--offline,
@@ -960,6 +960,29 @@ html.headers-hidden .stream-card__toolbar.is-volume-mode {
  */
 @container stream-card (max-width: 460px) {
   .stream-card__name-badge-meta {
+    display: none;
+  }
+}
+
+/*
+ * Same reasoning as the meta-span rule above, one step further: a long
+ * channel name can still force the header onto two rows even with the meta
+ * span already gone, once the mute/volume trigger and the four buttons
+ * beside it no longer fit their hypothetical width. Drop the least-essential
+ * header buttons first, narrowest to widest, so the identity strip (dot +
+ * channel + platform badge) and the two buttons that matter most — Focus and
+ * Remove — are the last things to ever give up the single line. Header-only:
+ * the headers-hidden hover toolbar's own overlay-controls has its own
+ * (usually roomier) layout and isn't affected.
+ */
+@container stream-card (max-width: 400px) {
+  .stream-card__header .stream-card__mute-btn {
+    display: none;
+  }
+}
+
+@container stream-card (max-width: 340px) {
+  .stream-card__header .stream-card__reload {
     display: none;
   }
 }
@@ -1617,7 +1640,7 @@ html.show-welcome .welcome-modal {
     height: 12px;
   }
 
-  .stream-card__youtube-volume-btn,
+  .stream-card__mute-btn,
   .stream-card__youtube-volume-panel-close {
     width: 24px;
     height: 24px;

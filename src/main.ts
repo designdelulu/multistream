@@ -9,6 +9,7 @@ import {
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
   refreshAllTwitchStatuses,
+  refreshAllYouTubeStats,
   snapshotPlayingTwitchPlayers,
   startStatsProbe,
   syncStreamGrid,
@@ -22,6 +23,10 @@ import {
   createTwitchStatusScheduler,
   TWITCH_STATUS_POLL_INTERVAL_MS,
 } from './lib/twitchStatusScheduler';
+import {
+  createYouTubeStatusScheduler,
+  YOUTUBE_STATS_POLL_INTERVAL_MS,
+} from './lib/youtubeStatusScheduler';
 import { phoneMediaQuery } from './lib/viewport';
 import { createChatStore } from './state/chat';
 import { createHeadersStore } from './state/headers';
@@ -184,6 +189,32 @@ function syncTwitchStatusScheduler(): void {
   }
 }
 
+/**
+ * Shared YouTube stats scheduler — mirrors twitchStatusScheduler above,
+ * armed only while at least one YouTube card exists. `run` only calls
+ * refreshAllYouTubeStats, which only updates the header meta span — see
+ * StreamGrid.ts's applyYouTubeStats doc comment.
+ */
+const youtubeStatusScheduler = createYouTubeStatusScheduler({
+  intervalMs: YOUTUBE_STATS_POLL_INTERVAL_MS,
+  hasYouTubeCards: () => store.getStreams().some((stream) => stream.platform === 'youtube'),
+  isHidden: () => document.hidden,
+  isOnline: () => navigator.onLine,
+  run: (reason) => refreshAllYouTubeStats(gridEl, reason).then((result) => result.outcome),
+  now: () => Date.now(),
+  setInterval: (handler, ms) => window.setInterval(handler, ms),
+  clearInterval: (handle) => window.clearInterval(handle),
+});
+
+function syncYouTubeStatusScheduler(): void {
+  const hasYouTubeCards = store.getStreams().some((stream) => stream.platform === 'youtube');
+  if (hasYouTubeCards) {
+    youtubeStatusScheduler.start();
+  } else {
+    youtubeStatusScheduler.stop();
+  }
+}
+
 /** The manual "Refresh Twitch statuses" action — resets the periodic clock only on success, per the scheduler's own contract. */
 async function manualTwitchStatusRefresh(): Promise<Awaited<ReturnType<typeof refreshAllTwitchStatuses>>> {
   const result = await refreshAllTwitchStatuses(store, 'manual');
@@ -237,6 +268,7 @@ bindStreamFocus((focused, streamId) => {
 });
 store.subscribe(renderStreams);
 store.subscribe(syncTwitchStatusScheduler);
+store.subscribe(syncYouTubeStatusScheduler);
 chatStore.subscribe(() => {
   quietLayout(1500);
   updateLayout();
@@ -343,9 +375,13 @@ document.addEventListener('visibilitychange', () => {
     // Refresh once only if the previous check is older than the normal
     // interval — never a burst on every tab-foreground.
     twitchStatusScheduler.notifyVisible();
+    youtubeStatusScheduler.notifyVisible();
   }
 });
-window.addEventListener('online', () => twitchStatusScheduler.notifyVisible());
+window.addEventListener('online', () => {
+  twitchStatusScheduler.notifyVisible();
+  youtubeStatusScheduler.notifyVisible();
+});
 // Exiting fullscreen has the same lost-gesture problem, and was previously
 // only ever fixed by incidental mouse movement — there was no listener for it.
 document.addEventListener('fullscreenchange', armInteractionNudge);
@@ -359,3 +395,10 @@ renderStreams();
 // added later go through StreamToolbar's own single-channel check instead.
 void refreshAllTwitchStatuses(store, 'initial-restore');
 syncTwitchStatusScheduler();
+
+// YouTube has no equivalent initial-restore call: unlike Twitch's advisory
+// status check (decoupled from player mount), each YouTube card's own mount
+// path already fires a one-off stats fetch for its first paint — see
+// resolveAndMountYouTubeChannel/mountYouTubeMedia in StreamGrid.ts. Just arm
+// the periodic scheduler for whatever YouTube cards restored from the URL.
+syncYouTubeStatusScheduler();
