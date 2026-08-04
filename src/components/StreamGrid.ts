@@ -1666,11 +1666,14 @@ function createTwitchMountPoint(): HTMLDivElement {
  * the same decorative always-pulsing look too — only its meta span is
  * populated, by applyYouTubeStats.
  *
- * `includeMeta` adds a trailing "· Category · 2h 14m" span (Twitch) or
- * "· 12.4K viewers · 2h 14m" (YouTube), populated only for the header
- * instance — hidden below a width threshold via the `@container stream-card`
- * rule on `.stream-card__name-badge-meta` in main.css, so a narrow card
- * never has to wrap the header onto two rows.
+ * `includeMeta` adds a trailing "· 12.4K viewers · 2h 14m" meta span,
+ * populated only for the header instance — hidden below a width threshold
+ * via the `@container stream-card` rule on `.stream-card__name-badge-meta`
+ * in main.css. Category is deliberately left out (see twitchStatusText's
+ * doc comment) — this is viewer count + duration only, same shape for
+ * Twitch and YouTube. `.stream-card__header` itself never wraps (also
+ * main.css): the identity strip shrinking, and this meta span truncating or
+ * disappearing first, is what keeps the header controls pinned on one line.
  * The toolbar instance stays identity-only by design and never gets one.
  */
 function createNameBadge(
@@ -2218,10 +2221,13 @@ export function twitchStatusDotProps(
 }
 
 /**
- * Builds the "Live · Category · 12.4K viewers · 2h 14m" text used for both
- * the dot's title/aria-label (always, for accessibility) and the inline meta
- * span appended after the platform badge in the header. Category/viewer
- * count/duration only ever apply to a live result.
+ * Builds the "Live · Category · 12.4K viewers · 2h 14m" tooltip text (the
+ * dot's title/aria-label — always the full detail, category included, since
+ * it costs no layout space there) and the shorter "12.4K viewers · 2h 14m"
+ * inline meta span text. Category is deliberately left out of the visible
+ * meta line — it rarely changes and isn't worth the header space — but stays
+ * one hover away via the tooltip. Category/viewer count/duration only ever
+ * apply to a live result.
  */
 function twitchStatusText(
   props: ReturnType<typeof twitchStatusDotProps>,
@@ -2231,9 +2237,10 @@ function twitchStatusText(
 ): { tooltip: string; meta: string } {
   if (!props) return { tooltip: '', meta: '' };
   if (props.modifier !== 'live') return { tooltip: props.label, meta: '' };
-  const metaParts = [category, viewers, duration].filter((part): part is string => Boolean(part));
-  const meta = metaParts.join(' · ');
-  return { tooltip: meta ? `${props.label} · ${meta}` : props.label, meta };
+  const tooltipParts = [category, viewers, duration].filter((part): part is string => Boolean(part));
+  const tooltip = tooltipParts.length ? `${props.label} · ${tooltipParts.join(' · ')}` : props.label;
+  const meta = [viewers, duration].filter((part): part is string => Boolean(part)).join(' · ');
+  return { tooltip, meta };
 }
 
 /**
@@ -2431,10 +2438,9 @@ export function isTwitchStatusRefreshInFlight(): boolean {
 /**
  * Renders one YouTube card's already-known stats (from its `data-youtube-*`
  * dataset) into its header meta span — the same span Twitch uses for
- * "Category · 2h 14m", here "12.4K viewers · 2h 14m" instead. Split out from
- * applyYouTubeStats so the shared minute timer can re-render just the
- * duration text without re-fetching anything, mirroring
- * renderTwitchCardStatus.
+ * "12.4K viewers · 2h 14m". Split out from applyYouTubeStats so the shared
+ * minute timer can re-render just the duration text without re-fetching
+ * anything, mirroring renderTwitchCardStatus.
  */
 function renderYouTubeCardMeta(card: HTMLElement, nowMs: number): void {
   const viewers = formatTwitchViewerCount(

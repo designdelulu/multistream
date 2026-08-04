@@ -180,7 +180,7 @@ describe('applyTwitchStatus — dot + meta rendering', () => {
     document.body.append(container);
   });
 
-  it('renders category + viewer count + duration on both dot instances and the header meta span for a live result', () => {
+  it('renders viewer count + duration (no category) on the header meta span, but keeps category on the dot tooltip, for a live result', () => {
     const { card } = buildTwitchCard('foo');
     container.append(card);
 
@@ -192,12 +192,27 @@ describe('applyTwitchStatus — dot + meta rendering', () => {
       expect(dot.classList.contains('stream-card__name-badge-dot--live')).toBe(true);
       expect(dot.classList.contains('stream-card__name-badge-dot--pulse')).toBe(true);
       expect(dot.getAttribute('aria-hidden')).toBe('false');
+      // Category still shows up here — the tooltip costs no header space.
       expect(dot.title).toBe('Live · Just Chatting · 42 viewers · 37m');
     }
 
     const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
     expect(meta?.hidden).toBe(false);
-    expect(meta?.textContent).toBe('· Just Chatting · 42 viewers · 37m');
+    expect(meta?.textContent).toBe('· 42 viewers · 37m');
+  });
+
+  it('hides the meta span once no viewer count or duration is available', () => {
+    const { card } = buildTwitchCard('foo');
+    container.append(card);
+
+    applyTwitchStatus(
+      container,
+      new Map([['foo', liveResult('foo', { category: undefined, viewerCount: undefined, startedAt: undefined })]]),
+    );
+
+    const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+    expect(meta?.hidden).toBe(true);
+    expect(meta?.textContent).toBe('');
   });
 
   it('renders offline with a muted, non-pulsing dot and no meta text', () => {
@@ -317,15 +332,11 @@ describe('applyTwitchStatus — shared duration timer', () => {
     const { card } = buildTwitchCard('foo');
     container.append(card);
     applyTwitchStatus(container, new Map([['foo', liveResult('foo')]]));
-    expect(card.querySelector('.stream-card__name-badge-meta')?.textContent).toBe(
-      '· Just Chatting · 42 viewers · 37m',
-    );
+    expect(card.querySelector('.stream-card__name-badge-meta')?.textContent).toBe('· 42 viewers · 37m');
 
     vi.advanceTimersByTime(60_000);
 
-    expect(card.querySelector('.stream-card__name-badge-meta')?.textContent).toBe(
-      '· Just Chatting · 42 viewers · 38m',
-    );
+    expect(card.querySelector('.stream-card__name-badge-meta')?.textContent).toBe('· 42 viewers · 38m');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

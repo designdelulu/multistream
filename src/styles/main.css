@@ -491,7 +491,16 @@ html.stream-focused .stream-card__header {
 
 .stream-card__header {
   display: flex;
-  flex-wrap: wrap;
+  /*
+   * Never wrap: a long channel name used to force the header onto two rows,
+   * dropping the controls to a second line entirely. Instead the identity
+   * strip (.stream-card__name-badge, flex: 1 1 auto below) absorbs the
+   * squeeze and shrinks/truncates — the meta span disappears first (see its
+   * own container-query rule), then the channel name itself ellipsises —
+   * while .stream-card__controls (flex: 0 0 auto below) stays fixed-size and
+   * pinned to the right, on the one line, no matter how narrow the card gets.
+   */
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
@@ -529,6 +538,7 @@ html.stream-focused .stream-card__header {
  */
 
 .stream-card__controls {
+  flex: 0 0 auto;
   display: flex;
   gap: 6px;
 }
@@ -935,8 +945,10 @@ html.headers-hidden .stream-card__toolbar.is-volume-mode {
 }
 
 /*
- * Header-only: "· Category · 2h 14m", appended after the platform badge —
- * see createNameBadge's includeMeta param in StreamGrid.ts. Not present in
+ * Header-only: "· 12.4K viewers · 2h 14m", appended after the platform
+ * badge — see createNameBadge's includeMeta param in StreamGrid.ts. No
+ * category (deliberately left out of this line — see twitchStatusText's doc
+ * comment; it's still available on the dot's hover tooltip). Not present in
  * the headers-hidden hover toolbar's own badge instance.
  */
 .stream-card__name-badge-meta {
@@ -950,39 +962,14 @@ html.headers-hidden .stream-card__toolbar.is-volume-mode {
 }
 
 /*
- * Flexbox line-breaking decides wrap based on each item's content
- * ("hypothetical") size, not its post-shrink size — so a narrow card can
- * still force `.stream-card__header` onto two rows even though the meta
- * span and channel name are both shrinkable. Drop the meta text outright
- * once the card is too narrow to hold it, well before the row would need
- * to wrap: the pill's `title` attribute (see twitchStatusPillProps) already
- * carries the full "Live · Category · 2h 14m" text as a hover fallback.
+ * .stream-card__header never wraps (see its own rule) — .stream-card__controls
+ * is fixed-size and pinned right, so the identity strip (dot + channel +
+ * platform badge + this meta span) is what absorbs a narrow card. Drop the
+ * meta text outright once the card is too narrow to hold it, well before the
+ * channel name itself would need to start ellipsising.
  */
-@container stream-card (max-width: 460px) {
-  .stream-card__name-badge-meta {
-    display: none;
-  }
-}
-
-/*
- * Same reasoning as the meta-span rule above, one step further: a long
- * channel name can still force the header onto two rows even with the meta
- * span already gone, once the mute/volume trigger and the four buttons
- * beside it no longer fit their hypothetical width. Drop the least-essential
- * header buttons first, narrowest to widest, so the identity strip (dot +
- * channel + platform badge) and the two buttons that matter most — Focus and
- * Remove — are the last things to ever give up the single line. Header-only:
- * the headers-hidden hover toolbar's own overlay-controls has its own
- * (usually roomier) layout and isn't affected.
- */
-@container stream-card (max-width: 400px) {
-  .stream-card__header .stream-card__mute-btn {
-    display: none;
-  }
-}
-
 @container stream-card (max-width: 340px) {
-  .stream-card__header .stream-card__reload {
+  .stream-card__name-badge-meta {
     display: none;
   }
 }
