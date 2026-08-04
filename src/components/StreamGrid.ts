@@ -229,6 +229,54 @@ function forgetTwitchPlayer(streamId: string): void {
   twitchStallCounts.delete(streamId);
   twitchExceptionCounts.delete(streamId);
   twitchPlayback.delete(streamId);
+  syncTwitchMutePollTimer();
+}
+
+let twitchMutePollTimerId = 0;
+/** Frequent enough that the header icon feels live, cheap enough not to matter — every check below is a local getter, no network. */
+const TWITCH_MUTE_POLL_INTERVAL_MS = 1500;
+
+/** Test-only: mirrors __resetYouTubeDurationTimerForTests. Not called anywhere in production code. */
+export function __resetTwitchMutePollTimerForTests(): void {
+  if (twitchMutePollTimerId) {
+    window.clearInterval(twitchMutePollTimerId);
+    twitchMutePollTimerId = 0;
+  }
+}
+
+/**
+ * Twitch's own player chrome (visible on hover/click inside the embed) has
+ * its own mute/volume slider, entirely internal to the iframe — the Player
+ * JS API fires no event when the viewer touches it, only getMuted() and
+ * getVolume() getters exist. Unlike YouTube's mute()/unMute() (see
+ * youtubeVolumeState's own doc comment on why a read right after our own
+ * write races the postMessage reply), this only ever *reads* — there's
+ * nothing here for our own writes to race — so getMuted() is safe to poll
+ * and trust outright. One shared timer for every api-mode Twitch player,
+ * started on the first one and stopped once none remain, exactly mirroring
+ * syncYouTubeDurationTimer's shared-timer shape.
+ */
+function syncTwitchMutePollTimer(): void {
+  if (twitchPlayers.size === 0) {
+    if (twitchMutePollTimerId) {
+      window.clearInterval(twitchMutePollTimerId);
+      twitchMutePollTimerId = 0;
+    }
+    return;
+  }
+
+  if (twitchMutePollTimerId) return;
+  twitchMutePollTimerId = window.setInterval(() => {
+    if (document.hidden) return;
+    for (const [streamId, player] of twitchPlayers) {
+      const liveMuted = safeCall(() => player.getMuted());
+      if (liveMuted === undefined) continue;
+      const card = cardForStream(streamId);
+      if (!card || liveMuted === preferredMuted(card)) continue;
+      card.dataset.embedMuted = liveMuted ? '1' : '0';
+      syncTwitchMuteUi(card);
+    }
+  }, TWITCH_MUTE_POLL_INTERVAL_MS);
 }
 
 /**
@@ -373,6 +421,7 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
   card.dataset.twitchMode = 'api';
   card.dataset.embedMuted = muted ? '1' : '0';
   syncTwitchMuteUi(card);
+  syncTwitchMutePollTimer();
 
   logEmbedEvent('player-ready', { platform: 'twitch', channel, action: 'src', muted, card });
   logPlayerEvent('construct', { streamId, channel, mountId: mountEl.id, muted });
@@ -771,7 +820,12 @@ function constructYouTubePlayer(
       onError: (event) => {
         logEmbedEvent('player-blocked', { platform: 'youtube', channel: card.dataset.channel, card });
         youtubePlayers.delete(streamId);
+        youtubeVolumeState.delete(streamId);
         showYouTubeMessage(card, mapYouTubeErrorCode(event.data));
+        // Otherwise the mute/volume control is left showing stale state and
+        // silently ignores clicks forever — syncYouTubeVolumeUi's `available`
+        // check reads youtubePlayers.has(streamId), false again now.
+        syncYouTubeVolumeUi(card);
       },
     },
   });
