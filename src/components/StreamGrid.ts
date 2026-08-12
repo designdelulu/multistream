@@ -178,6 +178,18 @@ const YOUTUBE_SCRIPT_TIMEOUT_MS = 4000;
 const youtubeVolumeState = new Map<string, { muted: boolean; volume: number }>();
 
 /**
+ * Each card renders up to two independent volume-panel instances (header,
+ * headers-hidden hover toolbar — see createYouTubeVolumeControl), each with
+ * its own closePanel() closure. Entering Focus mode must force both closed
+ * if either was left open from grid view, so the header doesn't get stuck in
+ * is-volume-mode once the focused-card trigger stops opening it at all (see
+ * toggleStreamFocus). Calling closePanel() itself (rather than toggling the
+ * class directly) matters — it also detaches that instance's own outside-
+ * pointerdown listener, which a direct class removal would leak.
+ */
+const youtubeVolumePanelClosers = new Map<string, Array<() => void>>();
+
+/**
  * Exactly one YouTube player, ever, per page session, may be constructed
  * with autoplay requested: the very first one mounted. YouTube's own policy
  * forbids multiple simultaneously autoplaying embeds, and the only way to
@@ -276,6 +288,53 @@ function syncTwitchMutePollTimer(): void {
       card.dataset.embedMuted = liveMuted ? '1' : '0';
       syncTwitchMuteUi(card);
     }
+  }, TWITCH_MUTE_POLL_INTERVAL_MS);
+}
+
+let youtubeFocusMutePollTimerId = 0;
+let youtubeFocusMutePollStreamId: string | null = null;
+
+/**
+ * YouTube's own player chrome has the same limitation Twitch's does (see
+ * syncTwitchMutePollTimer just above) — isMuted()/getVolume() getters, no
+ * change event — so the focused card's compact toggle needs the same
+ * polling to catch a viewer adjusting YouTube's native volume control
+ * directly. Deliberately scoped to only the focused stream: only the
+ * focused card's trigger acts as a plain toggle (see
+ * createYouTubeVolumeControl) — grid tiles still use the open-a-panel flow,
+ * where every change already goes through our own mute()/unMute()/
+ * setVolume() calls and youtubeVolumeState is authoritative (see that map's
+ * own doc comment), so polling there would be pointless.
+ */
+function syncYouTubeFocusMutePollTimer(): void {
+  const shouldRunFor =
+    focusedStreamId && youtubePlayers.has(focusedStreamId) ? focusedStreamId : null;
+
+  if (youtubeFocusMutePollTimerId && youtubeFocusMutePollStreamId !== shouldRunFor) {
+    window.clearInterval(youtubeFocusMutePollTimerId);
+    youtubeFocusMutePollTimerId = 0;
+    youtubeFocusMutePollStreamId = null;
+  }
+
+  if (!shouldRunFor || youtubeFocusMutePollTimerId) return;
+
+  youtubeFocusMutePollStreamId = shouldRunFor;
+  youtubeFocusMutePollTimerId = window.setInterval(() => {
+    if (document.hidden) return;
+    const streamId = youtubeFocusMutePollStreamId;
+    const player = streamId ? youtubePlayers.get(streamId) : undefined;
+    if (!streamId || !player) return;
+    const liveMuted = safeCall(() => player.isMuted());
+    if (liveMuted === undefined) return;
+    const state = youtubeVolumeState.get(streamId) ?? { muted: true, volume: 0 };
+    if (liveMuted === state.muted) return;
+    const liveVolume = safeCall(() => player.getVolume());
+    youtubeVolumeState.set(streamId, {
+      muted: liveMuted,
+      volume: liveVolume !== undefined ? Math.round(liveVolume) : state.volume,
+    });
+    const card = cardForStream(streamId);
+    if (card) syncYouTubeVolumeUi(card);
   }, TWITCH_MUTE_POLL_INTERVAL_MS);
 }
 
@@ -796,6 +855,7 @@ function constructYouTubePlayer(
           // "not available yet" and disables the control.
         }
         syncYouTubeVolumeUi(card);
+        syncYouTubeFocusMutePollTimer();
       },
       onStateChange: (event) => {
         // Diagnostic-only: never call playVideo()/pauseVideo() from here —
@@ -826,6 +886,7 @@ function constructYouTubePlayer(
         // silently ignores clicks forever — syncYouTubeVolumeUi's `available`
         // check reads youtubePlayers.has(streamId), false again now.
         syncYouTubeVolumeUi(card);
+        syncYouTubeFocusMutePollTimer();
       },
     },
   });
@@ -878,6 +939,27 @@ function syncYouTubeVolumeUi(card: HTMLElement): void {
 }
 
 /**
+ * Twitch-style toggle: flips mute only, keeps the stored volume level intact
+ * for later unmute. Shared by the panel's own mute button and the focused-
+ * card trigger (see createYouTubeVolumeControl) so the two paths can never
+ * drift from each other.
+ */
+function toggleYouTubeMute(streamId: string): void {
+  const player = youtubePlayers.get(streamId);
+  if (!player) return;
+  const state = youtubeVolumeState.get(streamId) ?? { muted: true, volume: 0 };
+  const nextMuted = !state.muted;
+  if (nextMuted) {
+    player.mute();
+  } else {
+    player.unMute();
+  }
+  youtubeVolumeState.set(streamId, { muted: nextMuted, volume: state.volume });
+  const card = cardForStream(streamId);
+  if (card) syncYouTubeVolumeUi(card);
+}
+
+/**
  * External YouTube volume control for one card footer (header or the
  * headers-hidden hover toolbar): a compact status/trigger button that sits
  * among the footer's other action buttons, plus a full-width adjustment
@@ -902,7 +984,7 @@ function syncYouTubeVolumeUi(card: HTMLElement): void {
 function createYouTubeVolumeControl(
   streamId: string,
   footer: HTMLElement,
-): { trigger: HTMLButtonElement; panel: HTMLDivElement } {
+): { trigger: HTMLButtonElement; panel: HTMLDivElement; closePanel: () => void } {
   function currentState(): { muted: boolean; volume: number } {
     return youtubeVolumeState.get(streamId) ?? { muted: true, volume: 0 };
   }
@@ -933,6 +1015,14 @@ function createYouTubeVolumeControl(
   trigger.addEventListener('touchstart', (event) => event.stopPropagation());
   trigger.addEventListener('click', (event) => {
     event.stopPropagation();
+    // Focused (Focus mode): behave like Twitch's mute button — a plain
+    // toggle, no panel takeover. The full-width panel exists for dense grid
+    // tiles that have no room for a slider next to the other controls; a
+    // focused card has plenty of room, and the takeover was confusing there.
+    if (focusedStreamId === streamId) {
+      toggleYouTubeMute(streamId);
+      return;
+    }
     openPanel();
   });
 
@@ -954,17 +1044,7 @@ function createYouTubeVolumeControl(
   panelButton.addEventListener('touchstart', (event) => event.stopPropagation());
   panelButton.addEventListener('click', (event) => {
     event.stopPropagation();
-    const player = youtubePlayers.get(streamId);
-    if (!player) return;
-    const state = currentState();
-    const nextMuted = !state.muted;
-    if (nextMuted) {
-      player.mute();
-    } else {
-      player.unMute();
-    }
-    youtubeVolumeState.set(streamId, { muted: nextMuted, volume: state.volume });
-    syncCard();
+    toggleYouTubeMute(streamId);
   });
 
   const slider = document.createElement('input');
@@ -1078,7 +1158,7 @@ function createYouTubeVolumeControl(
     closePanel();
   });
 
-  return { trigger, panel };
+  return { trigger, panel, closePanel };
 }
 
 /**
@@ -1252,6 +1332,8 @@ function forgetYouTubePlayer(streamId: string): void {
   youtubePlayers.get(streamId)?.destroy();
   youtubePlayers.delete(streamId);
   youtubeVolumeState.delete(streamId);
+  youtubeVolumePanelClosers.delete(streamId);
+  syncYouTubeFocusMutePollTimer();
 }
 
 /**
@@ -1600,6 +1682,7 @@ export function setFocusedStream(container: HTMLElement, streamId: string | null
   focusedStreamId = streamId;
   syncFocusDom(container);
   syncFocusPlayers(container, prevFocusedId);
+  syncYouTubeFocusMutePollTimer();
 
   const focusChanged =
     (prevFocusedId === null) !== (focusedStreamId === null) ||
@@ -1658,6 +1741,10 @@ export function toggleStreamFocus(container: HTMLElement, streamId: string): voi
   }
   if (focusedCard?.dataset.platform === 'youtube') {
     mountYouTubeMedia(focusedCard, 'focus-unmute');
+    // The trigger stops opening the panel while focused (see
+    // createYouTubeVolumeControl) — close one left open from grid view so
+    // the header doesn't get stuck in is-volume-mode.
+    for (const close of youtubeVolumePanelClosers.get(streamId) ?? []) close();
   }
 }
 
@@ -1841,9 +1928,11 @@ function createPlayerElement(
 
   let headerVolumePanel: HTMLDivElement | undefined;
   if (stream.platform === 'youtube') {
-    const { trigger, panel } = createYouTubeVolumeControl(stream.id, header);
+    youtubeVolumePanelClosers.set(stream.id, []);
+    const { trigger, panel, closePanel } = createYouTubeVolumeControl(stream.id, header);
     controls.append(trigger);
     headerVolumePanel = panel;
+    youtubeVolumePanelClosers.get(stream.id)!.push(closePanel);
   } else if (stream.platform === 'twitch') {
     controls.append(createTwitchMuteButton(stream.id));
   }
@@ -1937,9 +2026,10 @@ function createPlayerElement(
 
   let toolbarVolumePanel: HTMLDivElement | undefined;
   if (stream.platform === 'youtube') {
-    const { trigger, panel } = createYouTubeVolumeControl(stream.id, toolbar);
+    const { trigger, panel, closePanel } = createYouTubeVolumeControl(stream.id, toolbar);
     overlayControls.append(trigger);
     toolbarVolumePanel = panel;
+    youtubeVolumePanelClosers.get(stream.id)!.push(closePanel);
   } else if (stream.platform === 'twitch') {
     overlayControls.append(createTwitchMuteButton(stream.id));
   }

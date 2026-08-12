@@ -249,19 +249,28 @@ bindStreamFocus((focused, streamId) => {
       `.stream-card[data-stream-id="${CSS.escape(streamId)}"]`,
     )?.dataset.platform;
 
+    // Chat only ever supports Twitch — while focused on a YouTube/Kick
+    // stream, the toggle would otherwise still open a dropdown of whatever
+    // other Twitch streams happen to be in the grid, unrelated to what's on
+    // screen. Lock it out entirely for the duration of that focus session.
+    chatStore.setToggleAllowed(platform === 'twitch');
+
     if (platform === 'twitch') {
       chatStore.setSelectedId(streamId);
       chatStore.setVisible(true, { persist: false });
     } else {
       chatStore.setVisible(false, { persist: false });
     }
-  } else if (!focused && chatSnapshotBeforeFocus) {
-    const snapshot = chatSnapshotBeforeFocus;
-    chatSnapshotBeforeFocus = null;
-    if (snapshot.selectedId) {
-      chatStore.setSelectedId(snapshot.selectedId);
+  } else if (!focused) {
+    chatStore.setToggleAllowed(true);
+    if (chatSnapshotBeforeFocus) {
+      const snapshot = chatSnapshotBeforeFocus;
+      chatSnapshotBeforeFocus = null;
+      if (snapshot.selectedId) {
+        chatStore.setSelectedId(snapshot.selectedId);
+      }
+      chatStore.setVisible(snapshot.visible, { persist: false });
     }
-    chatStore.setVisible(snapshot.visible, { persist: false });
   }
 
   updateLayout();

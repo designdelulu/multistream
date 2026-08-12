@@ -33,9 +33,10 @@ export function bindChatToggle(chatStore: ChatStore): void {
   function updateButton(): void {
     const hasStreams = chatStore.hasAnyStreams();
     const onMobile = isChatHiddenByViewport();
-    toggleButton.hidden = !hasStreams || onMobile;
+    const allowed = chatStore.isToggleAllowed();
+    toggleButton.hidden = !hasStreams || onMobile || !allowed;
 
-    if (!hasStreams || onMobile) {
+    if (!hasStreams || onMobile || !allowed) {
       return;
     }
 
@@ -129,7 +130,8 @@ export function bindChatPanel(container: HTMLElement, chatStore: ChatStore): voi
   function syncChatPanel(): void {
     const hasStreams = chatStore.hasAnyStreams();
     const onMobile = isChatHiddenByViewport();
-    const visible = chatStore.isVisible() && !onMobile;
+    const allowed = chatStore.isToggleAllowed();
+    const visible = chatStore.isVisible() && !onMobile && allowed;
     const twitchStreams = chatStore.getTwitchStreams();
     const selected = chatStore.getSelectedStream();
 

@@ -28,6 +28,10 @@ function twitchStreams(store: StreamStore): StreamRef[] {
 export function createChatStore(streamStore: StreamStore) {
   let visible = loadVisiblePreference();
   let selectedId: string | null = null;
+  // Transient, never persisted — locked while a non-Twitch stream is
+  // focused (see main.ts's bindStreamFocus wiring), since chat only ever
+  // supports Twitch and a focused YouTube/Kick card has nothing to show.
+  let toggleAllowed = true;
   const listeners = new Set<Listener>();
 
   function notify(): void {
@@ -73,6 +77,16 @@ export function createChatStore(streamStore: StreamStore) {
 
     toggleVisible(): void {
       setVisible(!visible);
+    },
+
+    isToggleAllowed(): boolean {
+      return toggleAllowed;
+    },
+
+    setToggleAllowed(next: boolean): void {
+      if (next === toggleAllowed) return;
+      toggleAllowed = next;
+      notify();
     },
 
     hasChatSupport(): boolean {
