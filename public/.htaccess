@@ -1,18 +1,28 @@
 # Serve index.html for the site root
 DirectoryIndex index.html
 
-# SPA fallback — path URLs like /t:username/k:username
 <IfModule mod_rewrite.c>
   RewriteEngine On
+
+  # Canonicalize to https://multistream.cc (single hop — no chained redirects).
+  # DreamHost's panel-level "force HTTPS" already 301s http -> https on the
+  # requested host, but does NOT fold www -> non-www for https requests, so
+  # https://www.multistream.cc/ was serving 200 directly instead of
+  # redirecting. This rule makes both canonicalizations explicit in code
+  # instead of depending on DreamHost dashboard config.
+  RewriteCond %{HTTPS} off [OR]
+  RewriteCond %{HTTP_HOST} ^www\.multistream\.cc$ [NC]
+  RewriteRule ^ https://multistream.cc%{REQUEST_URI} [L,R=301]
+
+  # Canonicalize /index.html -> / (avoid a second indexable URL for the homepage).
+  RewriteCond %{THE_REQUEST} \s/+index\.html[\s?] [NC]
+  RewriteRule ^index\.html$ / [L,R=301]
+
+  # SPA fallback — path URLs like /t:username/k:username
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule ^ index.html [L]
 </IfModule>
-
-# Optional: force HTTPS on DreamHost (uncomment if needed)
-# RewriteEngine On
-# RewriteCond %{HTTPS} off
-# RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
 # Cache policy: never cache the HTML shell (it points at hashed /assets/*).
 # Hashed JS/CSS can be cached long-term — new deploys get new filenames from Vite.

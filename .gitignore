@@ -4,3 +4,7 @@ dist
 .DS_Store
 *.local
 local-deploy-secrets/
+multistream-secrets/
+.devsecrets-test
+*secret*
+!*.secret.example
