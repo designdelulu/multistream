@@ -1,8 +1,10 @@
 export { twitchAdapter } from './twitch';
 export { kickAdapter } from './kick';
 export { youtubeAdapter } from './youtube';
+export { tiktokAdapter } from './tiktok';
 
 import { kickAdapter } from './kick';
+import { tiktokAdapter } from './tiktok';
 import { twitchAdapter } from './twitch';
 import { parseYouTubeToken, youtubeAdapter } from './youtube';
 import type { Platform, PlatformAdapter, StreamRef } from '../types';
@@ -11,8 +13,11 @@ import type { Platform, PlatformAdapter, StreamRef } from '../types';
 // first (existing behavior), Kick only via prefix/URL, YouTube appended last
 // and only ever matches an explicit y:/yt:/youtube: prefix or a full URL —
 // it has no bare-username fallback, so this order change cannot alter what
-// Twitch or Kick already claimed.
-const adapters: PlatformAdapter[] = [twitchAdapter, kickAdapter, youtubeAdapter];
+// Twitch or Kick already claimed. TikTok appended last too, and only ever
+// matches a full tiktok.com URL (see tiktok.ts's module doc comment for why
+// it deliberately has no bare-handle fallback) — same non-interference
+// guarantee as YouTube's.
+const adapters: PlatformAdapter[] = [twitchAdapter, kickAdapter, youtubeAdapter, tiktokAdapter];
 
 export function getAdapter(platform: Platform): PlatformAdapter {
   const adapter = adapters.find((item) => item.id === platform);
@@ -37,6 +42,7 @@ export function parseStreamInput(input: string): Omit<StreamRef, 'id' | 'muted' 
 function prefixForPlatform(platform: Platform): string {
   if (platform === 'twitch') return 't';
   if (platform === 'kick') return 'k';
+  if (platform === 'tiktok') return 'tt';
   return 'y';
 }
 
@@ -55,6 +61,14 @@ export function deserializeStream(token: string): Omit<StreamRef, 'id' | 'muted'
     const parsed = parseYouTubeToken(youtube[1]);
     if (!parsed) return null;
     return { platform: 'youtube', channel: youtube[1] };
+  }
+
+  // Own two-letter prefix (not [tk]) — TikTok handles may contain '.', which
+  // the twitch/kick short-form regex below doesn't allow, and 'tt' can't
+  // collide with the single-letter t/k prefixes.
+  const tiktok = value.match(/^tt:([a-zA-Z0-9_.]{1,64})$/i);
+  if (tiktok) {
+    return { platform: 'tiktok', channel: tiktok[1].toLowerCase() };
   }
 
   const short = value.match(/^([tk]):([a-zA-Z0-9_-]+)$/i);

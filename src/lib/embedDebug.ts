@@ -72,7 +72,11 @@ export type EmbedDebugReason =
   | 'player-blocked'
   | 'player-offline'
   | 'player-online'
-  | 'player-recover';
+  | 'player-recover'
+  | 'tiktok-mounted'
+  | 'tiktok-not-live'
+  | 'tiktok-resolve-error'
+  | 'tiktok-player-error';
 
 type EmbedDebugDetail = {
   platform?: string;

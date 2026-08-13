@@ -1,15 +1,14 @@
-export type Platform = 'twitch' | 'kick' | 'youtube';
+export type Platform = 'twitch' | 'kick' | 'youtube' | 'tiktok';
 
 /**
- * Landscape is the default for all three current platforms — Twitch/Kick/
- * YouTube live and video embeds are all 16:9 by convention. Portrait exists
- * so the grid/Focus View layout engines (src/lib/gridLayout.ts) have a real
- * signal to weight around; today the only path that ever sets it is a
- * directly-pasted YouTube Shorts URL (detected from the raw input at
- * add-stream time — see state/streams.ts's addStream). This is also the
- * capability boundary a future portrait-native provider (e.g. TikTok, if it
- * ever ships an official LIVE embed — see docs/TIKTOK.md) would plug into
- * without another layout rewrite.
+ * Landscape is the default for Twitch/Kick/YouTube — their live and video
+ * embeds are all 16:9 by convention. Portrait exists so the grid/Focus View
+ * layout engines (src/lib/gridLayout.ts) have a real signal to weight
+ * around. Two paths set it: a directly-pasted YouTube Shorts URL (detected
+ * from the raw input at add-stream time — see state/streams.ts's
+ * addStream), and every TikTok stream unconditionally (TikTok LIVE is
+ * always portrait, so it's derived from platform alone, not from raw input —
+ * see state/streams.ts's detectOrientation and toStreamRefs).
  */
 export type StreamOrientation = 'landscape' | 'portrait';
 

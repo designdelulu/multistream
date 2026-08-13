@@ -17,26 +17,27 @@ function createId(platform: string, channel: string): string {
 /**
  * Every restore path (URL path/query, localStorage) only ever carries
  * platform+channel — never the raw input string a user originally typed —
- * so orientation always resolves to 'landscape' here. That's a deliberate,
- * documented limitation (see StreamOrientation's doc comment in types.ts):
- * a shared/reloaded YouTube Shorts link loses its portrait hint, the same
- * way the channel token is already the whole identity for every other
- * platform. Only a fresh addStream() call in the current session (which
- * still has the raw input) can detect it.
+ * so a YouTube Shorts link loses its portrait hint on reload. That's a
+ * deliberate, documented limitation (see StreamOrientation's doc comment in
+ * types.ts): only a fresh addStream() call in the current session (which
+ * still has the raw input) can detect it. TikTok doesn't have this problem —
+ * every TikTok stream is LIVE and LIVE is always portrait, so orientation is
+ * derivable from platform alone on every path, restore included.
  */
 function toStreamRefs(items: Omit<StreamRef, 'id' | 'muted' | 'orientation'>[]): StreamRef[] {
   return items.map((item) => ({
     ...item,
     id: createId(item.platform, item.channel),
     muted: true,
-    orientation: 'landscape',
+    orientation: item.platform === 'tiktok' ? 'portrait' : 'landscape',
   }));
 }
 
 /** youtube.com/shorts/... and youtu.be-shorts links are always 9:16 by convention. */
 const YOUTUBE_SHORTS_RE = /youtube\.com\/shorts\//i;
 
-function detectOrientation(rawInput: string): StreamRef['orientation'] {
+function detectOrientation(platform: Platform, rawInput: string): StreamRef['orientation'] {
+  if (platform === 'tiktok') return 'portrait'; // TikTok LIVE is always portrait.
   return YOUTUBE_SHORTS_RE.test(rawInput) ? 'portrait' : 'landscape';
 }
 
@@ -53,7 +54,8 @@ function loadFromStorage(): Omit<StreamRef, 'id' | 'muted' | 'orientation'>[] {
             typeof item === 'object' &&
             ((item as { platform?: string }).platform === 'twitch' ||
               (item as { platform?: string }).platform === 'kick' ||
-              (item as { platform?: string }).platform === 'youtube') &&
+              (item as { platform?: string }).platform === 'youtube' ||
+              (item as { platform?: string }).platform === 'tiktok') &&
             typeof (item as { channel?: string }).channel === 'string',
         ),
     );
@@ -144,7 +146,7 @@ export function createStreamStore() {
           ...parsed,
           id,
           muted: true,
-          orientation: detectOrientation(input),
+          orientation: detectOrientation(parsed.platform, input),
         },
       ]);
       return true;

@@ -20,7 +20,14 @@ import {
   type YouTubeStatsRefreshResult,
 } from '../lib/youtubeStatusCoordinator';
 import { isStackedStreamLayout } from '../lib/viewport';
+import mpegts from 'mpegts.js';
 import { getAdapter, buildEmbedUrl } from '../platforms';
+import {
+  describeTikTokState,
+  resolveTikTokLive,
+  type TikTokQuality,
+  type TikTokResolveResult,
+} from '../platforms/tiktok';
 import { twitchParentList } from '../platforms/twitch';
 import { parseYouTubeToken, type YouTubeParsedToken } from '../platforms/youtube';
 import {
@@ -181,6 +188,18 @@ const youtubePlayers = new Map<string, YT.Player>();
 const youtubeResolveControllers = new Map<string, AbortController>();
 let youtubeScriptPromise: Promise<boolean> | null = null;
 const YOUTUBE_SCRIPT_TIMEOUT_MS = 4000;
+
+/**
+ * TikTok LIVE state — experimental, not an official TikTok integration (see
+ * platforms/tiktok.ts's module doc comment). No iframe, no Twitch-style
+ * watchdog/recovery loop: a resolve either succeeds once (mpegts.js attaches
+ * to a plain <video>, and stays attached — pause/resume via the video
+ * element's own native API, exactly like YouTube's real pause API) or fails
+ * into a distinct, non-retrying error state (see describeTikTokState). A
+ * failed resolve never auto-retries — see mountTikTokMedia.
+ */
+const tiktokPlayers = new Map<string, { player: ReturnType<typeof mpegts.createPlayer>; video: HTMLVideoElement }>();
+const tiktokResolveControllers = new Map<string, AbortController>();
 
 /**
  * External volume control state, tracked locally rather than re-read from
@@ -1471,6 +1490,230 @@ function reloadYouTubePlayer(card: HTMLElement): void {
   void resolveAndMountYouTubeChannel(card, token, true);
 }
 
+/**
+ * Persistent wrapper, same role/shape as createYouTubePlayerWrap: carries
+ * `.stream-card__iframe` (shared absolute/full-size CSS rule, including the
+ * portrait 2-row Grid View sizing) so generic per-card lookups and layout
+ * keep working exactly as they do for every iframe-based platform. Only
+ * this wrapper's children (a status message, or the live <video>) are ever
+ * swapped — the wrapper itself is created once and never replaced.
+ */
+function createTikTokPlayerWrap(): HTMLDivElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'stream-card__iframe stream-card__tiktok-wrap';
+  return wrap;
+}
+
+function tiktokWrap(card: HTMLElement): HTMLElement | null {
+  return card.querySelector<HTMLElement>('.stream-card__tiktok-wrap');
+}
+
+/** Placeholder / offline / invalid-creator / error text — never stacks over a live video. */
+function showTikTokMessage(card: HTMLElement, text: string): void {
+  const wrap = tiktokWrap(card);
+  if (!wrap) return;
+  wrap.replaceChildren();
+  const message = document.createElement('div');
+  message.className = 'stream-card__tiktok-status';
+  message.textContent = text;
+  wrap.append(message);
+}
+
+/** Drops every trace of one TikTok player: in-flight resolve, mpegts player, video element. Safe to call on a card with none of those. */
+function forgetTikTokPlayer(streamId: string): void {
+  tiktokResolveControllers.get(streamId)?.abort();
+  tiktokResolveControllers.delete(streamId);
+  const entry = tiktokPlayers.get(streamId);
+  if (entry) {
+    safeCall(() => entry.player.pause());
+    safeCall(() => entry.player.unload());
+    safeCall(() => entry.player.detachMediaElement());
+    safeCall(() => entry.player.destroy());
+  }
+  tiktokPlayers.delete(streamId);
+}
+
+/**
+ * First-and-only construction of a TikTok card's player, mirroring
+ * mountYouTubeMedia's shape: 'mount' resolves once and attaches; every
+ * later call for an already-mounted card is either a no-op resume
+ * ('tab-resume'/'focus-resume' — never re-resolves, so backgrounding and
+ * returning cannot accumulate resolver requests) or a real user gesture
+ * ('focus-unmute'). A failed resolve shows a distinct error state and does
+ * NOT retry on its own — matching the "no retry loops" requirement; only a
+ * manual reload (reloadTikTokPlayer) or reason 'mount' after that (e.g. a
+ * remove+re-add, which creates a fresh card) tries again.
+ */
+function mountTikTokMedia(
+  card: HTMLElement,
+  reason: 'mount' | 'tab-resume' | 'focus-resume' | 'focus-unmute' = 'mount',
+): void {
+  const streamId = card.dataset.streamId ?? '';
+  const username = card.dataset.channel ?? '';
+  if (!streamId || !username) return;
+  if (card.dataset.tabFrozen === '1') return;
+
+  const state = card.dataset.tiktokMountState;
+  const alreadyAttempted = state === 'mounted' || state === 'pending' || state === 'error';
+
+  if (!alreadyAttempted) {
+    card.dataset.tiktokMountState = 'pending';
+    showTikTokMessage(card, 'Loading TikTok LIVE…');
+
+    const controller = new AbortController();
+    tiktokResolveControllers.set(streamId, controller);
+
+    void resolveTikTokLive(username, controller.signal)
+      .then((result) => {
+        tiktokResolveControllers.delete(streamId);
+        if (!card.isConnected) return;
+        if (card.dataset.tiktokMountState !== 'pending') return; // superseded (removed/reloaded)
+        handleTikTokResolveResult(card, result);
+      })
+      .catch((err: unknown) => {
+        tiktokResolveControllers.delete(streamId);
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (!card.isConnected) return;
+        if (card.dataset.tiktokMountState !== 'pending') return;
+        card.dataset.tiktokMountState = 'error';
+        showTikTokMessage(card, 'TikTok LIVE is unavailable right now.');
+        logEmbedEvent('tiktok-resolve-error', { platform: 'tiktok', channel: username, card });
+      });
+    return;
+  }
+
+  if (reason === 'tab-resume' || reason === 'focus-resume') {
+    // Deliberate no-op — same policy as YouTube's mountYouTubeMedia: resuming
+    // every backgrounded card at once would itself be a simultaneous-autoplay
+    // violation, so paused stays paused until a real click. Also means a
+    // failed/pending card is never retried just because the tab regained
+    // visibility — no resolver requests fire here at all.
+    return;
+  }
+
+  if (reason === 'focus-unmute') {
+    const entry = tiktokPlayers.get(streamId);
+    if (entry) {
+      entry.video.muted = false;
+      card.dataset.embedMuted = '0';
+      safeCall(() => void entry.video.play());
+      syncTikTokMuteUi(card);
+    }
+  }
+}
+
+function handleTikTokResolveResult(card: HTMLElement, result: TikTokResolveResult): void {
+  const streamId = card.dataset.streamId ?? '';
+
+  if (!result.live || result.qualities.length === 0) {
+    card.dataset.tiktokMountState = 'error';
+    showTikTokMessage(card, describeTikTokState(result.state));
+    logEmbedEvent('tiktok-not-live', {
+      platform: 'tiktok',
+      channel: `${card.dataset.channel ?? ''} (${result.state})`,
+      card,
+    });
+    return;
+  }
+
+  const wrap = tiktokWrap(card);
+  if (!wrap) return;
+
+  const quality =
+    result.qualities.find((q: TikTokQuality) => q.id === 'hd') ?? result.qualities[0];
+  if (!mpegts.isSupported()) {
+    card.dataset.tiktokMountState = 'error';
+    showTikTokMessage(card, "This browser can't play TikTok LIVE's video format.");
+    return;
+  }
+
+  wrap.replaceChildren();
+  const video = document.createElement('video');
+  video.className = 'stream-card__tiktok-video';
+  video.muted = card.dataset.embedMuted !== '0';
+  video.autoplay = true;
+  video.playsInline = true;
+  wrap.append(video);
+
+  const player = mpegts.createPlayer(
+    { type: 'flv', isLive: true, url: quality.url, cors: true },
+    // enableWorker: mpegts.js's worker-mode blob script fails ("is not a
+    // constructor") when bundled through Vite — main-thread demuxing is the
+    // only mode that actually works here, and is fine for a single stream.
+    { enableWorker: false },
+  );
+  player.on(mpegts.Events.ERROR, (type: unknown, detail: unknown) => {
+    logEmbedEvent('tiktok-player-error', {
+      platform: 'tiktok',
+      channel: `${card.dataset.channel ?? ''} (${String(type)}:${String(detail)})`,
+      card,
+    });
+    // A playback-time error (e.g. the CDN URL going stale after the
+    // broadcast ends) is reported, not retried — matches "no retry loops".
+    // A manual reload (reloadTikTokPlayer) re-resolves if the user wants
+    // to try again.
+    card.dataset.tiktokMountState = 'error';
+    forgetTikTokPlayer(streamId);
+    showTikTokMessage(card, 'TikTok LIVE playback stopped.');
+  });
+  player.attachMediaElement(video);
+  player.load();
+  safeCall(() => void player.play());
+
+  tiktokPlayers.set(streamId, { player, video });
+  card.dataset.tiktokMountState = 'mounted';
+  logEmbedEvent('tiktok-mounted', { platform: 'tiktok', channel: card.dataset.channel, card });
+}
+
+/** Manual per-card reload — forces a fresh resolve, discarding any cached error/mounted state. */
+function reloadTikTokPlayer(card: HTMLElement): void {
+  const streamId = card.dataset.streamId ?? '';
+  if (!streamId) return;
+  forgetTikTokPlayer(streamId);
+  delete card.dataset.tiktokMountState;
+  reportEmbedRecovery('forced-remount', { platform: 'tiktok', reason: 'manual' });
+  mountTikTokMedia(card, 'mount');
+}
+
+function createTikTokMuteButton(streamId: string): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'stream-card__mute-btn';
+  button.addEventListener('pointerdown', (event) => event.stopPropagation());
+  button.addEventListener('mousedown', (event) => event.stopPropagation());
+  button.addEventListener('touchstart', (event) => event.stopPropagation());
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const card = cardForStream(streamId);
+    if (card) toggleTikTokMute(card);
+  });
+  return button;
+}
+
+function toggleTikTokMute(card: HTMLElement): void {
+  const streamId = card.dataset.streamId ?? '';
+  const nextMuted = !preferredMuted(card);
+  const entry = tiktokPlayers.get(streamId);
+  if (entry) {
+    entry.video.muted = nextMuted;
+    if (!nextMuted) safeCall(() => void entry.video.play());
+  }
+  card.dataset.embedMuted = nextMuted ? '1' : '0';
+  syncTikTokMuteUi(card);
+}
+
+/** Keeps every rendered copy of the TikTok mute button (header, headers-hidden hover toolbar) in sync. */
+function syncTikTokMuteUi(card: HTMLElement): void {
+  const muted = preferredMuted(card);
+  const label = muted ? 'Unmute stream' : 'Mute stream';
+  for (const button of card.querySelectorAll<HTMLButtonElement>('.stream-card__mute-btn')) {
+    button.setAttribute('aria-pressed', muted ? 'true' : 'false');
+    button.innerHTML = muted ? ICON_VOLUME_OFF : ICON_VOLUME_ON;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  }
+}
+
 function mountStreamMedia(
   card: HTMLElement,
   muted: boolean,
@@ -1478,6 +1721,10 @@ function mountStreamMedia(
 ): void {
   if (card.dataset.platform === 'youtube') {
     mountYouTubeMedia(card, reason);
+    return;
+  }
+  if (card.dataset.platform === 'tiktok') {
+    mountTikTokMedia(card, reason);
     return;
   }
   if (card.dataset.platform === 'kick') {
@@ -1570,6 +1817,15 @@ function freezeFocusHiddenPlayers(container: HTMLElement, focusedId: string): vo
             { autoplay: false },
           );
         }
+      }
+      continue;
+    }
+
+    if (card.dataset.platform === 'tiktok') {
+      const entry = tiktokPlayers.get(card.dataset.streamId ?? '');
+      if (entry) {
+        logEmbedEvent('focus-freeze', { platform: 'tiktok', channel: card.dataset.channel, card });
+        entry.video.pause();
       }
       continue;
     }
@@ -1777,6 +2033,9 @@ export function toggleStreamFocus(container: HTMLElement, streamId: string): voi
     // createYouTubeVolumeControl) — close one left open from grid view so
     // the header doesn't get stuck in is-volume-mode.
     for (const close of youtubeVolumePanelClosers.get(streamId) ?? []) close();
+  }
+  if (focusedCard?.dataset.platform === 'tiktok') {
+    mountTikTokMedia(focusedCard, 'focus-unmute');
   }
 }
 
@@ -2052,6 +2311,8 @@ function createPlayerElement(
     youtubeVolumePanelClosers.get(stream.id)!.push(closePanel);
   } else if (stream.platform === 'twitch') {
     controls.append(createTwitchMuteButton(stream.id));
+  } else if (stream.platform === 'tiktok') {
+    controls.append(createTikTokMuteButton(stream.id));
   }
   controls.append(focusButton, reloadButton, removeButton);
   header.append(headerNameBadge.root, controls);
@@ -2068,6 +2329,8 @@ function createPlayerElement(
     player.append(kickFrame);
   } else if (stream.platform === 'youtube') {
     player.append(createYouTubePlayerWrap());
+  } else if (stream.platform === 'tiktok') {
+    player.append(createTikTokPlayerWrap());
   } else {
     player.append(createTwitchMountPoint());
   }
@@ -2149,6 +2412,8 @@ function createPlayerElement(
     youtubeVolumePanelClosers.get(stream.id)!.push(closePanel);
   } else if (stream.platform === 'twitch') {
     overlayControls.append(createTwitchMuteButton(stream.id));
+  } else if (stream.platform === 'tiktok') {
+    overlayControls.append(createTikTokMuteButton(stream.id));
   }
   overlayControls.append(overlayDrag, overlayFocus, overlayReload, overlayRemove);
 
@@ -2156,6 +2421,10 @@ function createPlayerElement(
   if (toolbarVolumePanel) toolbar.append(toolbarVolumePanel);
 
   card.append(header, player, toolbar);
+
+  if (stream.platform === 'tiktok') {
+    syncTikTokMuteUi(card);
+  }
 
   if (stream.platform === 'twitch') {
     syncTwitchMuteUi(card);
@@ -2240,6 +2509,18 @@ export function freezeStreamPlayers(container: HTMLElement): void {
             { autoplay: false },
           );
         }
+      }
+      continue;
+    }
+
+    if (card.dataset.platform === 'tiktok') {
+      // Real <video> element, not an iframe — pausing it (not the generic
+      // blank-src hack below) is what keeps the mpegts player and its
+      // MediaSource attached, so resuming later never needs a re-resolve.
+      const entry = tiktokPlayers.get(card.dataset.streamId ?? '');
+      if (entry) {
+        logEmbedEvent('tab-freeze', { platform: 'tiktok', channel: card.dataset.channel, card });
+        entry.video.pause();
       }
       continue;
     }
@@ -2424,6 +2705,10 @@ function reloadStreamCard(card: HTMLElement): void {
   }
   if (card.dataset.platform === 'youtube') {
     reloadYouTubePlayer(card);
+    return;
+  }
+  if (card.dataset.platform === 'tiktok') {
+    reloadTikTokPlayer(card);
     return;
   }
   if (card.dataset.platform !== 'twitch') return;
@@ -3218,6 +3503,9 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
       }
       if (card.dataset.platform === 'youtube') {
         forgetYouTubePlayer(id);
+      }
+      if (card.dataset.platform === 'tiktok') {
+        forgetTikTokPlayer(id);
       }
       card.remove();
       continue;

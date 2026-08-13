@@ -38,6 +38,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "mpegts.js": "^1.8.1",
     "sortablejs": "^1.15.7"
   }
 }

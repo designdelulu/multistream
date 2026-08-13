@@ -1291,6 +1291,34 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   background: var(--surface);
 }
 
+/*
+ * TikTok: same persistent-wrapper pattern as YouTube above
+ * (.stream-card__iframe carries the sizing, including the portrait
+ * 2-row Grid View rule). The <video> element fills the wrap; the status
+ * message is a simple centered overlay for not-live/error states.
+ */
+.stream-card__tiktok-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.stream-card__tiktok-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  background: var(--surface);
+}
+
 .empty-state {
   position: absolute;
   inset: 0;
