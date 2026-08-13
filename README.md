@@ -10,6 +10,10 @@ Watch **Twitch**, **Kick**, and **YouTube** streams online on one page — a res
 Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](https://designdelulu.com).
 
 **User guide:** [docs/USER-GUIDE.md](./docs/USER-GUIDE.md) — features and how to use the site.
+**Playback stability history:** [docs/PLAYBACK_STABILITY.md](./docs/PLAYBACK_STABILITY.md) — known-good baselines, recovery design, and past regressions.
+**Release checklist:** [docs/RELEASE-CHECKLIST.md](./docs/RELEASE-CHECKLIST.md) — what to run through before every DreamHost upload.
+**TikTok LIVE support:** [docs/TIKTOK.md](./docs/TIKTOK.md) — why it isn't supported yet, and what would unblock it.
+**Audit report:** [docs/AUDIT-REPORT.md](./docs/AUDIT-REPORT.md) — full record of the Focus View / portrait-grid upgrade pass: bugs found and fixed, tests added, and what's still open.
 
 ---
 
@@ -20,6 +24,8 @@ MultiStream.cc is a modern multi-stream viewer for Twitch and Kick — watch par
 - **Twitch + Kick + YouTube** on the same page via official embeds (same approach as [MultistreamGrid](https://multistreamgrid.com))
 - **YouTube channels resolve to whatever's live right now** — a handle, username, channel ID, or channel URL is checked server-side on each load; a direct video/Shorts/live URL loads exactly that video, no lookup needed
 - **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
+- **Portrait streams (YouTube Shorts) get their own grid rule** — a portrait tile always spans exactly 3 landscape rows in Grid View, letterboxed to its true 9:16 shape rather than stretched; Focus View sizes a portrait primary by its own aspect ratio instead
+- **Focus View** — toggle to a large-primary-plus-tray layout; click a tray stream's header to promote it to primary without remounting any player (see [Focus View](#focus-view) below)
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
 - **Username dropdown** — type a name (or `@name`) and pick Twitch or Kick; Enter uses your last-chosen platform
 - **Share link / Clear all** in the toolbar
@@ -210,6 +216,21 @@ Drag a card’s **header** to reorder streams (or the **drag** handle in the hov
 
 When you return to the site without a share URL in the path, your last lineup is restored from `localStorage`. Opening a link like `/t:username` always uses that URL instead.
 
+### Focus View
+
+**Focus view**, in the toolbar, switches from the packing grid to one large
+primary player with the rest of your streams in a horizontal tray below
+it. Click a tray stream's **header** (not its buttons) to promote it
+to primary — this is a resize only, not a remount, so every player keeps
+playing across the swap. **Grid view** switches back. A portrait primary
+keeps its own 9:16 shape instead of the fixed 2-row rule Grid View uses
+(see below) — it's sized purely by aspect ratio, the same way a landscape
+primary is sized by 16:9.
+
+This is a different control from each card's own **Focus** (magnifying
+glass) button, which fills the streams pane with just that one stream and
+opens its Twitch chat — see the `×` close and focus controls bullet above.
+
 ---
 
 ## Architecture
@@ -224,7 +245,7 @@ src/
 ├── platforms/     # Twitch, Kick & YouTube adapters (parse input, build embed URLs)
 ├── state/         # Stream list, chat visibility, headers mode, URL sync
 ├── components/    # Grid, toolbar, chat, reorder, player cards
-├── lib/           # Viewport helpers
+├── lib/           # Grid/Focus View layout math, add/remove playback recovery, embed debug logging
 └── styles/        # Layout and UI
 public/api/        # youtube-resolve.php + twitch-status.php — the server-side pieces
 ```
@@ -249,6 +270,7 @@ through `buildEmbedUrl` (which only handles the direct-video case).
 - **Twitch** embeds require a matching `parent` domain (injected automatically from `window.location.hostname`).
 - **Kick** uses the official iframe embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
 - **Layout packing** follows MultiTwitch’s `optimize_size` idea: pick the column count and 16:9 size that fits *every* stream in the streams pane. Chat docks beside the grid and triggers a reflow — it does not cover players (Twitch pauses embeds that are clipped or scrolled off-screen).
+- **Portrait tiles (YouTube Shorts)** always span exactly 2 landscape grid rows in Grid View — not an aspect-ratio-derived fraction — so their bottom edge lines up with the second landscape row regardless of column position. The allocated 2-row box accounts for both the grid gap and each row's header chrome; the video itself is never stretched to fill it — it's letterboxed inside at its true 9:16 shape, centered with side whitespace when the box is wider than the video's own aspect. This is a general `orientation === 'portrait'` rule, not a YouTube-specific one — see [TikTok support research](docs/TIKTOK.md) for why TikTok LIVE, the other obvious portrait-native candidate, isn't wired up yet.
 - **Kick volume / control size:** Kick’s embed switches UI by **iframe layout width**. Below **769px** it uses mobile/tablet chrome (tiny overlays, often no volume). At **769px+** it uses desktop chrome with a speaker icon — hover the video, then the speaker, for the volume slider. When the packed cell is narrower than 769px, MultiStream still renders the Kick iframe at ≥769px and **CSS-scales** it into the cell so desktop chrome (including volume) stays available while the grid fits on-screen.
 - **Mute on load:** All platforms boot muted. Focus reloads/unmutes the focused stream (user click); exit keeps that stream unmuted. Tab hide / focus-hide pauses or blanks background players depending on platform, and resumes with each card's saved mute preference — **except YouTube**, see below.
 - **YouTube** uses the official IFrame Player API (`www.youtube.com/iframe_api`), with a bare-iframe fallback if that script is blocked. Channel/handle inputs resolve to a live `videoId` server-side on every load (see [YouTube setup](#youtube-setup)); direct video/Shorts/live/`youtu.be` URLs resolve locally with no network call. **Autoplay:** YouTube's own policy forbids multiple simultaneously autoplaying embeds, so only the very first YouTube player mounted in a page session ever requests autoplay — every later one (additional adds, focus-exit, tab-resume) stays paused until a real click, either on this app's Focus control or YouTube's own native play button. Embedding-disabled or unavailable videos show a clear in-tile message via the player's `onError` event; an offline channel shows "isn't live right now" rather than loading anything else.

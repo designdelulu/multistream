@@ -42,7 +42,7 @@ describe('createStreamStore — youtube support', () => {
     const added = store.addStream('y:handle:pewdiepie');
     expect(added).toBe(true);
     expect(store.getStreams()).toEqual([
-      { id: 'youtube:handle:pewdiepie', platform: 'youtube', channel: 'handle:pewdiepie', muted: true },
+      { id: 'youtube:handle:pewdiepie', platform: 'youtube', channel: 'handle:pewdiepie', muted: true, orientation: 'landscape' },
     ]);
   });
 
@@ -50,7 +50,7 @@ describe('createStreamStore — youtube support', () => {
     const store = createStreamStore();
     store.addStream('https://youtu.be/dQw4w9WgXcQ');
     expect(store.getStreams()).toEqual([
-      { id: 'youtube:video:dQw4w9WgXcQ', platform: 'youtube', channel: 'video:dQw4w9WgXcQ', muted: true },
+      { id: 'youtube:video:dQw4w9WgXcQ', platform: 'youtube', channel: 'video:dQw4w9WgXcQ', muted: true, orientation: 'landscape' },
     ]);
   });
 
@@ -80,8 +80,8 @@ describe('createStreamStore — youtube support', () => {
     );
     const store = createStreamStore();
     expect(store.getStreams()).toEqual([
-      { id: 'twitch:shroud', platform: 'twitch', channel: 'shroud', muted: true },
-      { id: 'youtube:handle:pewdiepie', platform: 'youtube', channel: 'handle:pewdiepie', muted: true },
+      { id: 'twitch:shroud', platform: 'twitch', channel: 'shroud', muted: true, orientation: 'landscape' },
+      { id: 'youtube:handle:pewdiepie', platform: 'youtube', channel: 'handle:pewdiepie', muted: true, orientation: 'landscape' },
     ]);
   });
 
@@ -95,8 +95,8 @@ describe('createStreamStore — youtube support', () => {
     );
     const store = createStreamStore();
     expect(store.getStreams()).toEqual([
-      { id: 'twitch:shroud', platform: 'twitch', channel: 'shroud', muted: true },
-      { id: 'kick:trainwreckstv', platform: 'kick', channel: 'trainwreckstv', muted: true },
+      { id: 'twitch:shroud', platform: 'twitch', channel: 'shroud', muted: true, orientation: 'landscape' },
+      { id: 'kick:trainwreckstv', platform: 'kick', channel: 'trainwreckstv', muted: true, orientation: 'landscape' },
     ]);
   });
 
@@ -104,8 +104,8 @@ describe('createStreamStore — youtube support', () => {
     locationStub.pathname = '/t:shroud/y:video:dQw4w9WgXcQ';
     const store = createStreamStore();
     expect(store.getStreams()).toEqual([
-      { id: 'twitch:shroud', platform: 'twitch', channel: 'shroud', muted: true },
-      { id: 'youtube:video:dQw4w9WgXcQ', platform: 'youtube', channel: 'video:dQw4w9WgXcQ', muted: true },
+      { id: 'twitch:shroud', platform: 'twitch', channel: 'shroud', muted: true, orientation: 'landscape' },
+      { id: 'youtube:video:dQw4w9WgXcQ', platform: 'youtube', channel: 'video:dQw4w9WgXcQ', muted: true, orientation: 'landscape' },
     ]);
   });
 
@@ -119,7 +119,7 @@ describe('createStreamStore — youtube support', () => {
     );
     const store = createStreamStore();
     expect(store.getStreams()).toEqual([
-      { id: 'youtube:handle:pewdiepie', platform: 'youtube', channel: 'handle:pewdiepie', muted: true },
+      { id: 'youtube:handle:pewdiepie', platform: 'youtube', channel: 'handle:pewdiepie', muted: true, orientation: 'landscape' },
     ]);
   });
 
@@ -129,5 +129,47 @@ describe('createStreamStore — youtube support', () => {
     const [stream] = store.getStreams();
     store.removeStream(stream.id);
     expect(store.getStreams()).toEqual([]);
+  });
+});
+
+describe('createStreamStore — orientation detection is synchronous (no post-mount race)', () => {
+  /**
+   * Regression coverage for a hypothesized "orientation flips after mount"
+   * race: a YouTube Short is landscape at insert time and only later
+   * reclassifies as portrait, causing a second re-render. detectOrientation
+   * is a plain synchronous regex check (see streams.ts) with nothing async
+   * in addStream's path — this asserts the orientation is already correct
+   * on the very same getStreams() read that follows addStream(), with no
+   * await, no timer flush, and no store subscription round trip needed.
+   */
+  it('a youtube.com/shorts/ URL is portrait immediately, in the same tick as addStream', () => {
+    const store = createStreamStore();
+    const added = store.addStream('https://www.youtube.com/shorts/dQw4w9WgXcQ');
+    expect(added).toBe(true);
+    expect(store.getStreams()).toEqual([
+      {
+        id: 'youtube:video:dQw4w9WgXcQ',
+        platform: 'youtube',
+        channel: 'video:dQw4w9WgXcQ',
+        muted: true,
+        orientation: 'portrait',
+      },
+    ]);
+  });
+
+  it('a youtu.be shorts-style link and a plain long-form link resolve to different orientations, both immediately', () => {
+    const store = createStreamStore();
+    store.addStream('https://www.youtube.com/shorts/jNQXAC9IVRw');
+    store.addStream('https://youtu.be/dQw4w9WgXcQ');
+    const [short, longForm] = store.getStreams();
+    expect(short.orientation).toBe('portrait');
+    expect(longForm.orientation).toBe('landscape');
+  });
+
+  it('non-youtube platforms are always landscape regardless of input shape', () => {
+    const store = createStreamStore();
+    store.addStream('shroud');
+    store.addStream('k:trainwreckstv');
+    expect(store.getStreams().every((s) => s.orientation === 'landscape')).toBe(true);
   });
 });

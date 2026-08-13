@@ -14,15 +14,33 @@ function createId(platform: string, channel: string): string {
   return `${platform}:${channel}`;
 }
 
-function toStreamRefs(items: Omit<StreamRef, 'id' | 'muted'>[]): StreamRef[] {
+/**
+ * Every restore path (URL path/query, localStorage) only ever carries
+ * platform+channel — never the raw input string a user originally typed —
+ * so orientation always resolves to 'landscape' here. That's a deliberate,
+ * documented limitation (see StreamOrientation's doc comment in types.ts):
+ * a shared/reloaded YouTube Shorts link loses its portrait hint, the same
+ * way the channel token is already the whole identity for every other
+ * platform. Only a fresh addStream() call in the current session (which
+ * still has the raw input) can detect it.
+ */
+function toStreamRefs(items: Omit<StreamRef, 'id' | 'muted' | 'orientation'>[]): StreamRef[] {
   return items.map((item) => ({
     ...item,
     id: createId(item.platform, item.channel),
     muted: true,
+    orientation: 'landscape',
   }));
 }
 
-function loadFromStorage(): Omit<StreamRef, 'id' | 'muted'>[] {
+/** youtube.com/shorts/... and youtu.be-shorts links are always 9:16 by convention. */
+const YOUTUBE_SHORTS_RE = /youtube\.com\/shorts\//i;
+
+function detectOrientation(rawInput: string): StreamRef['orientation'] {
+  return YOUTUBE_SHORTS_RE.test(rawInput) ? 'portrait' : 'landscape';
+}
+
+function loadFromStorage(): Omit<StreamRef, 'id' | 'muted' | 'orientation'>[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
@@ -126,6 +144,7 @@ export function createStreamStore() {
           ...parsed,
           id,
           muted: true,
+          orientation: detectOrientation(input),
         },
       ]);
       return true;

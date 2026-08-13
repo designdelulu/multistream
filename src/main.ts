@@ -1,6 +1,7 @@
 import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
   beginAddRemoveRecovery,
+  bindFocusViewPromotion,
   bindPlaybackRecovery,
   bindStreamFocus,
   bindTabVisibilityPlayers,
@@ -13,6 +14,7 @@ import {
   snapshotPlayingTwitchPlayers,
   startStatsProbe,
   syncStreamGrid,
+  syncViewMode,
   updateGridLayout,
 } from './components/StreamGrid';
 import { bindStreamReorder } from './components/StreamReorder';
@@ -31,6 +33,7 @@ import { phoneMediaQuery } from './lib/viewport';
 import { createChatStore } from './state/chat';
 import { createHeadersStore } from './state/headers';
 import { createStreamStore } from './state/streams';
+import { createViewModeStore } from './state/viewMode';
 
 /** Dev-only (?debug=twitch-fast-poll, gated on import.meta.env.DEV): compresses manual testing of multiple automatic cycles into a short session. Never reachable in production. */
 const DEV_FAST_TWITCH_POLL_INTERVAL_MS = 15_000;
@@ -40,6 +43,7 @@ announceEmbedDebug();
 const store = createStreamStore();
 const chatStore = createChatStore(store);
 const headersStore = createHeadersStore();
+const viewModeStore = createViewModeStore();
 const grid = document.querySelector<HTMLElement>('#stream-grid');
 const chatPanel = document.querySelector<HTMLElement>('#chat-panel');
 const streamArea = document.querySelector<HTMLElement>('.stream-area');
@@ -105,6 +109,17 @@ function afterHeadersToggle(): void {
   });
 }
 
+/** Switching Grid/Focus View resizes every card at once, same as a headers toggle — same recovery is needed. */
+function afterViewModeToggle(): void {
+  syncViewMode(gridEl, viewModeStore.getMode(), store.getStreams());
+  quietLayout(2500);
+  afterLayoutPaint(() => {
+    measureAndLayout();
+    recoverTwitchPlayersAfterLayout(gridEl);
+    quietLayout(2500);
+  });
+}
+
 /**
  * Add/remove detection. The store notifies on reorder too, and a reorder is a
  * different problem with a different fix — this recovery path is deliberately
@@ -138,6 +153,7 @@ function renderStreams(): void {
 
   quietLayout(2000);
   syncStreamGrid(gridEl, store);
+  syncViewMode(gridEl, viewModeStore.getMode(), store.getStreams());
   updateEmptyState(store);
   afterLayoutPaint(() => {
     measureAndLayout();
@@ -223,7 +239,7 @@ async function manualTwitchStatusRefresh(): Promise<Awaited<ReturnType<typeof re
 }
 
 bindWelcomeModal();
-const toolbar = bindStreamToolbar(store, headersStore, {
+const toolbar = bindStreamToolbar(store, headersStore, viewModeStore, {
   refresh: manualTwitchStatusRefresh,
   isRefreshInFlight: isTwitchStatusRefreshInFlight,
 });
@@ -233,6 +249,7 @@ bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);
 bindPlaybackRecovery();
+bindFocusViewPromotion(gridEl);
 bindStreamFocus((focused, streamId) => {
   toolbar.sync();
   reorder.sync();
@@ -283,6 +300,7 @@ chatStore.subscribe(() => {
   updateLayout();
 });
 headersStore.subscribe(afterHeadersToggle);
+viewModeStore.subscribe(afterViewModeToggle);
 
 const phoneQuery = phoneMediaQuery();
 

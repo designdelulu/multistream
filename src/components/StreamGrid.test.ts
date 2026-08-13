@@ -1,16 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetTwitchDurationTimerForTests,
+  __resetTwitchMutePollTimerForTests,
   __resetYouTubeDurationTimerForTests,
   applyTwitchStatus,
   applyYouTubeStats,
+  bindFocusViewPromotion,
+  getFocusViewPrimaryId,
   refreshAllTwitchStatuses,
   refreshAllYouTubeStats,
   refreshTwitchStatus,
   refreshYouTubeStats,
+  setFocusViewPrimary,
+  snapshotPlayingTwitchPlayers,
+  syncStreamGrid,
+  syncViewMode,
   twitchStatusDotProps,
 } from './StreamGrid';
 import { createStreamStore, type StreamStore } from '../state/streams';
+import type { StreamRef } from '../types';
 import type { TwitchStatusResult } from '../platforms/twitchStatus';
 import type { YouTubeStatsResult } from '../platforms/youtubeStats';
 
@@ -391,9 +399,9 @@ describe('refreshTwitchStatus / refreshAllTwitchStatuses — batching', () => {
 
     const store = createStreamStore() as StreamStore;
     vi.spyOn(store, 'getStreams').mockReturnValue([
-      { id: 't:Foo', platform: 'twitch', channel: 'Foo', muted: true },
-      { id: 't:bar', platform: 'twitch', channel: 'bar', muted: true },
-      { id: 'k:baz', platform: 'kick', channel: 'baz', muted: true },
+      { id: 't:Foo', platform: 'twitch', channel: 'Foo', muted: true, orientation: 'landscape' },
+      { id: 't:bar', platform: 'twitch', channel: 'bar', muted: true, orientation: 'landscape' },
+      { id: 'k:baz', platform: 'kick', channel: 'baz', muted: true, orientation: 'landscape' },
     ]);
 
     const result = await refreshAllTwitchStatuses(store, 'manual');
@@ -412,7 +420,7 @@ describe('refreshTwitchStatus / refreshAllTwitchStatuses — batching', () => {
 
     const store = createStreamStore() as StreamStore;
     vi.spyOn(store, 'getStreams').mockReturnValue([
-      { id: 'k:baz', platform: 'kick', channel: 'baz', muted: true },
+      { id: 'k:baz', platform: 'kick', channel: 'baz', muted: true, orientation: 'landscape' },
     ]);
 
     const result = await refreshAllTwitchStatuses(store, 'manual');
@@ -572,5 +580,464 @@ describe('refreshYouTubeStats / refreshAllYouTubeStats — batching', () => {
 
     expect(result.outcome).toBe('skipped-empty');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regression coverage for the mixed-provider "adding a YouTube Short pauses
+ * every existing Twitch player" bug. Root cause: snapshotPlayingTwitchPlayers
+ * trusted the `twitchPlayback` PLAYING-event latch, which does not reliably
+ * fire for every stream Twitch is actually playing — so the fast (~4-5s)
+ * add/remove recovery pass saw an empty snapshot and had nothing to resume,
+ * leaving genuinely-playing Twitch streams stuck until the much slower ~90s
+ * watchdog. It was never a DOM/player teardown bug (syncStreamGrid's stable
+ * `data-stream-id` Map diff already only creates cards for genuinely new
+ * ids), but this test proves that identity claim directly rather than by
+ * inference, alongside the snapshot fix itself, by driving the real
+ * createPlayerElement -> mountStreamMedia -> constructTwitchPlayer path with
+ * a fake Twitch.Player/YT.Player (jsdom has neither real embed SDK).
+ */
+describe('syncStreamGrid — mixed-provider player identity (Twitch pause regression)', () => {
+  class FakeTwitchPlayer {
+    static readonly READY = 'READY';
+    static readonly PLAY = 'PLAY';
+    static readonly PLAYING = 'PLAYING';
+    static readonly PAUSE = 'PAUSE';
+    static readonly ENDED = 'ENDED';
+    static readonly PLAYBACK_BLOCKED = 'PLAYBACK_BLOCKED';
+    static readonly OFFLINE = 'OFFLINE';
+    static readonly ONLINE = 'ONLINE';
+
+    paused = false;
+    pauseCallCount = 0;
+    destroyCallCount = 0;
+    private listeners = new Map<string, Array<() => void>>();
+
+    constructor(
+      public elementId: string,
+      public options: Twitch.PlayerOptions,
+    ) {}
+    play(): void {
+      this.paused = false;
+    }
+    pause(): void {
+      this.paused = true;
+      this.pauseCallCount += 1;
+    }
+    isPaused(): boolean {
+      return this.paused;
+    }
+    setMuted(): void {}
+    getMuted(): boolean {
+      return false;
+    }
+    setChannel(): void {}
+    getCurrentTime(): number {
+      return 0;
+    }
+    getPlaybackStats(): Twitch.PlaybackStats {
+      return {};
+    }
+    addEventListener(event: string, callback: () => void): void {
+      const list = this.listeners.get(event) ?? [];
+      list.push(callback);
+      this.listeners.set(event, list);
+    }
+    removeEventListener(): void {}
+    destroy(): void {
+      this.destroyCallCount += 1;
+    }
+    /** Test-only: fires every callback constructTwitchPlayer registered for `event`. */
+    emit(event: string): void {
+      for (const callback of this.listeners.get(event) ?? []) callback();
+    }
+  }
+
+  class FakeYouTubePlayer {
+    constructor(
+      public elementId: string,
+      public options: { events?: { onReady?: () => void } },
+    ) {
+      // Real YT.Player's onReady fires asynchronously (postMessage-based) —
+      // defer so `player` in constructYouTubePlayer's closure is assigned
+      // before this runs, exactly like the real API's timing.
+      queueMicrotask(() => this.options.events?.onReady?.());
+    }
+    isMuted(): boolean {
+      return true;
+    }
+    getVolume(): number {
+      return 100;
+    }
+    getCurrentTime(): number {
+      return 0;
+    }
+    getDuration(): number {
+      return 0;
+    }
+    destroy(): void {}
+  }
+
+  let container: HTMLElement;
+  let createdTwitchPlayers: FakeTwitchPlayer[];
+
+  function fakeStore(streams: StreamRef[]): StreamStore {
+    return { getStreams: () => streams } as StreamStore;
+  }
+
+  beforeEach(() => {
+    createdTwitchPlayers = [];
+    container = document.createElement('div');
+    container.id = 'stream-grid';
+    document.body.append(container);
+
+    const created = createdTwitchPlayers;
+    (globalThis as unknown as { Twitch: unknown }).Twitch = {
+      Player: class extends FakeTwitchPlayer {
+        constructor(elementId: string, options: Twitch.PlayerOptions) {
+          super(elementId, options);
+          created.push(this);
+        }
+      },
+    };
+    (globalThis as unknown as { YT: unknown }).YT = { Player: FakeYouTubePlayer };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'ok', results: [] }) }),
+    );
+  });
+
+  afterEach(() => {
+    // Destroy every constructed player via the real removal path and stop
+    // the shared mute-poll timer, so no real setInterval survives this test.
+    syncStreamGrid(container, fakeStore([]));
+    __resetTwitchMutePollTimerForTests();
+    delete (globalThis as unknown as { Twitch?: unknown }).Twitch;
+    delete (globalThis as unknown as { YT?: unknown }).YT;
+    container.remove();
+  });
+
+  it("adding a YouTube stream never touches an existing Twitch player's DOM identity, mount id, or playback state", async () => {
+    const twitchStreams: StreamRef[] = ['ta', 'tb', 'tc'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(3));
+    for (const player of createdTwitchPlayers) player.play();
+
+    const before = twitchStreams.map((stream) => {
+      const card = container.querySelector<HTMLElement>(`[data-stream-id="${stream.id}"]`);
+      const mount = card?.querySelector<HTMLElement>('.stream-card__iframe');
+      if (!card || !mount) throw new Error(`test setup failed to mount ${stream.id}`);
+      return { id: stream.id, card, mount, mountId: mount.id };
+    });
+
+    // Assertion 1: BEFORE the mutation, the snapshot already reports all
+    // three Twitch streams as playing — proving it relies on isPaused(),
+    // since none of these fake players ever fired a PLAYING event.
+    expect(new Set(snapshotPlayingTwitchPlayers(container))).toEqual(
+      new Set(['twitch:ta', 'twitch:tb', 'twitch:tc']),
+    );
+
+    const youtubeStream: StreamRef = {
+      id: 'youtube:video:dQw4w9WgXcQ',
+      platform: 'youtube',
+      channel: 'video:dQw4w9WgXcQ',
+      muted: true,
+      orientation: 'landscape',
+    };
+    syncStreamGrid(container, fakeStore([...twitchStreams, youtubeStream]));
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-stream-id="youtube:video:dQw4w9WgXcQ"]')).toBeTruthy(),
+    );
+
+    // Assertion 2: exactly one new player was constructed overall, and it
+    // was the YouTube one — no existing Twitch stream got a second
+    // Twitch.Player construction (no destroy-and-rebuild).
+    expect(createdTwitchPlayers).toHaveLength(3);
+
+    for (const prior of before) {
+      const cardAfter = container.querySelector<HTMLElement>(`[data-stream-id="${prior.id}"]`);
+      const mountAfter = cardAfter?.querySelector<HTMLElement>('.stream-card__iframe');
+      // Assertions 3-4: same DOM node references (===), not merely
+      // equivalent markup — a teardown/rebuild would fail this even if the
+      // resulting HTML looked identical.
+      expect(cardAfter).toBe(prior.card);
+      expect(mountAfter).toBe(prior.mount);
+      // Assertion 5: the mount element's id — what Twitch.Player was
+      // constructed against — is unchanged, so no re-attach occurred.
+      expect(mountAfter?.id).toBe(prior.mountId);
+    }
+
+    // Assertions 6-8: no app code called pause()/destroy() on any existing
+    // Twitch player, and each is still reporting itself as playing.
+    for (const player of createdTwitchPlayers) {
+      expect(player.pauseCallCount).toBe(0);
+      expect(player.destroyCallCount).toBe(0);
+      expect(player.isPaused()).toBe(false);
+    }
+
+    // Assertion 9: AFTER the mutation, the snapshot still reports all three
+    // original streams as playing — this is the exact symptom fix: before
+    // the fix this came back empty, starving the fast recovery pass.
+    expect(new Set(snapshotPlayingTwitchPlayers(container))).toEqual(
+      new Set(['twitch:ta', 'twitch:tb', 'twitch:tc']),
+    );
+
+    // Assertion 10: layout metadata reflects the real new total.
+    expect(container.dataset.count).toBe('4');
+  });
+
+  it('a player latched offline via the real Twitch OFFLINE event is excluded from the snapshot even while isPaused() reports false', async () => {
+    const twitchStreams: StreamRef[] = ['live1', 'offline1'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    for (const player of createdTwitchPlayers) player.play(); // both report isPaused() === false
+
+    const offlinePlayer = createdTwitchPlayers.find((p) => p.options.channel === 'offline1');
+    if (!offlinePlayer) throw new Error('test setup failed to construct the offline1 player');
+    // Exercises the real listener constructTwitchPlayer registered — not a
+    // hand-set dataset attribute — so this proves the actual OFFLINE ->
+    // setPlaybackState('offline') -> snapshot-exclusion wiring, not a stand-in.
+    offlinePlayer.emit(FakeTwitchPlayer.OFFLINE);
+
+    const ids = snapshotPlayingTwitchPlayers(container);
+    expect(ids).toContain('twitch:live1');
+    expect(ids).not.toContain('twitch:offline1');
+  });
+});
+
+/**
+ * Focus View / orientation coverage at the DOM level (gridLayout.test.ts
+ * already covers the pure sizing math). syncFocusViewDom only ever toggles
+ * a class and a title attribute on existing cards (see StreamGrid.ts) — it
+ * never touches the player subtree — so a real Grid<->Focus toggle and a
+ * primary promotion must never recreate a card or its mounted player.
+ */
+describe('syncViewMode / setFocusViewPrimary — DOM identity across Grid <-> Focus toggles', () => {
+  class MinimalFakeTwitchPlayer {
+    static readonly READY = 'READY';
+    static readonly PLAY = 'PLAY';
+    static readonly PLAYING = 'PLAYING';
+    static readonly PAUSE = 'PAUSE';
+    static readonly ENDED = 'ENDED';
+    static readonly PLAYBACK_BLOCKED = 'PLAYBACK_BLOCKED';
+    static readonly OFFLINE = 'OFFLINE';
+    static readonly ONLINE = 'ONLINE';
+    constructor(
+      public elementId: string,
+      public options: Twitch.PlayerOptions,
+    ) {}
+    play(): void {}
+    pause(): void {}
+    isPaused(): boolean {
+      return false;
+    }
+    setMuted(): void {}
+    getMuted(): boolean {
+      return false;
+    }
+    setChannel(): void {}
+    getCurrentTime(): number {
+      return 0;
+    }
+    getPlaybackStats(): Twitch.PlaybackStats {
+      return {};
+    }
+    addEventListener(): void {}
+    removeEventListener(): void {}
+    destroy(): void {}
+  }
+
+  let container: HTMLElement;
+
+  function fakeStore(streams: StreamRef[]): StreamStore {
+    return { getStreams: () => streams } as StreamStore;
+  }
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    container.id = 'stream-grid';
+    document.body.append(container);
+    (globalThis as unknown as { Twitch: unknown }).Twitch = { Player: MinimalFakeTwitchPlayer };
+  });
+
+  afterEach(() => {
+    syncStreamGrid(container, fakeStore([]));
+    __resetTwitchMutePollTimerForTests();
+    delete (globalThis as unknown as { Twitch?: unknown }).Twitch;
+    container.remove();
+  });
+
+  it('toggling grid -> focus -> grid preserves every card and player-mount element reference, and marks exactly one primary', async () => {
+    const streams: StreamRef[] = ['a', 'b', 'c'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(3),
+    );
+
+    const before = streams.map((s) => ({
+      id: s.id,
+      card: container.querySelector<HTMLElement>(`[data-stream-id="${s.id}"]`),
+      mount: container.querySelector<HTMLElement>(`[data-stream-id="${s.id}"] .stream-card__iframe`),
+    }));
+
+    syncViewMode(container, 'focus', streams);
+    expect(container.dataset.viewMode).toBe('focus');
+    // Defaults to the first stream per syncViewMode's own fallback.
+    expect(getFocusViewPrimaryId()).toBe('twitch:a');
+    expect(
+      container.querySelectorAll('.stream-card.is-focus-primary'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector('[data-stream-id="twitch:a"]')?.classList.contains('is-focus-primary'),
+    ).toBe(true);
+
+    setFocusViewPrimary(container, 'twitch:c');
+    expect(getFocusViewPrimaryId()).toBe('twitch:c');
+    expect(
+      container.querySelectorAll('.stream-card.is-focus-primary'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector('[data-stream-id="twitch:c"]')?.classList.contains('is-focus-primary'),
+    ).toBe(true);
+    expect(
+      container.querySelector('[data-stream-id="twitch:a"]')?.classList.contains('is-focus-primary'),
+    ).toBe(false);
+
+    syncViewMode(container, 'grid', streams);
+    expect(container.dataset.viewMode).toBe('grid');
+
+    for (const prior of before) {
+      const cardAfter = container.querySelector<HTMLElement>(`[data-stream-id="${prior.id}"]`);
+      const mountAfter = container.querySelector<HTMLElement>(
+        `[data-stream-id="${prior.id}"] .stream-card__iframe`,
+      );
+      expect(cardAfter).toBe(prior.card);
+      expect(mountAfter).toBe(prior.mount);
+    }
+  });
+
+  it('a portrait stream keeps data-orientation="portrait" through a Grid <-> Focus toggle (Focus View sizes it by aspect ratio alone, per gridLayout.ts)', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:land', platform: 'twitch', channel: 'land', muted: true, orientation: 'landscape' },
+      {
+        id: 'youtube:video:dQw4w9WgXcQ',
+        platform: 'youtube',
+        channel: 'video:dQw4w9WgXcQ',
+        muted: true,
+        orientation: 'portrait',
+      },
+    ];
+    (globalThis as unknown as { YT: unknown }).YT = {
+      Player: class {
+        constructor(
+          public elementId: string,
+          public options: { events?: { onReady?: () => void } },
+        ) {
+          queueMicrotask(() => this.options.events?.onReady?.());
+        }
+        isMuted(): boolean {
+          return true;
+        }
+        getVolume(): number {
+          return 100;
+        }
+        destroy(): void {}
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'ok', results: [] }) }),
+    );
+
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(2),
+    );
+
+    const portraitCard = container.querySelector<HTMLElement>('[data-stream-id="youtube:video:dQw4w9WgXcQ"]');
+    expect(portraitCard?.dataset.orientation).toBe('portrait');
+
+    syncViewMode(container, 'focus', streams);
+    expect(portraitCard?.dataset.orientation).toBe('portrait');
+
+    syncViewMode(container, 'grid', streams);
+    expect(portraitCard?.dataset.orientation).toBe('portrait');
+
+    delete (globalThis as unknown as { YT?: unknown }).YT;
+  });
+
+  it('a promotable tray header is keyboard-focusable and Enter promotes it, matching the click affordance', async () => {
+    const streams: StreamRef[] = ['a', 'b', 'c'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(3),
+    );
+    bindFocusViewPromotion(container);
+    syncViewMode(container, 'focus', streams);
+    expect(getFocusViewPrimaryId()).toBe('twitch:a');
+
+    const primaryHeader = container.querySelector<HTMLElement>(
+      '[data-stream-id="twitch:a"] .stream-card__header',
+    );
+    const trayHeaderB = container.querySelector<HTMLElement>(
+      '[data-stream-id="twitch:b"] .stream-card__header',
+    );
+    // The primary's own header is not a promotion target — no button role/tabstop.
+    expect(primaryHeader?.getAttribute('role')).toBeNull();
+    expect(primaryHeader?.hasAttribute('tabindex')).toBe(false);
+    // A non-primary tray header is keyboard-reachable and announces its action.
+    expect(trayHeaderB?.getAttribute('role')).toBe('button');
+    expect(trayHeaderB?.tabIndex).toBe(0);
+    expect(trayHeaderB?.getAttribute('aria-label')).toBe('Make b the primary stream');
+
+    trayHeaderB?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    expect(getFocusViewPrimaryId()).toBe('twitch:b');
+    expect(
+      container.querySelector('[data-stream-id="twitch:b"]')?.classList.contains('is-focus-primary'),
+    ).toBe(true);
+
+    // b is now primary, so its own header loses the button affordance, and
+    // a (now in the tray) gains it — the promotable set tracks primary, live.
+    expect(trayHeaderB?.getAttribute('role')).toBeNull();
+    const trayHeaderA = container.querySelector<HTMLElement>(
+      '[data-stream-id="twitch:a"] .stream-card__header',
+    );
+    expect(trayHeaderA?.getAttribute('role')).toBe('button');
+
+    const trayHeaderC = container.querySelector<HTMLElement>(
+      '[data-stream-id="twitch:c"] .stream-card__header',
+    );
+    trayHeaderC?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }),
+    );
+    expect(getFocusViewPrimaryId()).toBe('twitch:c');
   });
 });

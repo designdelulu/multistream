@@ -30,8 +30,19 @@ import {
 } from '../platforms/youtubeResolver';
 import { checkTwitchStatus, type TwitchStatusResult } from '../platforms/twitchStatus';
 import { checkYouTubeStats, type YouTubeStatsResult } from '../platforms/youtubeStats';
-import type { StreamRef } from '../types';
+import {
+  computeFocusViewLayout,
+  computeWeightedGridLayout,
+  targetVisibleTrayCount,
+  GRID_GAP,
+  GRID_PADDING,
+  CARD_HEADER_HEIGHT,
+  MAX_GRID_COLUMNS,
+  type WeightedGridItem,
+} from '../lib/gridLayout';
+import type { StreamRef, StreamOrientation } from '../types';
 import type { StreamStore } from '../state/streams';
+import type { ViewMode } from '../state/viewMode';
 
 /**
  * Kick only mounts desktop chrome (volume, quality) when the iframe's layout
@@ -51,9 +62,6 @@ import type { StreamStore } from '../state/streams';
  * parent and would reload mute controls in a loop.
  */
 const MIN_KICK_VIEWPORT_WIDTH = 769;
-const GRID_GAP = 12;
-const GRID_PADDING = 24;
-const CARD_HEADER_HEIGHT = 42;
 /** Spreads the watchdog's per-card checks so several stalled cards don't confirm/escalate in the same instant. */
 const RECOVERY_SPREAD_MAX_MS = 2000;
 
@@ -123,6 +131,16 @@ type FocusChangeHandler = (focused: boolean, streamId: string | null) => void;
 let focusedStreamId: string | null = null;
 let focusSessionActive = false;
 let focusChangeHandler: FocusChangeHandler | null = null;
+/**
+ * Focus View's primary stream — distinct from focusedStreamId (the solo
+ * fullscreen "Focus" feature above). Focus View never hides or freezes other
+ * streams; it just resizes the whole grid into one large primary plus a
+ * scrollable tray of the rest, via CSS vars (see updateFocusViewLayout) —
+ * same "JS computes px, CSS consumes vars" approach updateGridLayout already
+ * uses, so no player is ever remounted by switching modes or promoting a
+ * different stream to primary.
+ */
+let focusViewPrimaryId: string | null = null;
 /**
  * Api-mode Twitch players confirmed playing right before the current focus
  * session started, captured before freezeFocusHiddenPlayers pauses anything —
@@ -358,9 +376,23 @@ function clearLayoutVars(container: HTMLElement): void {
   container.style.removeProperty('--grid-columns');
   container.style.removeProperty('--player-height');
   container.style.removeProperty('--player-width');
+  container.style.removeProperty('--portrait-row-span');
+  container.style.removeProperty('--portrait-content-width');
+  container.style.removeProperty('--portrait-content-height');
   container.style.removeProperty('--kick-col-min');
   container.style.removeProperty('--kick-render-width');
   container.style.removeProperty('--kick-scale');
+  clearFocusViewVars(container);
+}
+
+function clearFocusViewVars(container: HTMLElement): void {
+  container.style.removeProperty('--focus-primary-width');
+  container.style.removeProperty('--focus-primary-height');
+  container.style.removeProperty('--focus-primary-row-height');
+  container.style.removeProperty('--focus-tray-height');
+  container.style.removeProperty('--focus-tray-row-height');
+  container.style.removeProperty('--focus-tray-column-width');
+  container.style.removeProperty('--focus-tray-count');
 }
 
 function setKickScaleVars(container: HTMLElement, cellWidth: number): void {
@@ -1752,6 +1784,90 @@ export function getFocusedStreamId(): string | null {
   return focusedStreamId;
 }
 
+function syncFocusViewDom(container: HTMLElement): void {
+  const inFocusView = container.dataset.viewMode === 'focus';
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    const isPrimary = card.dataset.streamId === focusViewPrimaryId;
+    card.classList.toggle('is-focus-primary', isPrimary);
+    const header = card.querySelector<HTMLElement>('.stream-card__header');
+    if (!header) continue;
+    const promotable = inFocusView && !isPrimary;
+    header.title = promotable ? 'Click to make primary' : '';
+    if (promotable) {
+      header.tabIndex = 0;
+      header.setAttribute('role', 'button');
+      header.setAttribute('aria-label', `Make ${card.dataset.channel ?? 'stream'} the primary stream`);
+    } else {
+      header.removeAttribute('tabindex');
+      header.removeAttribute('role');
+      header.removeAttribute('aria-label');
+    }
+  }
+}
+
+/**
+ * Called whenever the view-mode store changes and whenever the stream list
+ * changes (see syncStreamGrid) — picks/revalidates the primary so it's never
+ * left pointing at a removed stream, and always writes data-view-mode so
+ * updateGridLayout and the CSS know which layout to use.
+ */
+export function syncViewMode(container: HTMLElement, mode: ViewMode, streams: StreamRef[]): void {
+  container.dataset.viewMode = mode;
+  if (mode === 'focus' && (!focusViewPrimaryId || !streams.some((s) => s.id === focusViewPrimaryId))) {
+    focusViewPrimaryId = streams[0]?.id ?? null;
+  }
+  syncFocusViewDom(container);
+}
+
+/** Promote a tray stream to primary — resize only, no remount (same CSS-var mechanism as any other layout change). */
+export function setFocusViewPrimary(container: HTMLElement, streamId: string): void {
+  if (focusViewPrimaryId === streamId) return;
+  focusViewPrimaryId = streamId;
+  syncFocusViewDom(container);
+  scheduleGridLayout(container);
+}
+
+export function getFocusViewPrimaryId(): string | null {
+  return focusViewPrimaryId;
+}
+
+/**
+ * Click-to-promote: clicking a non-primary card's player area while in Focus
+ * View swaps it to primary. Delegated (bound once) rather than per-card so it
+ * keeps working across add/remove without rebinding. Buttons/links/inputs are
+ * excluded so it never fights the header/overlay controls or SortableJS drag.
+ */
+export function bindFocusViewPromotion(container: HTMLElement): void {
+  container.addEventListener('click', (event) => {
+    if (container.dataset.viewMode !== 'focus') return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('button, a, input, select, textarea')) return;
+    const card = target.closest<HTMLElement>('.stream-card');
+    if (!card || card.classList.contains('is-focus-primary')) return;
+    const streamId = card.dataset.streamId;
+    if (!streamId) return;
+    setFocusViewPrimary(container, streamId);
+  });
+  // Keyboard equivalent of the click-to-promote header above: the header
+  // carries role="button"/tabindex when promotable (see syncFocusViewDom),
+  // so Enter/Space needs to trigger the same promotion a click would.
+  container.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (container.dataset.viewMode !== 'focus') return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const header = target.closest<HTMLElement>('.stream-card__header');
+    if (!header) return;
+    const card = header.closest<HTMLElement>('.stream-card');
+    if (!card || card.classList.contains('is-focus-primary')) return;
+    const streamId = card.dataset.streamId;
+    if (!streamId) return;
+    event.preventDefault();
+    setFocusViewPrimary(container, streamId);
+  });
+}
+
 function handleFocusEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape' || !focusedStreamId) return;
   const container = document.querySelector<HTMLElement>('#stream-grid');
@@ -1865,6 +1981,7 @@ function createPlayerElement(
   card.dataset.streamId = stream.id;
   card.dataset.platform = stream.platform;
   card.dataset.channel = stream.channel;
+  card.dataset.orientation = stream.orientation;
   card.dataset.embedMuted = '1';
   // Stable per-card jitter so the watchdog sweep doesn't act on every stalled
   // card in the same instant — see recoverStalledTwitchPlayers.
@@ -2861,6 +2978,19 @@ function createTwitchRecoveryTarget(streamId: string, startedAt: number): Recove
  * right now. Must be called BEFORE the grid is mutated: it is the entire
  * definition of "should still be playing afterwards", and a stream the user
  * had already paused is simply absent from it.
+ *
+ * Reads `player.isPaused()` directly (the same primitive the 90s watchdog
+ * already trusts — see checkPaused/verifyAndRecoverTwitchPlayer) rather than
+ * the `twitchPlayback` PLAYING-event latch. Confirmed live (?debug=all) that
+ * PLAYING does not reliably fire for every stream Twitch is actually
+ * playing — a channel `isPaused()` reported as running sat at `twitchPlayback
+ * === 'unknown'` the whole time. Relying on the latch alone made this
+ * snapshot come back empty even when real players were mid-playback, so
+ * beginAddRemoveRecovery had nothing to act on and only the periodic
+ * watchdog (up to ~90-180s later) ever brought the stream back. `offline`/
+ * `blocked` are still excluded via the latch first — isPaused() alone can't
+ * tell "genuinely stopped" from "buffering", but it CAN tell those two
+ * definite non-playing states apart from everything else, cheaply.
  */
 export function snapshotPlayingTwitchPlayers(container: HTMLElement): string[] {
   const ids: string[] = [];
@@ -2868,7 +2998,12 @@ export function snapshotPlayingTwitchPlayers(container: HTMLElement): string[] {
     if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     const streamId = card.dataset.streamId ?? '';
-    if (!streamId || twitchPlayback.get(streamId) !== 'playing') continue;
+    if (!streamId) continue;
+    const latched = twitchPlayback.get(streamId);
+    if (latched === 'offline' || latched === 'blocked') continue;
+    const player = twitchPlayers.get(streamId);
+    if (!player) continue;
+    if (checkPaused(player, streamId) !== false) continue;
     ids.push(streamId);
   }
   logPlayerEvent('snapshot', { playing: ids });
@@ -3126,6 +3261,11 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
     : '0';
 
   syncFocusDom(container);
+
+  if (focusViewPrimaryId && !nextIds.has(focusViewPrimaryId)) {
+    focusViewPrimaryId = streams[0]?.id ?? null;
+  }
+  syncFocusViewDom(container);
 }
 
 /**
@@ -3149,7 +3289,11 @@ export function updateGridLayout(container: HTMLElement): void {
     return;
   }
 
-  const count = focusedStreamId ? 1 : totalCount;
+  if (container.dataset.viewMode === 'focus' && !focusedStreamId) {
+    updateFocusViewLayout(container, streamArea, totalCount);
+    return;
+  }
+
   const hasKick =
     focusedStreamId !== null
       ? container.querySelector<HTMLElement>(`.stream-card[data-stream-id="${focusedStreamId}"]`)
@@ -3183,51 +3327,136 @@ export function updateGridLayout(container: HTMLElement): void {
 
   layoutRetries = 0;
 
-  let bestColumns = 1;
-  let bestWidth = 0;
-  let bestHeight = 0;
-
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
   // Headers-hidden: video alone (no chrome height). Focused keeps header for ×.
   const chromeHeight =
     !headersHidden || focusedStreamId ? CARD_HEADER_HEIGHT : 0;
 
-  for (let columns = 1; columns <= Math.min(count, 4); columns += 1) {
-    const rows = Math.ceil(count / columns);
-    let maxWidth = Math.floor((areaWidth - GRID_GAP * (columns - 1)) / columns);
-    let maxHeight =
-      Math.floor((areaHeight - GRID_GAP * (rows - 1)) / rows) - chromeHeight;
+  // Solo focus keeps its existing always-16:9 behavior (unrelated to the
+  // portrait-aware weighting below, which only applies to the multi-stream
+  // grid) — real per-card orientation is only read when nothing is focused.
+  const items: WeightedGridItem[] = focusedStreamId
+    ? [{ id: focusedStreamId, orientation: 'landscape' }]
+    : Array.from(container.querySelectorAll<HTMLElement>('.stream-card')).map((card) => ({
+        id: card.dataset.streamId ?? '',
+        orientation: card.dataset.orientation === 'portrait' ? 'portrait' : 'landscape',
+      }));
 
-    if (maxWidth <= 0 || maxHeight <= 0) {
-      continue;
-    }
+  const packed = computeWeightedGridLayout(items, areaWidth, areaHeight, {
+    gap: GRID_GAP,
+    maxColumns: MAX_GRID_COLUMNS,
+    chromeHeightPerRow: chromeHeight,
+  });
 
-    if ((maxWidth * 9) / 16 < maxHeight) {
-      maxHeight = (maxWidth * 9) / 16;
-    } else {
-      maxWidth = (maxHeight * 16) / 9;
-    }
-
-    if (maxWidth > bestWidth) {
-      bestWidth = maxWidth;
-      bestHeight = maxHeight;
-      bestColumns = columns;
-    }
-  }
-
-  if (bestWidth <= 0 || bestHeight <= 0) {
+  if (packed.cellWidth <= 0 || packed.cellHeight <= 0) {
     container.style.setProperty('--grid-columns', '1');
     container.style.removeProperty('--player-height');
     container.style.removeProperty('--player-width');
+    container.style.removeProperty('--portrait-row-span');
+    container.style.removeProperty('--portrait-content-width');
+    container.style.removeProperty('--portrait-content-height');
     return;
   }
 
-  container.style.setProperty('--grid-columns', String(bestColumns));
-  container.style.setProperty('--player-width', `${Math.floor(bestWidth)}px`);
-  container.style.setProperty('--player-height', `${Math.floor(bestHeight)}px`);
+  container.style.setProperty('--grid-columns', String(packed.columns));
+  container.style.setProperty('--player-width', `${Math.floor(packed.cellWidth)}px`);
+  container.style.setProperty('--player-height', `${Math.floor(packed.cellHeight)}px`);
+  container.style.setProperty('--portrait-row-span', String(packed.portraitRowSpan));
+  if (packed.portraitContentWidth > 0 && packed.portraitContentHeight > 0) {
+    container.style.setProperty('--portrait-content-width', `${Math.floor(packed.portraitContentWidth)}px`);
+    container.style.setProperty('--portrait-content-height', `${Math.floor(packed.portraitContentHeight)}px`);
+  } else {
+    container.style.removeProperty('--portrait-content-width');
+    container.style.removeProperty('--portrait-content-height');
+  }
 
   if (hasKick) {
-    setKickScaleVars(container, bestWidth);
+    setKickScaleVars(container, packed.cellWidth);
+  } else {
+    container.style.removeProperty('--kick-col-min');
+    container.style.removeProperty('--kick-render-width');
+    container.style.removeProperty('--kick-scale');
+  }
+}
+
+/**
+ * Focus View sizing: one primary box (its own orientation respected — a
+ * portrait primary is never stretched to 16:9, see computeFocusViewLayout)
+ * plus a horizontal tray strip of the rest. Every stream stays mounted and
+ * in the same flat DOM parent throughout — only CSS vars change, so
+ * promoting a different stream to primary or toggling modes never remounts
+ * a player (see setFocusViewPrimary/syncViewMode).
+ */
+function updateFocusViewLayout(container: HTMLElement, streamArea: Element, totalCount: number): void {
+  const areaWidth = streamArea.clientWidth - GRID_PADDING;
+  const areaHeight = streamArea.clientHeight - GRID_PADDING;
+
+  if (areaWidth <= 0 || areaHeight <= 0) {
+    if (layoutRetries < MAX_LAYOUT_RETRIES) {
+      layoutRetries += 1;
+      requestAnimationFrame(() => updateGridLayout(container));
+    }
+    return;
+  }
+  layoutRetries = 0;
+
+  const primaryCard = focusViewPrimaryId
+    ? container.querySelector<HTMLElement>(
+        `.stream-card[data-stream-id="${CSS.escape(focusViewPrimaryId)}"]`,
+      )
+    : null;
+  const primaryOrientation: StreamOrientation =
+    primaryCard?.dataset.orientation === 'portrait' ? 'portrait' : 'landscape';
+
+  // Same header-chrome reservation the ordinary grid makes (see
+  // updateGridLayout) — each row (primary, tray) shows one card header, so
+  // computeFocusViewLayout must leave that much room out of the pure player
+  // math, and the row track itself (below) must add it back on top.
+  const headersHidden = document.documentElement.classList.contains('headers-hidden');
+  const chromeHeight = headersHidden ? 0 : CARD_HEADER_HEIGHT;
+
+  const result = computeFocusViewLayout(areaWidth, areaHeight, primaryOrientation, {
+    gap: GRID_GAP,
+    chromeHeightPerRow: chromeHeight,
+  });
+
+  if (result.primaryWidth <= 0 || result.primaryHeight <= 0) {
+    clearFocusViewVars(container);
+    return;
+  }
+
+  const trayCount = Math.max(1, totalCount - 1);
+  const visibleTrayCount = Math.max(1, Math.min(trayCount, targetVisibleTrayCount(areaWidth)));
+
+  container.style.setProperty('--grid-columns', '1');
+  container.style.setProperty('--focus-primary-width', `${Math.floor(result.primaryWidth)}px`);
+  container.style.setProperty('--focus-primary-height', `${Math.floor(result.primaryHeight)}px`);
+  container.style.setProperty(
+    '--focus-primary-row-height',
+    `${Math.floor(result.primaryHeight + chromeHeight)}px`,
+  );
+  container.style.setProperty('--focus-tray-height', `${Math.floor(result.trayHeight)}px`);
+  container.style.setProperty(
+    '--focus-tray-row-height',
+    `${Math.floor(result.trayHeight + chromeHeight)}px`,
+  );
+  container.style.setProperty(
+    '--focus-tray-column-width',
+    `${Math.floor(result.trayColumnWidth)}px`,
+  );
+  container.style.setProperty('--focus-tray-count', String(visibleTrayCount));
+
+  const hasKick = container.dataset.hasKick === '1';
+  if (hasKick) {
+    // Kick's width-dependent chrome only gets one shared scale per layout —
+    // base it on whichever box a Kick card actually occupies most visibly:
+    // the primary if it's Kick, otherwise the (smaller) tray tile size. If
+    // both a primary and a tray tile are Kick at once, the tray wins the
+    // shared scale — an accepted limitation, same as the ordinary grid
+    // already sharing one scale across every card regardless of size.
+    const basisWidth =
+      primaryCard?.dataset.platform === 'kick' ? result.primaryWidth : result.trayColumnWidth;
+    setKickScaleVars(container, basisWidth);
   } else {
     container.style.removeProperty('--kick-col-min');
     container.style.removeProperty('--kick-render-width');

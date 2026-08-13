@@ -367,6 +367,8 @@ body {
   flex: 1;
   display: grid;
   grid-template-columns: repeat(var(--grid-columns, 1), minmax(0, var(--player-width, 1fr)));
+  /* dense: backfill any hole a spanning portrait card leaves behind (see its own rule below — Focus View overrides this to grid-auto-flow: column). */
+  grid-auto-flow: row dense;
   gap: 12px;
   padding: 12px;
   align-content: center;
@@ -1111,6 +1113,132 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   min-height: 0;
 }
 
+/*
+ * Portrait-aware grid: a portrait stream always spans exactly 2 landscape
+ * rows (PORTRAIT_ROW_SPAN in gridLayout.ts) so its bottom edge lines up with
+ * the surrounding landscape grid instead of landing at an odd fractional
+ * row count. The card stretches to fill that fixed 2-row allocation (default
+ * grid align-self: stretch — no override needed), and the player area
+ * (flex:1, below) fills whatever height remains under its own single
+ * header. Scoped away from Focus View, which places every card on its own
+ * two-row layout.
+ *
+ * `order: -1` (plus grid-auto-flow: dense on the grid itself, below) is load
+ * bearing, not decorative: CSS Grid's implicit auto-placement walks items in
+ * source order and never reserves a column for one arriving later. A
+ * portrait card is usually the last stream added, so by the time
+ * auto-placement reaches it every earlier row is already fully tiled by
+ * landscape cards with no 2-row gap left to fall into — it got shoved into a
+ * new row band below everything else instead of sitting beside the
+ * landscape rows it's supposed to span. Sorting every portrait card first in
+ * placement order — without touching the underlying stream list or DOM
+ * order, so drag-reorder's data model is untouched — lets landscape cards
+ * flow around it and fill the remaining columns for real.
+ */
+.stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] {
+  grid-row: span var(--portrait-row-span, 2);
+  order: -1;
+}
+
+.stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] .stream-card__player {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  aspect-ratio: unset;
+}
+
+/*
+ * The video itself keeps its true 9:16 ratio and never stretches to fill the
+ * 2-row cell — computeWeightedGridLayout works out whichever of the cell's
+ * width or its spanned height is the tighter fit and sizes the box to that
+ * (--portrait-content-width/height), leaving any left-over space as
+ * letterboxing. inset:0 + margin:auto centers that fixed-size box inside
+ * the relatively-positioned player, same centering trick used nowhere else
+ * needed here since every other platform fills its cell edge-to-edge.
+ */
+.stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] .stream-card__iframe {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: var(--portrait-content-width, 100%);
+  height: var(--portrait-content-height, 100%);
+}
+
+/*
+ * Focus View: one large primary + a horizontal, scrollable tray of the rest.
+ * Every .stream-card stays in this single flat parent in both modes — only
+ * grid placement and CSS vars change below, so no player is ever remounted
+ * by entering/exiting Focus View or promoting a different tray stream to
+ * primary (see StreamGrid.ts's syncViewMode/setFocusViewPrimary). The
+ * primary is placed on an explicit row/column span; every other card is
+ * left unplaced on grid-row 2 and the browser auto-flows them across
+ * implicit columns in DOM order — no per-card column bookkeeping needed.
+ */
+.stream-grid[data-view-mode='focus'],
+.stream-grid[data-view-mode='focus'][data-has-kick='1'] {
+  grid-template-columns: repeat(var(--focus-tray-count, 1), var(--focus-tray-column-width, 1fr));
+  grid-template-rows: var(--focus-primary-row-height, auto) var(--focus-tray-row-height, auto);
+  grid-auto-columns: var(--focus-tray-column-width, 1fr);
+  grid-auto-flow: column;
+  align-content: start;
+  justify-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.stream-grid[data-view-mode='focus'] .stream-card {
+  grid-row: 2;
+  width: var(--focus-tray-column-width, 100%);
+  align-self: center;
+}
+
+/*
+ * Only the header is clickable to promote — the player itself is a
+ * same-origin-restricted iframe, and a click inside it never bubbles out to
+ * this delegated listener (see StreamGrid.ts's bindFocusViewPromotion), so
+ * offering that affordance over the player would be a lie.
+ */
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__header {
+  cursor: pointer;
+}
+
+.stream-grid[data-view-mode='focus']
+  .stream-card:not(.is-focus-primary)
+  .stream-card__header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.stream-grid[data-view-mode='focus'] .stream-card .stream-card__player {
+  width: 100%;
+  height: var(--focus-tray-height, auto);
+}
+
+.stream-grid[data-view-mode='focus']
+  .stream-card[data-orientation='portrait']:not(.is-focus-primary)
+  .stream-card__player {
+  width: auto;
+  height: var(--focus-tray-height, auto);
+  aspect-ratio: 9 / 16;
+  margin: 0 auto;
+}
+
+.stream-grid[data-view-mode='focus'] .stream-card.is-focus-primary {
+  grid-row: 1;
+  grid-column: 1 / -1;
+  width: var(--focus-primary-width, 100%);
+  justify-self: center;
+  align-self: start;
+  position: sticky;
+  left: 0;
+  cursor: default;
+}
+
+.stream-grid[data-view-mode='focus'] .stream-card.is-focus-primary .stream-card__player {
+  width: var(--focus-primary-width, 100%);
+  height: var(--focus-primary-height, auto);
+}
+
 .stream-card__iframe {
   position: absolute;
   inset: 0;
@@ -1452,6 +1580,39 @@ html.show-welcome .welcome-modal {
   .stream-grid:not(:empty) .stream-card__player {
     aspect-ratio: 16 / 9;
     height: auto;
+  }
+
+  /*
+   * Portrait cards hit the same collapse as above, one layer deeper: their
+   * desktop rule (`flex: 1 1 auto`, no aspect-ratio) depends on the 2-row
+   * grid span giving the card a definite height via --player-height, which
+   * is cleared here. With no definite height to flex into, the player
+   * measured 0px tall — invisible video, confirmed live at 375px. Rather
+   * than spanning 2 rows of an otherwise single-column grid (nothing to
+   * anchor those tracks' height without --player-height), a portrait stream
+   * just becomes its own full-width row here, sized by its real 9:16 ratio
+   * — the "own row at smaller breakpoints" fallback this layout was always
+   * meant to have. order:-1 (desktop's fix for auto-placement column
+   * reservation) is reset too — with one column there's nothing to reserve,
+   * and stacking portrait streams out of add/drag order would be confusing.
+   */
+  .stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] {
+    grid-row: auto;
+    order: 0;
+  }
+
+  .stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] .stream-card__player {
+    flex: none;
+    aspect-ratio: 9 / 16;
+    height: auto;
+  }
+
+  .stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] .stream-card__iframe {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    width: 100%;
+    height: 100%;
   }
 
   /* Stacked + tight: title → Twitch/Kick → input|Add (grid keeps Add on same row). */

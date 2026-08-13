@@ -19,6 +19,8 @@ Watch Twitch, Kick, and YouTube on one page. MultiStream.cc is a modern multi-st
 | Focus (headers hidden) | Magnifying glass in the hover toolbar |
 | Session restore | Last lineup saved in `localStorage`; share URLs in the path take priority |
 | Focus mode | Expand one stream, unmute it, open Twitch chat when available |
+| Focus View | Toolbar toggle: large primary + a tray of the rest; click a tray stream's header to promote it, no remount |
+| Portrait streams (Shorts) | Get their own 2-row-tall grid slot in Grid View, letterboxed to true 9:16 — never stretched |
 | Twitch chat | Docked sidebar on desktop/tablet (Kick has no official chat embed) |
 | Muted by default | Every stream boots muted; unmute via focus or the player’s own controls |
 | Twitch status | Live/offline/not-found/unavailable dot + category/viewers/duration on every Twitch card, refreshed automatically and on demand |
@@ -52,6 +54,19 @@ YouTube accepts more input shapes than Twitch/Kick, since a channel and a video 
 - Each card shows a platform badge and username on the header (or in the hover toolbar when headers are hidden — the default).
 - Drag a card’s **header** to reorder (or the **drag** handle in the hover toolbar when headers are hidden). Playback continues — players are not remounted.
 - Use **×** to remove a stream (header button, or **×** in the hover toolbar). In focus mode, × minimizes back to the grid first.
+- A **portrait stream** (a YouTube Short) always takes up the height of 2 landscape rows in its column — not a partial row — so it never leaves an oddly-sized gap next to the streams beside it. The video itself keeps its real 9:16 shape inside that space; it's never stretched wider or squeezed to fill the box. On a phone-width screen, where the grid is a single column anyway, a portrait stream instead gets its own full-width row sized to its real 9:16 shape.
+
+### Focus View
+
+The toolbar's **Focus view** / **Grid view** button switches the whole
+layout between the packing grid and one large primary player with the rest
+of your streams in a tray underneath it. Click a tray stream's **header**
+(not its buttons — the video itself is a separate embed and can't be
+clicked to promote) to swap it into the primary spot — nothing reloads,
+so playback never interrupts. This is a different control from
+the per-card **Focus** below (the magnifying glass) — Focus View changes
+the whole page's layout, while a single card's Focus expands just that
+one stream and opens its chat.
 
 ### Focus
 

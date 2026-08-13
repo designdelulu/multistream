@@ -22,7 +22,7 @@ export function getAdapter(platform: Platform): PlatformAdapter {
   return adapter;
 }
 
-export function parseStreamInput(input: string): Omit<StreamRef, 'id' | 'muted'> | null {
+export function parseStreamInput(input: string): Omit<StreamRef, 'id' | 'muted' | 'orientation'> | null {
   const value = input.trim();
   if (!value) return null;
 
@@ -44,7 +44,7 @@ export function serializeStream(ref: Pick<StreamRef, 'platform' | 'channel'>): s
   return `${prefixForPlatform(ref.platform)}:${ref.channel}`;
 }
 
-export function deserializeStream(token: string): Omit<StreamRef, 'id' | 'muted'> | null {
+export function deserializeStream(token: string): Omit<StreamRef, 'id' | 'muted' | 'orientation'> | null {
   const value = decodeURIComponent(token.trim());
   if (!value) return null;
 
@@ -95,22 +95,22 @@ export function buildChatEmbedUrl(ref: Pick<StreamRef, 'platform' | 'channel'>):
   });
 }
 
-export function streamsFromPathname(pathname: string): Omit<StreamRef, 'id' | 'muted'>[] {
+export function streamsFromPathname(pathname: string): Omit<StreamRef, 'id' | 'muted' | 'orientation'>[] {
   return pathname
     .split('/')
     .filter(Boolean)
     .map((segment) => deserializeStream(segment))
-    .filter((item): item is Omit<StreamRef, 'id' | 'muted'> => item !== null);
+    .filter((item): item is Omit<StreamRef, 'id' | 'muted' | 'orientation'> => item !== null);
 }
 
-export function streamsFromSearch(search: string): Omit<StreamRef, 'id' | 'muted'>[] {
+export function streamsFromSearch(search: string): Omit<StreamRef, 'id' | 'muted' | 'orientation'>[] {
   const raw = new URLSearchParams(search).get('streams');
   if (!raw) return [];
 
   return raw
     .split(',')
     .map((token) => deserializeStream(token))
-    .filter((item): item is Omit<StreamRef, 'id' | 'muted'> => item !== null);
+    .filter((item): item is Omit<StreamRef, 'id' | 'muted' | 'orientation'> => item !== null);
 }
 
 export function buildPathFromStreams(streams: Pick<StreamRef, 'platform' | 'channel'>[]): string {

@@ -4,6 +4,7 @@ import { isStreamFocused, refreshTwitchStatus } from './StreamGrid';
 import type { Platform } from '../types';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
+import type { ViewModeStore } from '../state/viewMode';
 
 /** Dependencies for the global "Refresh Twitch statuses" action — kept separate from store/headersStore since it's backed by main.ts's shared coordinator/scheduler, not toolbar-local state. */
 export interface TwitchStatusRefreshDeps {
@@ -124,6 +125,7 @@ function checkTwitchStatusAfterAdd(resolved: string): void {
 export function bindStreamToolbar(
   store: StreamStore,
   headersStore: HeadersStore,
+  viewModeStore: ViewModeStore,
   twitchStatusRefresh: TwitchStatusRefreshDeps,
 ): { sync: () => void } {
   const form = document.querySelector<HTMLFormElement>('#add-stream-form');
@@ -132,6 +134,7 @@ export function bindStreamToolbar(
   const shareButton = document.querySelector<HTMLButtonElement>('#share-link');
   const clearButton = document.querySelector<HTMLButtonElement>('#clear-streams');
   const headersButton = document.querySelector<HTMLButtonElement>('#headers-toggle');
+  const focusViewButton = document.querySelector<HTMLButtonElement>('#focus-view-toggle');
   const refreshTwitchButton = document.querySelector<HTMLButtonElement>('#refresh-twitch-status');
   const twitchStatusAnnouncer = document.querySelector<HTMLElement>('#twitch-status-announcer');
 
@@ -316,6 +319,8 @@ export function bindStreamToolbar(
     const hasStreams = store.getStreams().length > 0;
     if (shareButton) shareButton.hidden = !hasStreams;
     if (clearButton) clearButton.hidden = !hasStreams;
+    // Focus View needs a primary plus at least one tray stream to mean anything.
+    if (focusViewButton) focusViewButton.hidden = store.getStreams().length < 2;
     if (refreshTwitchButton) {
       refreshTwitchButton.hidden = !store.getStreams().some((stream) => stream.platform === 'twitch');
     }
@@ -344,6 +349,13 @@ export function bindStreamToolbar(
     }
   }
 
+  function syncFocusViewButton(): void {
+    if (!focusViewButton) return;
+    const isFocusView = viewModeStore.getMode() === 'focus';
+    setIconButtonLabel(focusViewButton, isFocusView ? 'Grid view' : 'Focus view');
+    focusViewButton.setAttribute('aria-pressed', isFocusView ? 'true' : 'false');
+  }
+
   shareButton?.addEventListener('click', async () => {
     const url = window.location.href;
     try {
@@ -370,6 +382,10 @@ export function bindStreamToolbar(
   headersButton?.addEventListener('click', () => {
     if (isStreamFocused()) return;
     headersStore.toggle();
+  });
+
+  focusViewButton?.addEventListener('click', () => {
+    viewModeStore.toggle();
   });
 
   /**
@@ -413,10 +429,12 @@ export function bindStreamToolbar(
   function sync(): void {
     syncActionButtons();
     syncHeadersButton();
+    syncFocusViewButton();
   }
 
   store.subscribe(syncActionButtons);
   headersStore.subscribe(syncHeadersButton);
+  viewModeStore.subscribe(syncFocusViewButton);
   sync();
   hideSuggestions();
 
