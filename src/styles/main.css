@@ -8,6 +8,7 @@
   --accent: #9146ff;
   --kick: #53fc18;
   --youtube: #ff0033;
+  --tiktok: #fe2c55;
   --danger: #ff5d5d;
   --status-live: #3ddc84;
   /*
@@ -946,6 +947,28 @@ html.headers-hidden .stream-card__toolbar.is-volume-mode {
   color: white;
 }
 
+.stream-card__name-badge-platform--tiktok {
+  background: var(--tiktok);
+  color: white;
+}
+
+/*
+ * Small, muted, easy-to-ignore marker — never a loud badge that competes
+ * with the platform pill. See docs/TIKTOK.md — this is deliberately the
+ * only "experimental" signal in the viewing plane; onboarding/marketing
+ * copy stays conservative separately (see index.html).
+ */
+.stream-card__name-badge-experimental {
+  flex: 0 0 auto;
+  font-size: 0.6rem;
+  font-weight: 600;
+  padding: 2px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
 /*
  * Header-only: "· 12.4K viewers · 2h 14m", appended after the platform
  * badge — see createNameBadge's includeMeta param in StreamGrid.ts. No
@@ -1317,6 +1340,19 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   font-size: 0.9rem;
   line-height: 1.5;
   background: var(--surface);
+}
+
+.stream-card__tiktok-status-link {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--tiktok);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.stream-card__tiktok-status-link:hover,
+.stream-card__tiktok-status-link:focus-visible {
+  text-decoration: underline;
 }
 
 .empty-state {

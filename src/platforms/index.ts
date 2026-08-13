@@ -4,7 +4,7 @@ export { youtubeAdapter } from './youtube';
 export { tiktokAdapter } from './tiktok';
 
 import { kickAdapter } from './kick';
-import { tiktokAdapter } from './tiktok';
+import { TIKTOK_LIVE_ENABLED, tiktokAdapter } from './tiktok';
 import { twitchAdapter } from './twitch';
 import { parseYouTubeToken, youtubeAdapter } from './youtube';
 import type { Platform, PlatformAdapter, StreamRef } from '../types';
@@ -67,7 +67,7 @@ export function deserializeStream(token: string): Omit<StreamRef, 'id' | 'muted'
   // the twitch/kick short-form regex below doesn't allow, and 'tt' can't
   // collide with the single-letter t/k prefixes.
   const tiktok = value.match(/^tt:([a-zA-Z0-9_.]{1,64})$/i);
-  if (tiktok) {
+  if (tiktok && TIKTOK_LIVE_ENABLED) {
     return { platform: 'tiktok', channel: tiktok[1].toLowerCase() };
   }
 

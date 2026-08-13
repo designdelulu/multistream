@@ -36,6 +36,16 @@ const TIKTOK_HOST_RE = /^(?:www\.)?tiktok\.com$/i;
 const TIKTOK_HANDLE_RE = /^[a-zA-Z0-9_.]{1,64}$/;
 
 /**
+ * Kill switch for Experimental TikTok LIVE. Flip to `false` and rebuild to
+ * disable it everywhere — new adds (parseInput below), URL-path/localStorage
+ * restore (deserializeStream in platforms/index.ts), and actual playback
+ * (mountTikTokMedia in components/StreamGrid.ts) — without touching any
+ * Twitch/Kick/YouTube code. See docs/TIKTOK.md "Rollback" for the full
+ * procedure and why this is the single source of truth for all three.
+ */
+export const TIKTOK_LIVE_ENABLED = true;
+
+/**
  * Returns the creator handle for a LIVE-eligible TikTok URL, or null.
  * Accepts `tiktok.com/@handle` (profile — treated as "watch this creator's
  * live") and `tiktok.com/@handle/live`. Explicitly rejects everything else
@@ -70,6 +80,7 @@ export const tiktokAdapter: PlatformAdapter = {
   label: 'TikTok',
 
   parseInput(input: string) {
+    if (!TIKTOK_LIVE_ENABLED) return null;
     const value = input.trim();
     if (!value) return null;
     // Cheap pre-filter before the URL parse — also documents that bare
@@ -100,15 +111,21 @@ export const tiktokAdapter: PlatformAdapter = {
 // ---------------------------------------------------------------------------
 
 /**
- * Not deployed anywhere yet (see docs/TIKTOK-LIVE-PROTOTYPE-REPORT.md §12).
- * Empty by default so a build with no resolver configured fails clearly
- * ('not_configured' state) instead of attempting a network call to nowhere.
- * Set VITE_TIKTOK_RESOLVER_URL in a local .env.local (gitignored) for local
- * dev/testing against dev/tiktok-resolver/resolver.mjs or an equivalent
- * locally-run instance.
+ * Production always calls the same-origin PHP endpoint
+ * (public/api/tiktok-resolve.php), exactly like youtube-resolve.php and
+ * twitch-status.php — see src/platforms/youtubeResolver.ts /
+ * twitchStatus.ts for the identical pattern.
+ *
+ * `import.meta.env.PROD` (a Vite-injected boolean, true only for `vite
+ * build`) gates this deliberately: a production build must NEVER be able
+ * to read VITE_TIKTOK_RESOLVER_URL from a developer's local .env.local,
+ * regardless of Vite's .env file precedence rules. That env var only ever
+ * has an effect in `vite dev`, for pointing at a locally-run instance of
+ * dev/tiktok-resolver/resolver.mjs.
  */
-export const TIKTOK_RESOLVER_URL: string =
-  (import.meta.env.VITE_TIKTOK_RESOLVER_URL as string | undefined)?.trim() || '';
+export const TIKTOK_RESOLVER_URL: string = import.meta.env.PROD
+  ? '/api/tiktok-resolve.php'
+  : (import.meta.env.VITE_TIKTOK_RESOLVER_URL as string | undefined)?.trim() || '';
 
 export type TikTokResolveState =
   | 'live'
@@ -120,7 +137,9 @@ export type TikTokResolveState =
   | 'network_error'
   | 'upstream_http_error'
   | 'resolver_http_error'
-  | 'not_configured';
+  | 'not_configured'
+  | 'invalid_input'
+  | 'rate_limited';
 
 export interface TikTokQuality {
   id: string;
@@ -153,9 +172,13 @@ export function describeTikTokState(state: TikTokResolveState): string {
     case 'network_error':
     case 'upstream_http_error':
     case 'resolver_http_error':
-      return "Couldn't reach the TikTok resolver.";
+      return 'TikTok LIVE is temporarily unavailable.';
     case 'not_configured':
-      return 'Experimental TikTok LIVE support has no resolver configured.';
+      return 'TikTok LIVE is unavailable right now.';
+    case 'invalid_input':
+      return "That doesn't look like a TikTok LIVE URL.";
+    case 'rate_limited':
+      return 'Too many TikTok lookups right now — try again in a moment.';
     default:
       return 'TikTok LIVE is unavailable right now.';
   }
@@ -180,7 +203,7 @@ export async function resolveTikTokLive(
 
   let res: Response;
   try {
-    res = await fetch(`${TIKTOK_RESOLVER_URL.replace(/\/$/, '')}/resolve`, {
+    res = await fetch(TIKTOK_RESOLVER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: `https://www.tiktok.com/@${username}/live` }),

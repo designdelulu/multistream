@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeTikTokState, tiktokAdapter } from './tiktok';
+import { describeTikTokState, TIKTOK_LIVE_ENABLED, tiktokAdapter } from './tiktok';
 
 describe('tiktokAdapter.parseInput', () => {
   it('parses a canonical LIVE URL', () => {
@@ -118,5 +118,39 @@ describe('describeTikTokState', () => {
 
   it('gives distinct text for resolver-unreachable vs not-configured', () => {
     expect(describeTikTokState('network_error')).not.toBe(describeTikTokState('not_configured'));
+  });
+
+  it('gives distinct text for invalid-input vs rate-limited', () => {
+    expect(describeTikTokState('invalid_input')).not.toBe(describeTikTokState('rate_limited'));
+  });
+
+  it('never mentions implementation details (endpoint, FLV, resolver) in any message', () => {
+    const states: Parameters<typeof describeTikTokState>[0][] = [
+      'live',
+      'offline',
+      'invalid_creator',
+      'no_stream_data',
+      'no_playable_streams',
+      'provider_error',
+      'network_error',
+      'upstream_http_error',
+      'resolver_http_error',
+      'not_configured',
+      'invalid_input',
+      'rate_limited',
+    ];
+    for (const state of states) {
+      const text = describeTikTokState(state).toLowerCase();
+      expect(text).not.toContain('flv');
+      expect(text).not.toContain('api-live');
+      expect(text).not.toContain('resolver');
+    }
+  });
+});
+
+describe('TIKTOK_LIVE_ENABLED', () => {
+  it('is a boolean kill switch, currently enabled', () => {
+    expect(typeof TIKTOK_LIVE_ENABLED).toBe('boolean');
+    expect(TIKTOK_LIVE_ENABLED).toBe(true);
   });
 });

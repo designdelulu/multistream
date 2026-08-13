@@ -25,6 +25,7 @@ import { getAdapter, buildEmbedUrl } from '../platforms';
 import {
   describeTikTokState,
   resolveTikTokLive,
+  TIKTOK_LIVE_ENABLED,
   type TikTokQuality,
   type TikTokResolveResult,
 } from '../platforms/tiktok';
@@ -1508,8 +1509,13 @@ function tiktokWrap(card: HTMLElement): HTMLElement | null {
   return card.querySelector<HTMLElement>('.stream-card__tiktok-wrap');
 }
 
-/** Placeholder / offline / invalid-creator / error text — never stacks over a live video. */
-function showTikTokMessage(card: HTMLElement, text: string): void {
+/**
+ * Placeholder / offline / invalid-creator / error text — never stacks over a
+ * live video. `linkUsername`, when given, adds a plain "Open on TikTok" link
+ * so a viewer can still reach the stream directly when resolve/playback
+ * fails here — never shown for the loading state itself.
+ */
+function showTikTokMessage(card: HTMLElement, text: string, linkUsername?: string): void {
   const wrap = tiktokWrap(card);
   if (!wrap) return;
   wrap.replaceChildren();
@@ -1517,6 +1523,16 @@ function showTikTokMessage(card: HTMLElement, text: string): void {
   message.className = 'stream-card__tiktok-status';
   message.textContent = text;
   wrap.append(message);
+
+  if (linkUsername) {
+    const link = document.createElement('a');
+    link.className = 'stream-card__tiktok-status-link';
+    link.href = `https://www.tiktok.com/@${linkUsername}/live`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'Open on TikTok';
+    message.append(document.createElement('br'), link);
+  }
 }
 
 /** Drops every trace of one TikTok player: in-flight resolve, mpegts player, video element. Safe to call on a card with none of those. */
@@ -1556,6 +1572,14 @@ function mountTikTokMedia(
   const state = card.dataset.tiktokMountState;
   const alreadyAttempted = state === 'mounted' || state === 'pending' || state === 'error';
 
+  if (!TIKTOK_LIVE_ENABLED) {
+    if (!alreadyAttempted) {
+      card.dataset.tiktokMountState = 'error';
+      showTikTokMessage(card, 'TikTok LIVE is unavailable right now.', username);
+    }
+    return;
+  }
+
   if (!alreadyAttempted) {
     card.dataset.tiktokMountState = 'pending';
     showTikTokMessage(card, 'Loading TikTok LIVE…');
@@ -1576,7 +1600,7 @@ function mountTikTokMedia(
         if (!card.isConnected) return;
         if (card.dataset.tiktokMountState !== 'pending') return;
         card.dataset.tiktokMountState = 'error';
-        showTikTokMessage(card, 'TikTok LIVE is unavailable right now.');
+        showTikTokMessage(card, 'TikTok LIVE is unavailable right now.', username);
         logEmbedEvent('tiktok-resolve-error', { platform: 'tiktok', channel: username, card });
       });
     return;
@@ -1607,7 +1631,7 @@ function handleTikTokResolveResult(card: HTMLElement, result: TikTokResolveResul
 
   if (!result.live || result.qualities.length === 0) {
     card.dataset.tiktokMountState = 'error';
-    showTikTokMessage(card, describeTikTokState(result.state));
+    showTikTokMessage(card, describeTikTokState(result.state), result.username);
     logEmbedEvent('tiktok-not-live', {
       platform: 'tiktok',
       channel: `${card.dataset.channel ?? ''} (${result.state})`,
@@ -1623,7 +1647,7 @@ function handleTikTokResolveResult(card: HTMLElement, result: TikTokResolveResul
     result.qualities.find((q: TikTokQuality) => q.id === 'hd') ?? result.qualities[0];
   if (!mpegts.isSupported()) {
     card.dataset.tiktokMountState = 'error';
-    showTikTokMessage(card, "This browser can't play TikTok LIVE's video format.");
+    showTikTokMessage(card, "This browser can't play TikTok LIVE's video format.", result.username);
     return;
   }
 
@@ -1654,7 +1678,7 @@ function handleTikTokResolveResult(card: HTMLElement, result: TikTokResolveResul
     // to try again.
     card.dataset.tiktokMountState = 'error';
     forgetTikTokPlayer(streamId);
-    showTikTokMessage(card, 'TikTok LIVE playback stopped.');
+    showTikTokMessage(card, 'TikTok LIVE playback stopped.', card.dataset.channel);
   });
   player.attachMediaElement(video);
   player.load();
@@ -2216,6 +2240,16 @@ function createNameBadge(
   platform.textContent = adapter.label;
 
   root.append(dot, channel, platform);
+
+  // Non-intrusive experimental marker — see docs/TIKTOK.md. Deliberately
+  // small and easy to ignore; never blocks or overlays the video itself.
+  if (stream.platform === 'tiktok') {
+    const experimental = document.createElement('span');
+    experimental.className = 'stream-card__name-badge-experimental';
+    experimental.textContent = 'Experimental';
+    experimental.title = 'Experimental TikTok LIVE support — not an official TikTok integration.';
+    root.append(experimental);
+  }
 
   let meta: HTMLSpanElement | undefined;
   if (includeMeta) {
