@@ -388,6 +388,16 @@ function is_valid_login(string $login): bool
  * @param string[] $logins
  * @return array<string,array{exists:bool,displayName?:string}>|null null on upstream failure
  */
+// A cached "exists" entry with no avatarUrl came from a Helix response that
+// had an empty profile_image_url — real Twitch accounts always have one, so
+// this almost always means a transient Helix hiccup got cached, not a true
+// no-avatar user. Treat it as a miss so it self-heals on the next request
+// instead of silently serving the gap for the full 24h TTL.
+function user_cache_entry_stale(array $cached): bool
+{
+    return ($cached['exists'] ?? false) === true && empty($cached['avatarUrl']);
+}
+
 function resolve_users(array $logins, ?string &$errorCode): ?array
 {
     $result = [];
@@ -395,7 +405,7 @@ function resolve_users(array $logins, ?string &$errorCode): ?array
 
     foreach ($logins as $login) {
         $cached = cache_get("twitch:user:{$login}");
-        if (is_array($cached)) {
+        if (is_array($cached) && !user_cache_entry_stale($cached)) {
             $result[$login] = $cached;
         } else {
             $misses[] = $login;
@@ -412,7 +422,7 @@ function resolve_users(array $logins, ?string &$errorCode): ?array
         $lock = acquire_or_wait_lock("twitch:user:{$login}");
         if ($lock !== null) $locks[$login] = $lock;
         $cached = cache_get("twitch:user:{$login}");
-        if (is_array($cached)) $result[$login] = $cached;
+        if (is_array($cached) && !user_cache_entry_stale($cached)) $result[$login] = $cached;
     }
 
     $stillMissing = array_values(array_diff($misses, array_keys($result)));
@@ -434,7 +444,13 @@ function resolve_users(array $logins, ?string &$errorCode): ?array
         foreach ($stillMissing as $login) {
             if (isset($foundByLogin[$login])) {
                 $item = $foundByLogin[$login];
-                $entry = ['exists' => true, 'displayName' => (string) ($item['display_name'] ?? $login)];
+                $entry = [
+                    'exists' => true,
+                    'displayName' => (string) ($item['display_name'] ?? $login),
+                ];
+                if (!empty($item['profile_image_url'])) {
+                    $entry['avatarUrl'] = (string) $item['profile_image_url'];
+                }
                 cache_set("twitch:user:{$login}", $entry, USER_FOUND_CACHE_TTL);
             } else {
                 $entry = ['exists' => false];
@@ -589,17 +605,25 @@ function build_twitch_status_results(array $channels): array
 
         $streamEntry = $streams[$normalized] ?? ['status' => 'offline'];
         if (($streamEntry['status'] ?? 'offline') === 'live') {
-            $results[] = array_merge(
+            $entry = array_merge(
                 ['input' => $input, 'normalized' => $normalized, 'status' => 'live'],
                 array_diff_key($streamEntry, ['status' => true]),
             );
+            if (!empty($userEntry['avatarUrl'])) {
+                $entry['avatarUrl'] = $userEntry['avatarUrl'];
+            }
+            $results[] = $entry;
         } else {
-            $results[] = [
+            $offlineEntry = [
                 'input' => $input,
                 'normalized' => $normalized,
                 'status' => 'offline',
                 'displayName' => $userEntry['displayName'] ?? $normalized,
             ];
+            if (!empty($userEntry['avatarUrl'])) {
+                $offlineEntry['avatarUrl'] = $userEntry['avatarUrl'];
+            }
+            $results[] = $offlineEntry;
         }
     }
 

@@ -34,10 +34,13 @@ export const kickAdapter: PlatformAdapter = {
   },
 
   buildEmbedUrl(ref, opts) {
-    // Official params: muted + autoplay (+ parent on some embed paths).
-    // Prefer muted embeds in the grid. Focus mode may remount unmuted after a
-    // user click. Do not cache-bust — remounts make Kick likelier to restore a
-    // remembered unmuted volume when muted=true is ignored.
+    // Official Kick embed API (help.kick.com, re-verified 2026-08-15): query
+    // params only — muted, autoplay, allowfullscreen. No JS player object,
+    // no documented postMessage mute/volume protocol. Changing muted after
+    // mount requires reassigning iframe src (a full reload). Prefer muted
+    // embeds in the grid. Focus mode may remount unmuted after a user click.
+    // Do not cache-bust — remounts make Kick likelier to restore a remembered
+    // unmuted volume when muted=true is ignored.
     const autoplay = opts.autoplay ?? true;
     const params = new URLSearchParams({
       muted: opts.muted ? 'true' : 'false',

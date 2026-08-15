@@ -92,6 +92,26 @@ function loadFromUrl(): StreamRef[] {
   return toStreamRefs(streamsFromSearch(window.location.search));
 }
 
+/**
+ * Classify a store update from the previous id list to the next.
+ * Reorder is a real grid mutation (cards move, Twitch can pause) and must
+ * not be collapsed into "nothing changed" just because the id *set* is the
+ * same — see main.ts renderStreams / beginAddRemoveRecovery.
+ */
+export function detectStreamListChange(
+  previous: readonly string[],
+  next: readonly string[],
+): 'add' | 'remove' | 'reorder' | null {
+  const previousSet = new Set(previous);
+  const added = next.filter((id) => !previousSet.has(id)).length;
+  const nextSet = new Set(next);
+  const removed = previous.filter((id) => !nextSet.has(id)).length;
+
+  if (added > 0 || removed > 0) return added >= removed ? 'add' : 'remove';
+  if (previous.some((id, index) => id !== next[index])) return 'reorder';
+  return null;
+}
+
 function dedupeStreams(streams: StreamRef[]): StreamRef[] {
   const seen = new Set<string>();
   return streams.filter((stream) => {
@@ -140,20 +160,40 @@ export function createStreamStore() {
         return false;
       }
 
-      setStreams([
-        ...streams,
-        {
-          ...parsed,
-          id,
-          muted: true,
-          orientation: detectOrientation(parsed.platform, input),
-        },
-      ]);
+      const nextStream: StreamRef = {
+        ...parsed,
+        id,
+        muted: true,
+        orientation: detectOrientation(parsed.platform, input),
+      };
+      // Portrait insertion only: a newly added 9:16 stream starts at index 0
+      // so landscape cards dense-pack around it. After that, store/reorder
+      // order is the sole placement source — no CSS order:-1, no re-sort.
+      setStreams(
+        nextStream.orientation === 'portrait' ? [nextStream, ...streams] : [...streams, nextStream],
+      );
       return true;
     },
 
     removeStream(id: string): void {
       setStreams(streams.filter((stream) => stream.id !== id));
+    },
+
+    /**
+     * Undo for removeStream: re-adds an already-known StreamRef (not a raw
+     * URL/username) at its previous approximate index, clamped to the
+     * current length in case other streams were added/removed meanwhile.
+     * This is "recreate the stream normally" (a fresh player mounts for it
+     * the same way any other stream addition mounts one) — it just skips
+     * parseStreamInput/detectOrientation since the caller already has the
+     * exact StreamRef that was removed, not a raw string to reparse.
+     */
+    insertStream(stream: StreamRef, index: number): void {
+      if (streams.some((existing) => existing.id === stream.id)) return;
+      const next = streams.slice();
+      const clampedIndex = Math.max(0, Math.min(index, next.length));
+      next.splice(clampedIndex, 0, stream);
+      setStreams(next);
     },
 
     clearStreams(): void {

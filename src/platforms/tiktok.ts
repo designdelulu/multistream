@@ -36,6 +36,18 @@ const TIKTOK_HOST_RE = /^(?:www\.)?tiktok\.com$/i;
 const TIKTOK_HANDLE_RE = /^[a-zA-Z0-9_.]{1,64}$/;
 
 /**
+ * TikTok's own mobile-app Share sheet copies a shortened link, not the
+ * `/@handle/live` URL the web Share panel copies — confirmed for real
+ * against a live room on 2026-08-13: `vt.tiktok.com/<code>/` → HTTP 301 →
+ * `www.tiktok.com/@handle/live?...`. Neither vm. nor vt.tiktok.com expose
+ * the handle in the short URL itself, so parseInput (synchronous, no
+ * network) can never resolve one directly — see isTikTokShortLink /
+ * resolveTikTokShareLink below and their caller in StreamToolbar.ts for
+ * the async path that follows the redirect through the backend resolver.
+ */
+const TIKTOK_SHORT_LINK_HOST_RE = /^(?:vm|vt)\.tiktok\.com$/i;
+
+/**
  * Kill switch for Experimental TikTok LIVE. Flip to `false` and rebuild to
  * disable it everywhere — new adds (parseInput below), URL-path/localStorage
  * restore (deserializeStream in platforms/index.ts), and actual playback
@@ -73,6 +85,25 @@ function parseTikTokLiveUrl(value: string): string | null {
   if (segments.length === 2 && segments[1].toLowerCase() === 'live') return handle; // .../@handle/live
 
   return null; // /video/{id}, /photo/{id}, or anything else — not a LIVE URL
+}
+
+/**
+ * True only for TikTok's own share short-link hosts (vm.tiktok.com /
+ * vt.tiktok.com) — never for tiktok.com itself or any other domain. Used
+ * by the Add Stream flow (StreamToolbar.ts) to decide whether an input
+ * that failed the normal synchronous parseInput is worth an async
+ * resolveTikTokShareLink round trip before being treated as invalid.
+ */
+export function isTikTokShortLink(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  let url: URL;
+  try {
+    url = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+  } catch {
+    return false;
+  }
+  return TIKTOK_SHORT_LINK_HOST_RE.test(url.hostname);
 }
 
 export const tiktokAdapter: PlatformAdapter = {
@@ -135,6 +166,7 @@ export type TikTokResolveState =
   | 'no_playable_streams'
   | 'provider_error'
   | 'network_error'
+  | 'timeout'
   | 'upstream_http_error'
   | 'resolver_http_error'
   | 'not_configured'
@@ -155,24 +187,33 @@ export interface TikTokResolveResult {
   qualities: TikTokQuality[];
   expiresAt: string | null;
   error?: string;
+  /** Creator avatar when the room payload exposes one — Story Card still loads via tiktokAvatarEndpoint (same-origin proxy). */
+  avatarUrl?: string | null;
+}
+
+/** Same-origin cached avatar proxy. Never a raw TikTok CDN URL (canvas CORS). */
+export function tiktokAvatarEndpoint(username: string): string {
+  return `/api/tiktok-avatar.php?u=${encodeURIComponent(username)}`;
 }
 
 /** User-facing text for every non-live state — never lumps distinct causes into a single "offline" message. */
 export function describeTikTokState(state: TikTokResolveState): string {
   switch (state) {
     case 'offline':
-      return 'This creator is not live right now.';
+      return 'TikTok LIVE is currently offline.';
     case 'invalid_creator':
       return "This TikTok creator couldn't be found.";
     case 'no_stream_data':
     case 'no_playable_streams':
-      return 'TikTok is not exposing a playable stream for this creator right now.';
+      return 'TikTok LIVE is active, but playback could not be resolved.';
     case 'provider_error':
       return 'TikTok returned an unexpected response.';
+    case 'timeout':
+      return 'TikTok LIVE is taking too long to respond. Try again.';
     case 'network_error':
     case 'upstream_http_error':
     case 'resolver_http_error':
-      return 'TikTok LIVE is temporarily unavailable.';
+      return 'Unable to connect to TikTok LIVE right now.';
     case 'not_configured':
       return 'TikTok LIVE is unavailable right now.';
     case 'invalid_input':
@@ -192,13 +233,20 @@ export function describeTikTokState(state: TikTokResolveState): string {
  * back as a normal { live: false, state } result. Only network-level
  * failures (resolver unreachable, non-JSON response) are caught and mapped
  * to a result too, so callers never need a try/catch of their own.
+ *
+ * `fallbackUsername` fills the `username` field of a locally-constructed
+ * error result (not_configured/network_error/etc.) when the real response
+ * never arrives — resolveTikTokLive already knows the username up front;
+ * resolveTikTokShareLink doesn't (that's the whole point of the call), so
+ * it passes ''.
  */
-export async function resolveTikTokLive(
-  username: string,
+async function postToResolver(
+  body: { url: string },
+  fallbackUsername: string,
   signal?: AbortSignal,
 ): Promise<TikTokResolveResult> {
   if (!TIKTOK_RESOLVER_URL) {
-    return { live: false, state: 'not_configured', username, qualities: [], expiresAt: null };
+    return { live: false, state: 'not_configured', username: fallbackUsername, qualities: [], expiresAt: null };
   }
 
   let res: Response;
@@ -206,7 +254,7 @@ export async function resolveTikTokLive(
     res = await fetch(TIKTOK_RESOLVER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: `https://www.tiktok.com/@${username}/live` }),
+      body: JSON.stringify(body),
       signal,
     });
   } catch (err) {
@@ -214,7 +262,7 @@ export async function resolveTikTokLive(
     return {
       live: false,
       state: 'network_error',
-      username,
+      username: fallbackUsername,
       qualities: [],
       expiresAt: null,
       error: String(err),
@@ -225,7 +273,7 @@ export async function resolveTikTokLive(
     return {
       live: false,
       state: 'resolver_http_error',
-      username,
+      username: fallbackUsername,
       qualities: [],
       expiresAt: null,
       error: `HTTP ${res.status}`,
@@ -239,10 +287,37 @@ export async function resolveTikTokLive(
     return {
       live: false,
       state: 'provider_error',
-      username,
+      username: fallbackUsername,
       qualities: [],
       expiresAt: null,
       error: 'unparseable_resolver_response',
     };
   }
+}
+
+export async function resolveTikTokLive(
+  username: string,
+  signal?: AbortSignal,
+): Promise<TikTokResolveResult> {
+  return postToResolver({ url: `https://www.tiktok.com/@${username}/live` }, username, signal);
+}
+
+/**
+ * Resolves a real TikTok share link (vm.tiktok.com / vt.tiktok.com — see
+ * isTikTokShortLink) to its creator, via the backend resolver's redirect
+ * hop (public/api/tiktok-resolve.php resolve_tiktok_short_link) — never a
+ * direct cross-origin browser fetch, since that would mean either fighting
+ * CORS against a host we don't control or routing through a generic
+ * client-side proxy, neither of which lets the allow-list/redirect-cap
+ * safety rules live in one place. The raw pasted URL is sent as-is (not
+ * reconstructed like resolveTikTokLive does), since the whole point is
+ * that the frontend doesn't know the username yet — the response's
+ * `username` field is what StreamToolbar.ts uses to add the stream once
+ * this resolves.
+ */
+export async function resolveTikTokShareLink(
+  rawUrl: string,
+  signal?: AbortSignal,
+): Promise<TikTokResolveResult> {
+  return postToResolver({ url: rawUrl }, '', signal);
 }

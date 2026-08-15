@@ -22,5 +22,6 @@ export default defineConfig({
   appType: 'spa',
   test: {
     environment: 'jsdom',
+    setupFiles: ['./src/testSetup.ts'],
   },
 });

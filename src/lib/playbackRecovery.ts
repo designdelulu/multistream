@@ -47,6 +47,13 @@ export interface RecoveryTarget {
    */
   isEligible(): boolean;
   play(): void;
+  /**
+   * Optional last resort after the bounded play() schedule is exhausted
+   * still-paused/unreadable. StreamGrid uses this to invoke the same
+   * per-card reload the manual Refresh button uses. Absent in tests that
+   * only care about play() scheduling.
+   */
+  escalate?: () => void;
 }
 
 /** Injected so tests can drive runs on a virtual clock. */
@@ -191,6 +198,14 @@ export function createPlaybackRecovery(options: {
     const run = runs.get(id);
     stop(id);
     log(event, { id, cause: run?.cause, plays: run?.plays ?? 0, ...detail });
+    if (
+      event === 'exhausted' &&
+      (detail.reason === 'still-paused' ||
+        detail.reason === 'unreadable' ||
+        detail.reason === 'passes-consumed')
+    ) {
+      run?.target.escalate?.();
+    }
   }
 
   function schedule(run: Run): void {

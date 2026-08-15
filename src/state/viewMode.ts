@@ -1,12 +1,14 @@
-export type ViewMode = 'grid' | 'focus';
+export type ViewMode = 'grid' | 'theater' | 'focus';
 
 type Listener = () => void;
 
 const STORAGE_KEY = 'multistream:view-mode';
+const VALID_MODES: ViewMode[] = ['grid', 'theater', 'focus'];
 
 function loadMode(): ViewMode {
   try {
-    return localStorage.getItem(STORAGE_KEY) === 'focus' ? 'focus' : 'grid';
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return (VALID_MODES as string[]).includes(stored ?? '') ? (stored as ViewMode) : 'grid';
   } catch {
     return 'grid';
   }
@@ -42,8 +44,9 @@ export function createViewModeStore() {
       notify();
     },
 
+    /** Grid <-> Theater. Never lands on 'focus' — that's reached only via the in-Theater Focus toggle, never as a restart point. */
     toggle(): void {
-      this.setMode(mode === 'grid' ? 'focus' : 'grid');
+      this.setMode(mode === 'grid' ? 'theater' : 'grid');
     },
 
     subscribe(listener: Listener): () => void {

@@ -27,11 +27,13 @@ export interface TwitchLiveResult extends TwitchStatusResultBase {
   viewerCount?: number;
   startedAt?: string;
   thumbnailUrl?: string;
+  avatarUrl?: string;
 }
 
 export interface TwitchOfflineResult extends TwitchStatusResultBase {
   status: 'offline';
   displayName?: string;
+  avatarUrl?: string;
 }
 
 export interface TwitchNotFoundResult extends TwitchStatusResultBase {

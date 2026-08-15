@@ -240,37 +240,44 @@ function youtube_api_get(string $path, array $params, string $apiKey): array
     return ['ok' => true, 'data' => $decoded];
 }
 
-/** @return array{ok:true,channelId:string}|array{ok:false,code:string} */
+/** @return array{ok:true,channelId:string,avatarUrl:?string}|array{ok:false,code:string} */
 function resolve_channel_id(string $mode, string $value, string $apiKey): array
 {
     if ($mode === 'channelId') {
-        return ['ok' => true, 'channelId' => $value];
+        // A direct channelId never calls channels.list at all — there's no
+        // avatar to reuse here without a genuinely new request, unlike the
+        // handle/username path below where the same lookup already fetches
+        // snippet.thumbnails for free.
+        return ['ok' => true, 'channelId' => $value, 'avatarUrl' => null];
     }
 
     $cacheKey = "handle-resolve:{$mode}:{$value}";
     $cached = cache_get($cacheKey);
-    if (is_string($cached)) {
-        return ['ok' => true, 'channelId' => $cached];
+    if (is_array($cached) && isset($cached['channelId'])) {
+        return ['ok' => true, 'channelId' => $cached['channelId'], 'avatarUrl' => $cached['avatarUrl'] ?? null];
     }
 
     $lock = acquire_or_wait_lock($cacheKey);
     if ($lock === null) {
         $cached = cache_get($cacheKey);
-        if (is_string($cached)) {
-            return ['ok' => true, 'channelId' => $cached];
+        if (is_array($cached) && isset($cached['channelId'])) {
+            return ['ok' => true, 'channelId' => $cached['channelId'], 'avatarUrl' => $cached['avatarUrl'] ?? null];
         }
     }
 
     try {
         // A concurrent request may have just populated this while we waited.
         $cached = cache_get($cacheKey);
-        if (is_string($cached)) {
-            return ['ok' => true, 'channelId' => $cached];
+        if (is_array($cached) && isset($cached['channelId'])) {
+            return ['ok' => true, 'channelId' => $cached['channelId'], 'avatarUrl' => $cached['avatarUrl'] ?? null];
         }
 
+        // part=id,snippet costs the same 1 quota unit as part=id alone —
+        // snippet.thumbnails is the channel avatar, reused here at no extra
+        // request rather than fetched separately.
         $params = $mode === 'handle'
-            ? ['forHandle' => '@' . ltrim($value, '@'), 'part' => 'id']
-            : ['forUsername' => $value, 'part' => 'id'];
+            ? ['forHandle' => '@' . ltrim($value, '@'), 'part' => 'id,snippet']
+            : ['forUsername' => $value, 'part' => 'id,snippet'];
 
         $result = youtube_api_get('channels', $params, $apiKey);
         if (!$result['ok']) {
@@ -283,8 +290,10 @@ function resolve_channel_id(string $mode, string $value, string $apiKey): array
         }
 
         $channelId = $items[0]['id'];
-        cache_set($cacheKey, $channelId, HANDLE_CACHE_TTL);
-        return ['ok' => true, 'channelId' => $channelId];
+        $thumbnails = $items[0]['snippet']['thumbnails'] ?? [];
+        $avatarUrl = $thumbnails['high']['url'] ?? $thumbnails['medium']['url'] ?? $thumbnails['default']['url'] ?? null;
+        cache_set($cacheKey, ['channelId' => $channelId, 'avatarUrl' => $avatarUrl], HANDLE_CACHE_TTL);
+        return ['ok' => true, 'channelId' => $channelId, 'avatarUrl' => $avatarUrl];
     } finally {
         release_lock($lock);
     }
@@ -511,4 +520,11 @@ if (!$channelResult['ok']) {
 }
 
 $liveResult = resolve_live_video($channelResult['channelId'], $apiKey);
+// resolve_live_video's own response is cached by channelId alone, so
+// avatarUrl (from the separate handle/username lookup above) is merged in
+// here rather than baked into that cache — it's a property of the
+// channel/handle lookup, not the live-video one.
+if (($liveResult['status'] ?? null) !== 'error' && $channelResult['avatarUrl'] !== null) {
+    $liveResult['avatarUrl'] = $channelResult['avatarUrl'];
+}
 respond($liveResult);

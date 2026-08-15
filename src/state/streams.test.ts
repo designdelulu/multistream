@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createStreamStore } from './streams';
+import { createStreamStore, detectStreamListChange } from './streams';
 
 /**
  * No jsdom/happy-dom in this project (platforms/*.test.ts avoid the DOM
@@ -132,6 +132,41 @@ describe('createStreamStore — youtube support', () => {
   });
 });
 
+describe('createStreamStore — insertStream (Undo)', () => {
+  it('re-adds a removed stream at its previous index, restoring the original order', () => {
+    const store = createStreamStore();
+    store.addStream('t:a');
+    store.addStream('t:b');
+    store.addStream('t:c');
+    const [, streamB] = store.getStreams();
+
+    store.removeStream(streamB.id);
+    expect(store.getStreams().map((s) => s.id)).toEqual(['twitch:a', 'twitch:c']);
+
+    store.insertStream(streamB, 1);
+    expect(store.getStreams().map((s) => s.id)).toEqual(['twitch:a', 'twitch:b', 'twitch:c']);
+  });
+
+  it('clamps an out-of-range index instead of throwing, so a stale index from a since-shrunk list still inserts somewhere sane', () => {
+    const store = createStreamStore();
+    store.addStream('t:a');
+    const [streamA] = store.getStreams();
+    store.removeStream(streamA.id);
+
+    store.insertStream(streamA, 999);
+    expect(store.getStreams()).toEqual([streamA]);
+  });
+
+  it('is a no-op if a stream with the same id already exists, rather than creating a duplicate', () => {
+    const store = createStreamStore();
+    store.addStream('t:a');
+    const [streamA] = store.getStreams();
+
+    store.insertStream(streamA, 0);
+    expect(store.getStreams()).toEqual([streamA]);
+  });
+});
+
 describe('createStreamStore — orientation detection is synchronous (no post-mount race)', () => {
   /**
    * Regression coverage for a hypothesized "orientation flips after mount"
@@ -171,5 +206,75 @@ describe('createStreamStore — orientation detection is synchronous (no post-mo
     store.addStream('shroud');
     store.addStream('k:trainwreckstv');
     expect(store.getStreams().every((s) => s.orientation === 'landscape')).toBe(true);
+  });
+});
+
+describe('createStreamStore — new portrait streams insert at index 0 only', () => {
+  it('inserts a newly added TikTok LIVE at the front, then keeps a later reorder', () => {
+    const store = createStreamStore();
+    store.addStream('shroud');
+    store.addStream('k:trainwreckstv');
+    store.addStream('https://www.tiktok.com/@creator/live');
+
+    expect(store.getStreams().map((s) => s.id)).toEqual([
+      'tiktok:creator',
+      'twitch:shroud',
+      'kick:trainwreckstv',
+    ]);
+
+    store.reorderStreams(['twitch:shroud', 'kick:trainwreckstv', 'tiktok:creator']);
+    expect(store.getStreams().map((s) => s.id)).toEqual([
+      'twitch:shroud',
+      'kick:trainwreckstv',
+      'tiktok:creator',
+    ]);
+  });
+
+  it('inserts a newly added YouTube Short at the front; landscape YouTube still appends', () => {
+    const store = createStreamStore();
+    store.addStream('shroud');
+    store.addStream('https://www.youtube.com/shorts/jNQXAC9IVRw');
+    store.addStream('https://youtu.be/dQw4w9WgXcQ');
+
+    expect(store.getStreams().map((s) => s.id)).toEqual([
+      'youtube:video:jNQXAC9IVRw',
+      'twitch:shroud',
+      'youtube:video:dQw4w9WgXcQ',
+    ]);
+    expect(store.getStreams()[0].orientation).toBe('portrait');
+    expect(store.getStreams()[2].orientation).toBe('landscape');
+  });
+
+  it('does not move an existing portrait when a landscape stream is added', () => {
+    const store = createStreamStore();
+    store.addStream('https://www.tiktok.com/@creator/live');
+    store.addStream('shroud');
+    expect(store.getStreams().map((s) => s.id)).toEqual(['tiktok:creator', 'twitch:shroud']);
+  });
+});
+
+describe('detectStreamListChange', () => {
+  const mixed = [
+    ...Array.from({ length: 14 }, (_, i) => `twitch:l${i}`),
+    'tiktok:portrait',
+  ];
+
+  it('returns null when the id list is unchanged', () => {
+    expect(detectStreamListChange(mixed, mixed.slice())).toBeNull();
+  });
+
+  it('classifies a same-set permutation as reorder, not a no-op', () => {
+    const next = mixed.slice();
+    next.splice(7, 0, next.pop()!);
+    expect(detectStreamListChange(mixed, next)).toBe('reorder');
+    expect(new Set(next)).toEqual(new Set(mixed));
+  });
+
+  it('still classifies an added id as add', () => {
+    expect(detectStreamListChange(mixed, [...mixed, 'kick:new'])).toBe('add');
+  });
+
+  it('still classifies a removed id as remove', () => {
+    expect(detectStreamListChange(mixed, mixed.slice(0, -1))).toBe('remove');
   });
 });

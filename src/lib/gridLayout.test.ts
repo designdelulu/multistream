@@ -226,3 +226,74 @@ describe('computeFocusViewLayout', () => {
     expect(result.primaryHeight + result.trayHeight).toBeLessThanOrEqual(800);
   });
 });
+
+/**
+ * Byte-for-byte reproduction of the pre-portrait, pre-Focus-View brute-force
+ * packer from commit 2a52275 (the Aug 13 known-good production baseline) —
+ * transcribed, not imported, since that code no longer exists in this file.
+ * This is the archived source of truth for "landscape-only geometry must
+ * never change" (see CLAUDE.md / the Aug 2026 baseline-restoration pass).
+ */
+function baselinePack(
+  count: number,
+  areaWidth: number,
+  areaHeight: number,
+  chromeHeight: number,
+): { columns: number; width: number; height: number } {
+  let bestColumns = 1;
+  let bestWidth = 0;
+  let bestHeight = 0;
+
+  for (let columns = 1; columns <= Math.min(count, 4); columns += 1) {
+    const rows = Math.ceil(count / columns);
+    let maxWidth = Math.floor((areaWidth - GRID_GAP * (columns - 1)) / columns);
+    let maxHeight = Math.floor((areaHeight - GRID_GAP * (rows - 1)) / rows) - chromeHeight;
+
+    if (maxWidth <= 0 || maxHeight <= 0) {
+      continue;
+    }
+
+    if ((maxWidth * 9) / 16 < maxHeight) {
+      maxHeight = (maxWidth * 9) / 16;
+    } else {
+      maxWidth = (maxHeight * 16) / 9;
+    }
+
+    if (maxWidth > bestWidth) {
+      bestWidth = maxWidth;
+      bestHeight = maxHeight;
+      bestColumns = columns;
+    }
+  }
+
+  return { columns: bestColumns, width: Math.floor(bestWidth), height: Math.floor(bestHeight) };
+}
+
+describe('computeWeightedGridLayout — landscape-only geometry matches the Aug 13 baseline exactly', () => {
+  const CHROME = 42; // CARD_HEADER_HEIGHT
+  const viewports: Array<[width: number, height: number]> = [
+    [1024, 700],
+    [1280, 800],
+    [1440, 900],
+    [1920, 1040],
+  ];
+  const counts = [1, 2, 4, 6, 7, 9, 10];
+
+  for (const [areaWidth, areaHeight] of viewports) {
+    for (const count of counts) {
+      it(`${count} landscape streams at ${areaWidth}x${areaHeight}: columns/width/height == baseline`, () => {
+        const items: WeightedGridItem[] = Array.from({ length: count }, (_, i) => landscape(`s${i}`));
+        const packed = computeWeightedGridLayout(items, areaWidth, areaHeight, {
+          gap: GRID_GAP,
+          maxColumns: 4,
+          chromeHeightPerRow: CHROME,
+        });
+        const baseline = baselinePack(count, areaWidth, areaHeight, CHROME);
+
+        expect(packed.columns).toBe(baseline.columns);
+        expect(Math.floor(packed.cellWidth)).toBe(baseline.width);
+        expect(Math.floor(packed.cellHeight)).toBe(baseline.height);
+      });
+    }
+  }
+});

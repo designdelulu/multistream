@@ -18,11 +18,14 @@ export interface YouTubeLiveResult {
   /** From a best-effort liveStreamingDetails follow-up — absent if that call failed, live but not yet reporting a count, or genuinely unavailable. */
   viewerCount?: number | null;
   startedAt?: string | null;
+  /** Reused from the same channels.list call that resolved a handle/username — never present for a direct channelId add (see youtube-resolve.php's resolve_channel_id). */
+  avatarUrl?: string | null;
 }
 
 export interface YouTubeOfflineResult {
   status: 'offline';
   channelId?: string;
+  avatarUrl?: string | null;
 }
 
 export type YouTubeErrorCode =

@@ -37,6 +37,8 @@ declare global {
       isPaused(): boolean;
       setMuted(muted: boolean): void;
       getMuted(): boolean;
+      setVolume(volume: number): void;
+      getVolume(): number;
       setChannel(channel: string): void;
       getCurrentTime(): number;
       getPlaybackStats(): PlaybackStats;

@@ -1,8 +1,8 @@
 # MultiStream.cc
 
-Watch **Twitch**, **Kick**, and **YouTube** streams online on one page — a responsive grid that keeps every player as large as possible at 16:9.
+Watch **Twitch**, **Kick**, **YouTube**, and **TikTok LIVE** streams online on one page — a responsive grid that keeps every player as large as possible at 16:9.
 
-![MultiStream.cc — Watch Twitch and Kick streams online](./public/og-image.png)
+![MultiStream.cc — Watch Twitch, Kick, YouTube, and TikTok LIVE streams online](./public/og-image.png)
 
 **Live site:** [multistream.cc](https://multistream.cc)  
 **Repository:** [github.com/designdelulu/multistream](https://github.com/designdelulu/multistream)

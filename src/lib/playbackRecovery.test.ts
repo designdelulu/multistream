@@ -181,6 +181,21 @@ describe('createPlaybackRecovery', () => {
     expect(exhausted?.detail.reason).toBe('still-paused');
   });
 
+  it('escalates to the target reload once bounded play() recovery is exhausted still-paused', () => {
+    const { timers, recovery } = setup();
+    let escalations = 0;
+    const player = createFakePlayer('a', true);
+    player.escalate = () => {
+      escalations += 1;
+    };
+
+    recovery.begin([player], 'headers');
+    timers.advance(FULL_RUN_MS + 60_000);
+
+    expect(player.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+    expect(escalations).toBe(1);
+  });
+
   it('never plays a target that became ineligible (user paused it, card removed, focused)', () => {
     const { timers, recovery, events } = setup();
     const player = createFakePlayer('a', true);

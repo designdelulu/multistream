@@ -236,6 +236,32 @@ nudge remain in place underneath this as a second and third layer for
 whatever gets past it, and the manual Reload button is the explicit
 last-resort escape hatch.
 
+## Kick has no header mute/volume control, by design
+
+Kick's embed exposes exactly one audio lever: a `muted=true/false` URL
+query param, applied by reassigning the iframe's `src` (`mountKickIframe`
+in `StreamGrid.ts`) — there is no postMessage or JS volume API to call
+instead. Re-verified 2026-08-15 against Kick's official embed docs
+(https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream):
+customisation is URL query params only (`autoplay`, `muted`,
+`allowfullscreen`). Unofficial userscripts that "control Kick volume"
+inject into the iframe's own origin; a cross-origin parent page cannot.
+KICK APP-LEVEL AUDIO CONTROL: NOT SAFELY AVAILABLE. That reassignment is a full iframe reload: re-buffering, and a
+real chance of resetting Kick's own in-player volume back to its default
+(this is exactly what commit `e1799f8` removed — an automatic periodic
+Kick reload that was "fixing" stuck streams by resetting their volume
+far more often than it helped).
+
+A header mute *button* invites repeated clicking, and each click would
+pay that same reload cost — unlike the existing one-time reload already
+accepted when entering Focus View (`'focus-unmute'`), which happens at
+most once per view-mode transition. Rather than ship a control that
+looks identical to Twitch/YouTube/TikTok's but silently reloads the
+whole player on every click, Kick has no header audio control at all;
+viewers use Kick's own native player chrome (visible inside the iframe)
+to mute/adjust volume. Revisit only if Kick ever ships a real postMessage
+volume API.
+
 ## Debugging
 
 Add `?debugPlayers=1` to the URL (persists for the tab session via

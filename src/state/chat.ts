@@ -5,11 +5,21 @@ const STORAGE_KEY = 'multistream:chat-visible';
 
 type Listener = () => void;
 
+/**
+ * Fresh session (no stored key) defaults CLOSED — chat only opens once the
+ * user explicitly opens it (or a prior session's explicit choice is being
+ * restored). Only the literal '1' counts as an explicit "on"; anything else
+ * (missing key, null, an old/garbage value) reads as closed. Confirmed live:
+ * the previous `!== '0'` check treated a *missing* key the same as an
+ * explicit "not off", which opened chat by default for every first-time
+ * visitor and for anyone who added their very first stream before ever
+ * touching the chat toggle.
+ */
 function loadVisiblePreference(): boolean {
   try {
-    return localStorage.getItem(STORAGE_KEY) !== '0';
+    return localStorage.getItem(STORAGE_KEY) === '1';
   } catch {
-    return true;
+    return false;
   }
 }
 

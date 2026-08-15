@@ -12,8 +12,17 @@ export type TwitchStatusRefreshReason =
 
 export type TwitchStatusRefreshOutcome = 'ok' | 'skipped-inflight' | 'skipped-empty';
 
-export type TwitchStatusRefreshResult =
-  | { outcome: 'ok'; results: Map<string, TwitchStatusResult> }
+/**
+ * Generic over the provider's own result type, defaulting to Twitch's so
+ * every existing call site is unchanged. Kick reuses the identical
+ * "one batched request at a time, app-wide" behavior (see StreamGrid.ts's
+ * refreshAllKickStatuses) — the gate is about request lifecycle, not about
+ * which provider's JSON is coming back, so duplicating the whole coordinator
+ * for a second provider would only mean two copies of the same race to keep
+ * correct.
+ */
+export type TwitchStatusRefreshResult<TResult = TwitchStatusResult> =
+  | { outcome: 'ok'; results: Map<string, TResult> }
   | { outcome: 'skipped-inflight' | 'skipped-empty' };
 
 /**
@@ -29,9 +38,9 @@ export type TwitchStatusRefreshResult =
  * updates). It has no knowledge of, and no dependency on, players, iframes,
  * or embed lifecycle — nothing here can affect playback.
  */
-export function createTwitchStatusCoordinator(deps: {
-  checkStatus: (channels: string[]) => Promise<Map<string, TwitchStatusResult>>;
-  onResult: (results: Map<string, TwitchStatusResult>, reason: TwitchStatusRefreshReason) => void;
+export function createTwitchStatusCoordinator<TResult = TwitchStatusResult>(deps: {
+  checkStatus: (channels: string[]) => Promise<Map<string, TResult>>;
+  onResult: (results: Map<string, TResult>, reason: TwitchStatusRefreshReason) => void;
 }) {
   let inFlight = false;
   let sequence = 0;
@@ -49,7 +58,7 @@ export function createTwitchStatusCoordinator(deps: {
   async function refresh(
     channels: string[],
     reason: TwitchStatusRefreshReason,
-  ): Promise<TwitchStatusRefreshResult> {
+  ): Promise<TwitchStatusRefreshResult<TResult>> {
     if (inFlight) return { outcome: 'skipped-inflight' };
 
     const wanted = normalizeChannels(channels);

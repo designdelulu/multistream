@@ -1,17 +1,33 @@
 import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
   beginAddRemoveRecovery,
+  beginFocusExitRecovery,
+  bindFocusViewEntry,
+  bindFocusViewExit,
+  bindFocusViewPrimaryChanged,
   bindFocusViewPromotion,
+  bindFocusViewToggle,
   bindPlaybackRecovery,
   bindStreamFocus,
+  bindStreamRemoved,
   bindTabVisibilityPlayers,
+  getFocusViewPrimaryId,
+  isKickStatusRefreshInFlight,
   isTwitchStatusRefreshInFlight,
+  isYouTubeStatsRefreshInFlight,
+  logTwitchPlayerIdentities,
   nudgeStalledTwitchPlayers,
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
+  refreshAllKickStatuses,
   refreshAllTwitchStatuses,
   refreshAllYouTubeStats,
+  refreshLoadedStreamPlayers,
+  setFocusViewPrimary,
   snapshotPlayingTwitchPlayers,
+  snapshotReorderRecoveryIds,
+  captureTwitchPlayerIdentities,
+  diffTwitchPlayerIdentities,
   startStatsProbe,
   syncStreamGrid,
   syncViewMode,
@@ -20,7 +36,7 @@ import {
 import { bindStreamReorder } from './components/StreamReorder';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
 import { bindWelcomeModal } from './components/WelcomeModal';
-import { announceEmbedDebug, twitchStatusFastPollEnabled } from './lib/embedDebug';
+import { announceEmbedDebug, logPlayerEvent, twitchStatusFastPollEnabled } from './lib/embedDebug';
 import {
   createTwitchStatusScheduler,
   TWITCH_STATUS_POLL_INTERVAL_MS,
@@ -32,8 +48,9 @@ import {
 import { phoneMediaQuery } from './lib/viewport';
 import { createChatStore } from './state/chat';
 import { createHeadersStore } from './state/headers';
-import { createStreamStore } from './state/streams';
+import { createStreamStore, detectStreamListChange } from './state/streams';
 import { createViewModeStore } from './state/viewMode';
+import type { StreamRef } from './types';
 
 /** Dev-only (?debug=twitch-fast-poll, gated on import.meta.env.DEV): compresses manual testing of multiple automatic cycles into a short session. Never reachable in production. */
 const DEV_FAST_TWITCH_POLL_INTERVAL_MS = 15_000;
@@ -69,6 +86,21 @@ const mainLayoutEl = mainLayout;
 let suppressLayout = false;
 let suppressLayoutTimer = 0;
 let resizeDebounceTimer = 0;
+/**
+ * Set when the ResizeObserver below fires *while* suppressed — e.g. the
+ * stream-area resizing because chat just opened/closed. Dropping that
+ * notification outright (the previous behavior) left the grid stuck at its
+ * pre-resize --player-width/--grid-columns indefinitely: nothing else was
+ * going to size it again on its own, since ResizeObserver only notifies on
+ * a genuine size change and that change had already happened once and been
+ * ignored. Confirmed live: opening chat could leave a card sized for the
+ * wider pre-chat area, pushed left of the grid's own (now narrower) center
+ * and partly off-screen. Replaying exactly one layout pass the moment
+ * suppression lifts fixes that without weakening the thrash protection
+ * itself — the resize is still ignored *during* the quiet window, just not
+ * lost forever.
+ */
+let pendingLayoutAfterSuppress = false;
 
 function quietLayout(ms = 1500): void {
   suppressLayout = true;
@@ -76,6 +108,10 @@ function quietLayout(ms = 1500): void {
   suppressLayoutTimer = window.setTimeout(() => {
     suppressLayoutTimer = 0;
     suppressLayout = false;
+    if (pendingLayoutAfterSuppress) {
+      pendingLayoutAfterSuppress = false;
+      updateGridLayout(gridEl);
+    }
   }, ms);
 }
 
@@ -100,56 +136,167 @@ function afterLayoutPaint(fn: () => void): void {
 }
 
 function afterHeadersToggle(): void {
+  const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
   quietLayout(2500);
   reorder.sync();
   afterLayoutPaint(() => {
     measureAndLayout();
     recoverTwitchPlayersAfterLayout(gridEl);
     quietLayout(2500);
+    requestAnimationFrame(() => {
+      beginAddRemoveRecovery(gridEl, playingBefore, 'headers');
+    });
   });
 }
 
-/** Switching Grid/Focus View resizes every card at once, same as a headers toggle — same recovery is needed. */
+/**
+ * Theater (unlike Focus) renders every non-primary card with `display: none`
+ * (see main.css's `[data-view-mode='theater']` rule) — collapsing a live
+ * Twitch embed to 0x0 makes the underlying player actually pause, not just
+ * resize, and it never resumes itself once un-hidden. Nothing else recovers
+ * that: recoverTwitchPlayersAfterLayout below only handles 'fallback'-mode
+ * iframes, and the periodic stall watchdog (nudgeStalledTwitchPlayers) can
+ * take up to ~90s to reach it, which reads as "stuck paused, needs a hard
+ * refresh" (this was a real, reproducible regression — every non-primary
+ * Twitch player staying paused after Theater→Grid). Snapshotting on the way
+ * into Theater and replaying play() on the way out — the same pattern
+ * beginFocusExitRecovery already uses for the older solo-focus feature —
+ * closes that gap immediately instead of waiting on the watchdog. Scoped to
+ * 'theater' specifically (not 'focus', whose tray tiles stay visible and
+ * never collapse) so a Theater<->Focus toggle mid-session is unaffected.
+ */
+let theaterEntrySnapshot: { ids: string[]; startedAt: number } | null = null;
+
+/** Switching Grid/Theater/Focus resizes every card at once, same as a headers toggle — same recovery is needed. */
 function afterViewModeToggle(): void {
-  syncViewMode(gridEl, viewModeStore.getMode(), store.getStreams());
+  const previousMode = gridEl.dataset.viewMode;
+  const nextMode = viewModeStore.getMode();
+  const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
+
+  if (previousMode !== 'theater' && nextMode === 'theater') {
+    theaterEntrySnapshot = {
+      ids: playingBefore,
+      startedAt: Date.now(),
+    };
+  }
+
+  syncViewMode(gridEl, nextMode, store.getStreams());
+  // The SortableJS `disabled` option (StreamReorder.ts) is only re-applied
+  // when sync() runs — it does not watch grid.dataset.viewMode itself — so
+  // this must be called on every mode change, not just headers toggles.
+  reorder.sync();
+  syncPrimaryChat();
+  // syncViewMode only flips data-view-mode + .is-focus-primary — the actual
+  // --focus-primary-width/--focus-tray-* pixel vars that size the primary
+  // and tray are computed exclusively inside updateGridLayout, which used to
+  // run only via the 2x-requestAnimationFrame-deferred measureAndLayout
+  // below. That left a window, between the mode attribute flipping (CSS
+  // selectors match immediately) and the vars actually being set two frames
+  // later, where the tray/primary CSS was active but its sizing vars were
+  // still whatever the previous mode left them as (empty for grid, since
+  // grid never sets them) — rendering as a collapsed, seemingly-empty tray.
+  // Any main-thread delay or throttled rAF in that window (backgrounded tab,
+  // heavy embed script work) stretches it from imperceptible to visible.
+  // Computing layout synchronously here, immediately after the mode flips,
+  // closes that window entirely; the deferred pass below still runs to
+  // recover players and to re-measure once any provider embeds have
+  // finished reflowing after becoming visible.
+  updateGridLayout(gridEl);
   quietLayout(2500);
   afterLayoutPaint(() => {
     measureAndLayout();
     recoverTwitchPlayersAfterLayout(gridEl);
     quietLayout(2500);
+
+    if (previousMode === 'theater' && nextMode !== 'theater' && theaterEntrySnapshot) {
+      const snapshot = theaterEntrySnapshot;
+      theaterEntrySnapshot = null;
+      if (snapshot.ids.length > 0) {
+        beginFocusExitRecovery(gridEl, snapshot.ids, snapshot.startedAt);
+      }
+      return;
+    }
+
+    if (nextMode !== 'theater') {
+      requestAnimationFrame(() => {
+        beginAddRemoveRecovery(gridEl, playingBefore, 'view-mode');
+      });
+    }
   });
 }
 
 /**
- * Add/remove detection. The store notifies on reorder too, and a reorder is a
- * different problem with a different fix — this recovery path is deliberately
- * scoped to transactions that change *which* streams exist, per the constraint
- * that it must not run on every layout event.
+ * Locks chat to the Theater/Focus primary, replacing the old bindStreamFocus
+ * wiring below (which only ever fired for the dead solo-focus mechanism and
+ * is now unreachable). Runs on every view-mode change (afterViewModeToggle)
+ * and every primary promotion (bindFocusViewPrimaryChanged) so switching
+ * primary mid-Focus follows the same "lock to whichever stream is now big"
+ * rule as first entering Theater. Chat only ever supports Twitch — for a
+ * non-Twitch primary the toggle is locked out entirely rather than left
+ * open on an unrelated Twitch stream that merely happens to share the grid.
+ */
+function syncPrimaryChat(): void {
+  const primaryId = viewModeStore.getMode() !== 'grid' ? getFocusViewPrimaryId() : null;
+
+  if (primaryId) {
+    if (!chatSnapshotBeforeFocus) {
+      chatSnapshotBeforeFocus = {
+        visible: chatStore.isVisible(),
+        selectedId: chatStore.getSelectedId(),
+      };
+    }
+    const platform = gridEl.querySelector<HTMLElement>(
+      `.stream-card[data-stream-id="${CSS.escape(primaryId)}"]`,
+    )?.dataset.platform;
+    chatStore.setToggleAllowed(platform === 'twitch');
+    if (platform === 'twitch') {
+      chatStore.setSelectedId(primaryId);
+      chatStore.setVisible(true, { persist: false });
+    } else {
+      chatStore.setVisible(false, { persist: false });
+    }
+  } else if (chatSnapshotBeforeFocus) {
+    chatStore.setToggleAllowed(true);
+    const snapshot = chatSnapshotBeforeFocus;
+    chatSnapshotBeforeFocus = null;
+    if (snapshot.selectedId) {
+      chatStore.setSelectedId(snapshot.selectedId);
+    }
+    chatStore.setVisible(snapshot.visible, { persist: false });
+  }
+}
+
+/**
+ * Add/remove/reorder detection. Reorder used to be treated as a no-op here
+ * so the bounded Twitch recovery pass never ran after a drag. Reorder no
+ * longer reparents iframe cards, but dense-pack layout can still pause
+ * api-mode players the same way an add/remove resize does. Same
+ * snapshot-before-mutation rule as add/remove: only players observed
+ * playing beforehand are eligible, so a user pause is left alone.
  */
 let knownStreamIds: string[] = [];
+/** Pre-drag snapshot — Sortable may pause Twitch before renderStreams runs. */
+let reorderPlaybackSnapshot: string[] | null = null;
 
-function takeStreamIdChange(next: string[]): 'add' | 'remove' | null {
+function takeStreamIdChange(next: string[]): 'add' | 'remove' | 'reorder' | null {
   const previous = knownStreamIds;
   knownStreamIds = next;
-
-  const previousSet = new Set(previous);
-  const added = next.filter((id) => !previousSet.has(id)).length;
-  const nextSet = new Set(next);
-  const removed = previous.filter((id) => !nextSet.has(id)).length;
-
-  if (added === 0 && removed === 0) return null;
-  return added >= removed ? 'add' : 'remove';
+  return detectStreamListChange(previous, next);
 }
 
 function renderStreams(): void {
   /*
-   * Snapshot first: this must read the live players BEFORE syncStreamGrid
-   * destroys any of them, because "was this playing beforehand?" is the only
-   * thing that authorises a later play() call. A stream the user had paused
-   * is simply absent here and can never be restarted by the recovery path.
+   * Snapshot before syncStreamGrid mutates cards. For a drag-reorder, the
+   * playing set was captured on drag start (iframes may already have paused
+   * by the time this runs). For add/remove, read live players now — a stream
+   * the user had already paused is absent and can never be restarted here.
    */
-  const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
   const transaction = takeStreamIdChange(store.getStreams().map((stream) => stream.id));
+  const playingBefore =
+    transaction === 'reorder' && reorderPlaybackSnapshot
+      ? reorderPlaybackSnapshot
+      : snapshotPlayingTwitchPlayers(gridEl);
+  reorderPlaybackSnapshot = null;
 
   quietLayout(2000);
   syncStreamGrid(gridEl, store);
@@ -231,6 +378,42 @@ function syncYouTubeStatusScheduler(): void {
   }
 }
 
+/**
+ * Shared Kick status scheduler — same shape and same guarantees as the two
+ * above. `run` only calls refreshAllKickStatuses, which updates the status
+ * dot / header meta / avatar dataset and nothing else; it never remounts or
+ * reloads a Kick iframe. That distinction is the whole reason Kick can now
+ * be polled at all: the disruptive thing this app deliberately stopped doing
+ * on a timer (see manualRefreshAll's doc comment below, and
+ * reloadKickPlayer's) is reloading the *player*, which this does not touch.
+ */
+const kickStatusScheduler = createTwitchStatusScheduler({
+  intervalMs: TWITCH_STATUS_POLL_INTERVAL_MS,
+  hasTwitchCards: () => store.getStreams().some((stream) => stream.platform === 'kick'),
+  isHidden: () => document.hidden,
+  isOnline: () => navigator.onLine,
+  run: (reason) => refreshAllKickStatuses(store, reason).then((result) => result.outcome),
+  now: () => Date.now(),
+  setInterval: (handler, ms) => window.setInterval(handler, ms),
+  clearInterval: (handle) => window.clearInterval(handle),
+});
+
+function syncKickStatusScheduler(): void {
+  const hasKickCards = store.getStreams().some((stream) => stream.platform === 'kick');
+  if (hasKickCards) {
+    kickStatusScheduler.start();
+  } else {
+    kickStatusScheduler.stop();
+  }
+}
+
+/** Kick's counterpart to manualTwitchStatusRefresh — metadata only, never a player reload. */
+async function manualKickStatusRefresh(): Promise<Awaited<ReturnType<typeof refreshAllKickStatuses>>> {
+  const result = await refreshAllKickStatuses(store, 'manual');
+  if (result.outcome === 'ok') kickStatusScheduler.notifyManualRefresh();
+  return result;
+}
+
 /** The manual "Refresh Twitch statuses" action — resets the periodic clock only on success, per the scheduler's own contract. */
 async function manualTwitchStatusRefresh(): Promise<Awaited<ReturnType<typeof refreshAllTwitchStatuses>>> {
   const result = await refreshAllTwitchStatuses(store, 'manual');
@@ -238,18 +421,171 @@ async function manualTwitchStatusRefresh(): Promise<Awaited<ReturnType<typeof re
   return result;
 }
 
+/**
+ * YouTube's equivalent of manualTwitchStatusRefresh above — same
+ * non-disruptive, stats-only contract. Unlike the Twitch scheduler,
+ * youtubeStatusScheduler never had a manual-refresh clock reset (no prior
+ * manual trigger existed for it before this global Refresh button), so there
+ * is nothing to notify — its periodic interval is simply left running as-is.
+ */
+async function manualYouTubeStatsRefresh(): Promise<Awaited<ReturnType<typeof refreshAllYouTubeStats>>> {
+  return refreshAllYouTubeStats(gridEl, 'manual');
+}
+
+/**
+ * The global toolbar "Refresh" action. This is an explicit user request, so
+ * it is allowed to be more forceful than automatic recovery: it first
+ * recovers/reloads currently loaded players (see refreshLoadedStreamPlayers),
+ * then refreshes Twitch/YouTube/Kick metadata. It never reloads the page,
+ * never changes the lineup, and never resets Grid order.
+ *
+ * Automatic/timer paths still must not call Kick's player reload — that
+ * stays restricted to this button and the per-card reload control
+ * (see reloadKickPlayer: a periodic remount reset volume to muted).
+ */
+async function manualRefreshAll(): Promise<{
+  outcome: 'ok' | 'skipped-empty';
+  twitchAllUnavailable: boolean;
+}> {
+  if (store.getStreams().length === 0) {
+    return { outcome: 'skipped-empty', twitchAllUnavailable: false };
+  }
+
+  refreshLoadedStreamPlayers(gridEl);
+
+  const [twitchResult] = await Promise.all([
+    manualTwitchStatusRefresh(),
+    manualYouTubeStatsRefresh(),
+    manualKickStatusRefresh(),
+  ]);
+
+  const twitchAllUnavailable =
+    twitchResult.outcome === 'ok' &&
+    twitchResult.results.size > 0 &&
+    [...twitchResult.results.values()].every((entry) => entry.status === 'unavailable');
+
+  return { outcome: 'ok', twitchAllUnavailable };
+}
+
+function isAnyRefreshInFlight(): boolean {
+  return (
+    isTwitchStatusRefreshInFlight() ||
+    isYouTubeStatsRefreshInFlight() ||
+    isKickStatusRefreshInFlight()
+  );
+}
+
 bindWelcomeModal();
-const toolbar = bindStreamToolbar(store, headersStore, viewModeStore, {
-  refresh: manualTwitchStatusRefresh,
-  isRefreshInFlight: isTwitchStatusRefreshInFlight,
+let storyPreviewPlaybackSnapshot: string[] = [];
+let storyPreviewIdentitiesBefore: ReturnType<typeof captureTwitchPlayerIdentities> = [];
+
+function recoverAfterStoryPreview(): void {
+  afterLayoutPaint(() => {
+    requestAnimationFrame(() => {
+      beginAddRemoveRecovery(gridEl, storyPreviewPlaybackSnapshot, 'story-preview');
+    });
+  });
+}
+
+const toolbar = bindStreamToolbar(
+  store,
+  headersStore,
+  viewModeStore,
+  {
+    refresh: manualRefreshAll,
+    isRefreshInFlight: isAnyRefreshInFlight,
+  },
+  {
+    onWillOpen: () => {
+      storyPreviewPlaybackSnapshot = snapshotPlayingTwitchPlayers(gridEl);
+      storyPreviewIdentitiesBefore = captureTwitchPlayerIdentities(gridEl);
+      logTwitchPlayerIdentities(gridEl, 'story-preview-before-open');
+    },
+    onDidOpen: () => {
+      const after = captureTwitchPlayerIdentities(gridEl);
+      logTwitchPlayerIdentities(gridEl, 'story-preview-after-open');
+      const openDiff = diffTwitchPlayerIdentities(storyPreviewIdentitiesBefore, after);
+      logPlayerEvent('story-preview-open-diff', {
+        remounts: openDiff.remounts,
+        srcChanges: openDiff.srcChanges,
+        playerObjectChanges: openDiff.playerObjectChanges,
+        newlyPaused: openDiff.newlyPaused,
+      });
+      recoverAfterStoryPreview();
+    },
+    onWillClose: () => {
+      const live = snapshotPlayingTwitchPlayers(gridEl);
+      storyPreviewPlaybackSnapshot = [...new Set([...storyPreviewPlaybackSnapshot, ...live])];
+      logTwitchPlayerIdentities(gridEl, 'story-preview-before-close');
+    },
+    onDidClose: () => {
+      const after = captureTwitchPlayerIdentities(gridEl);
+      logTwitchPlayerIdentities(gridEl, 'story-preview-after-close');
+      const closeDiff = diffTwitchPlayerIdentities(storyPreviewIdentitiesBefore, after);
+      logPlayerEvent('story-preview-close-diff', {
+        remounts: closeDiff.remounts,
+        srcChanges: closeDiff.srcChanges,
+        playerObjectChanges: closeDiff.playerObjectChanges,
+        newlyPaused: closeDiff.newlyPaused,
+      });
+      recoverAfterStoryPreview();
+    },
+  },
+);
+const reorder = bindStreamReorder(gridEl, store, headersStore, {
+  onDragChoose: () => {
+    reorderPlaybackSnapshot = snapshotReorderRecoveryIds(gridEl);
+  },
+  onDragStart: () => {
+    const extra = snapshotReorderRecoveryIds(gridEl);
+    reorderPlaybackSnapshot = [...new Set([...(reorderPlaybackSnapshot ?? []), ...extra])];
+  },
 });
-const reorder = bindStreamReorder(gridEl, store, headersStore);
 reorder.sync();
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);
 bindPlaybackRecovery();
 bindFocusViewPromotion(gridEl);
+/*
+ * Theater's only entry point: a card's own Focus control (see
+ * bindFocusViewEntry's own doc comment in StreamGrid.ts). setFocusViewPrimary
+ * runs first and synchronously — it only touches module state, a CSS class,
+ * and (harmlessly, since the grid is still in 'grid' mode at this instant) a
+ * layout recompute — so by the time viewModeStore.setMode('theater') fires
+ * afterViewModeToggle -> syncViewMode, focusViewPrimaryId already matches
+ * this exact stream and its own streams[0] fallback never engages. No
+ * intermediate frame ever shows the wrong primary. Focus (the tray) is never
+ * a restart point — it's only reached from within Theater via the toggle
+ * below, per viewMode.ts's own toggle() doc comment.
+ */
+bindFocusViewEntry((streamId) => {
+  setFocusViewPrimary(gridEl, streamId);
+  viewModeStore.setMode('theater');
+});
+
+// Primary's own X: exit Theater/Focus back to Grid, same primary preserved
+// in module state (setFocusViewPrimary is untouched) in case of re-entry.
+bindFocusViewExit(() => {
+  viewModeStore.setMode('grid');
+});
+
+// The primary card's own Focus control, repurposed in Theater/Focus as the
+// tray on/off toggle (see syncFocusButtonLabel in StreamGrid.ts) — same
+// primary throughout, only the tray's visibility (CSS) changes.
+bindFocusViewToggle(() => {
+  viewModeStore.setMode(viewModeStore.getMode() === 'theater' ? 'focus' : 'theater');
+});
+
+// Promoting a different tray stream to primary follows the same chat-lock
+// rule as first entering Theater.
+bindFocusViewPrimaryChanged(syncPrimaryChat);
+
+// Dead: only ever fired for the old solo-focus mechanism, which nothing
+// sets anymore (see setFocusedStream's callers) — chat-lock for the live
+// Theater/Focus system is syncPrimaryChat above. Left in place rather than
+// removed since deleting it is a larger, out-of-scope refactor of the old
+// solo-focus machinery it's paired with.
 bindStreamFocus((focused, streamId) => {
   toolbar.sync();
   reorder.sync();
@@ -292,12 +628,66 @@ bindStreamFocus((focused, streamId) => {
 
   updateLayout();
 });
+
+/*
+ * One simple undo level: removing a stream (any of its X buttons, Grid or
+ * Focus View) offers ~8s to bring it back at its previous position. store
+ * .insertStream re-adds the plain StreamRef data at a clamped index — a
+ * fresh player mounts for it exactly like any other addition (see
+ * syncStreamGrid's diffing), never the old, possibly-torn-down player
+ * object. Only one pending removal is tracked at a time: a second removal
+ * before the toast is actioned replaces it, matching the "one simple undo
+ * level" scope this was built to.
+ */
+const UNDO_TOAST_DURATION_MS = 8000;
+const undoToastEl = document.querySelector<HTMLElement>('#undo-toast');
+const undoToastMessageEl = undoToastEl?.querySelector<HTMLElement>('.undo-toast__message') ?? null;
+const undoToastActionEl = undoToastEl?.querySelector<HTMLButtonElement>('.undo-toast__action') ?? null;
+let undoToastHideTimer = 0;
+let pendingUndo: { stream: StreamRef; index: number } | null = null;
+
+function hideUndoToast(): void {
+  if (!undoToastEl) return;
+  window.clearTimeout(undoToastHideTimer);
+  undoToastHideTimer = 0;
+  undoToastEl.hidden = true;
+  pendingUndo = null;
+}
+
+function showUndoToast(stream: StreamRef, index: number): void {
+  if (!undoToastEl || !undoToastMessageEl) return;
+  pendingUndo = { stream, index };
+  undoToastMessageEl.textContent = 'Stream removed';
+  undoToastEl.hidden = false;
+  window.clearTimeout(undoToastHideTimer);
+  undoToastHideTimer = window.setTimeout(hideUndoToast, UNDO_TOAST_DURATION_MS);
+}
+
+undoToastActionEl?.addEventListener('click', () => {
+  if (!pendingUndo) return;
+  const { stream, index } = pendingUndo;
+  store.insertStream(stream, index);
+  hideUndoToast();
+});
+
+bindStreamRemoved((removed, index) => {
+  showUndoToast(removed, index);
+});
+
 store.subscribe(renderStreams);
 store.subscribe(syncTwitchStatusScheduler);
 store.subscribe(syncYouTubeStatusScheduler);
+store.subscribe(syncKickStatusScheduler);
 chatStore.subscribe(() => {
+  const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
   quietLayout(1500);
-  updateLayout();
+  afterLayoutPaint(() => {
+    measureAndLayout();
+    recoverTwitchPlayersAfterLayout(gridEl);
+    requestAnimationFrame(() => {
+      beginAddRemoveRecovery(gridEl, playingBefore, 'chat');
+    });
+  });
 });
 headersStore.subscribe(afterHeadersToggle);
 viewModeStore.subscribe(afterViewModeToggle);
@@ -314,7 +704,10 @@ phoneQuery.addEventListener('change', handleViewportChange);
 window.visualViewport?.addEventListener('resize', handleViewportChange);
 
 const resizeObserver = new ResizeObserver(() => {
-  if (suppressLayout) return;
+  if (suppressLayout) {
+    pendingLayoutAfterSuppress = true;
+    return;
+  }
   armInteractionNudge();
   window.clearTimeout(resizeDebounceTimer);
   resizeDebounceTimer = window.setTimeout(() => {
@@ -403,11 +796,13 @@ document.addEventListener('visibilitychange', () => {
     // interval — never a burst on every tab-foreground.
     twitchStatusScheduler.notifyVisible();
     youtubeStatusScheduler.notifyVisible();
+    kickStatusScheduler.notifyVisible();
   }
 });
 window.addEventListener('online', () => {
   twitchStatusScheduler.notifyVisible();
   youtubeStatusScheduler.notifyVisible();
+  kickStatusScheduler.notifyVisible();
 });
 // Exiting fullscreen has the same lost-gesture problem, and was previously
 // only ever fixed by incidental mouse movement — there was no listener for it.
@@ -416,12 +811,27 @@ window.addEventListener('mousemove', nudgeOnInteraction, { passive: true });
 window.addEventListener('pointerdown', nudgeOnInteraction, { passive: true });
 
 renderStreams();
+// renderStreams -> syncViewMode is what sets gridEl.dataset.viewMode for the
+// very first time (it's still undefined at the reorder.sync() call above,
+// since bindStreamReorder runs before the first renderStreams). Without this,
+// isPrimaryModeActive() reads 'undefined !== grid' as true on that initial
+// sync, leaving SortableJS permanently disabled — no drag ever starts, in
+// either headers-visible or headers-hidden Grid — until the user happens to
+// toggle Theater/Focus at least once, which is the only other place that
+// calls reorder.sync().
+reorder.sync();
 
 // One batched advisory status check for every Twitch channel restored from
 // the URL/localStorage at startup — never one request per tile. Streams
 // added later go through StreamToolbar's own single-channel check instead.
 void refreshAllTwitchStatuses(store, 'initial-restore');
 syncTwitchStatusScheduler();
+
+// Same for Kick, and for the same reason — its metadata check is fully
+// decoupled from the iframe mount, so this can run at restore without
+// touching a single player.
+void refreshAllKickStatuses(store, 'initial-restore');
+syncKickStatusScheduler();
 
 // YouTube has no equivalent initial-restore call: unlike Twitch's advisory
 // status check (decoupled from player mount), each YouTube card's own mount

@@ -135,7 +135,7 @@ body {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  min-width: min(280px, 72vw);
+  min-width: min(360px, 88vw);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -208,6 +208,11 @@ body {
   color: #ffb8c2;
 }
 
+.toolbar__suggestion-platform--tiktok {
+  background: color-mix(in srgb, var(--tiktok) 22%, transparent);
+  color: #ffb8c8;
+}
+
 .toolbar__mobile-note {
   display: none;
   margin: 0;
@@ -267,6 +272,18 @@ body {
   gap: 6px;
   margin-left: auto;
   min-width: 0;
+}
+
+/*
+ * Pre-existing latent bug, surfaced by Focus View's exit button needing to
+ * actually hide in Grid View: `display: inline-flex` below has the same
+ * specificity as the UA stylesheet's `[hidden] { display: none }` and comes
+ * later in the cascade, so it silently won — every `.hidden = true` on a
+ * toolbar icon button (Share/Clear/Refresh/Focus View) rendered anyway.
+ * This restores `hidden` as authoritative for the whole group.
+ */
+.toolbar__icon-btn[hidden] {
+  display: none;
 }
 
 .toolbar__icon-btn {
@@ -333,6 +350,48 @@ body {
   opacity: 1;
 }
 
+.toolbar__share-menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.toolbar__share-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
+}
+
+.toolbar__share-menu[hidden] {
+  display: none;
+}
+
+.toolbar__share-menu-item {
+  padding: 9px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toolbar__share-menu-item:hover,
+.toolbar__share-menu-item:focus-visible {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  outline: none;
+}
+
 .main-layout {
   position: relative;
   flex: 1;
@@ -378,6 +437,39 @@ body {
   min-height: 0;
   width: 100%;
   overflow: hidden;
+}
+
+/*
+ * Without this, row tracks are pure `auto` — sized only by the content
+ * that happens to land in them. A landscape card's player has an explicit
+ * height (var(--player-height), below) so it seeds its row fine, but a
+ * portrait card's player is intentionally `height: auto` (relies on
+ * align-self: stretch across its 2-row span instead — see the portrait
+ * rule below). With no landscape sibling sharing either spanned row (a
+ * portrait-only grid, e.g. a single TikTok stream), there is nothing to
+ * stretch against: both rows collapse to the header's own min-content and
+ * the player renders 0px tall. Flooring every implicit row at
+ * --player-height (the same cellHeight computeWeightedGridLayout already
+ * computes) fixes that regardless of what's actually in each row.
+ *
+ * Scoped to [data-has-portrait='1'] (set alongside data-has-kick in
+ * StreamGrid.ts) — a pure-landscape grid must never get this. Landscape
+ * rows are already header + player content-sized via ordinary `auto`
+ * tracks; flooring them at --player-height (video height only, no header)
+ * shorted every row by CARD_HEADER_HEIGHT and left the whole grid centered
+ * with visibly excess top/bottom whitespace — the Aug 13 visual regression.
+ *
+ * The track is --grid-row-height (player + header), NOT --player-height.
+ * Pinning it at --player-height re-created the exact same off-by-a-header
+ * error inside the portrait grid: the card was locked 42px shorter than its
+ * own content, the header kept its size, and the flex column took the
+ * difference out of the player — so every landscape sibling rendered a
+ * wider-than-16:9 host and Twitch pillarboxed itself with app-created black
+ * side gutters, while Kick's CSS-scaled frame lost the bottom of its native
+ * control bar to the card's overflow:hidden.
+ */
+.stream-grid[data-has-portrait='1'] {
+  grid-auto-rows: var(--grid-row-height, var(--player-height, auto));
 }
 
 .stream-grid[data-focus-id] {
@@ -494,6 +586,8 @@ html.stream-focused .stream-card__header {
 
 .stream-card__header {
   display: flex;
+  /* Anchor for .stream-card__youtube-volume-panel's absolute positioning. */
+  position: relative;
   /*
    * Never wrap: a long channel name used to force the header onto two rows,
    * dropping the controls to a second line entirely. Instead the identity
@@ -528,6 +622,36 @@ html.stream-focused .stream-card__header {
 
 .stream-card--drag {
   opacity: 0.92;
+}
+
+/*
+ * Cross-origin provider iframes swallow mouseup/pointerup, so Sortable's
+ * fallback drag never ends until a second click. During an active Grid
+ * drag the player contents must not be a hit target; header/handle stay
+ * interactive. Restored immediately on drag end/cancel (see StreamReorder).
+ */
+.stream-grid.is-dragging .stream-card__player,
+.stream-grid.is-dragging .stream-card__iframe,
+.stream-grid.is-dragging iframe,
+.stream-grid.is-dragging video {
+  pointer-events: none !important;
+}
+
+/*
+ * Headers-hidden hover opens the toolbar by shrinking the player — that
+ * resize can pause Twitch. During reorder the pointer travels across other
+ * cards; those :hover opens must not fire or they pause players that were
+ * never in the pre-drag snapshot. Keep every in-grid toolbar closed while
+ * dragging except the chosen/dragged card (the fallback clone on body still
+ * shows the grip). Restored as soon as is-dragging is cleared.
+ */
+html.headers-hidden .stream-grid.is-dragging .stream-card:not(.stream-card--chosen):not(.stream-card--drag) .stream-card__toolbar {
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  opacity: 0 !important;
+  border: 0 !important;
+  pointer-events: none;
 }
 
 /*
@@ -636,19 +760,44 @@ html.stream-focused .stream-card__header {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+/*
+ * Audio-on: aria-pressed is bound to the real mute state (true = muted) in
+ * every provider's sync*MuteUi / volume-control sync(). Unmuted tints only
+ * the speaker icon red — button chrome (border, background, no glow) stays
+ * identical to the other header buttons so a 15-stream Grid can still be
+ * scanned without a red ring. No animation.
+ */
+.stream-card__mute-btn[aria-pressed='false'] {
+  color: var(--danger);
+}
+
+.stream-card__mute-btn[aria-pressed='false']:hover:not(:disabled) {
+  color: var(--danger);
+}
+
 .stream-card__mute-btn:focus-visible {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 70%, white);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-/* Only ever rendered inside .stream-card__youtube-volume-panel now, which
-   is always full-width when open — so this takes up the panel's available
-   space rather than a fixed width. */
+/* Fixed compact width — the slider is the panel's only control now (see
+   .stream-card__youtube-volume-panel below). */
 .stream-card__youtube-volume-slider {
   flex: 1 1 auto;
   width: auto;
-  height: 26px;
+  /*
+   * A flex item's automatic minimum size is its min-content width, and for
+   * input[type=range] that is the UA's intrinsic ~129px — wider than this
+   * panel's 78px content box. Without this the slider refused to shrink and
+   * simply overflowed the panel to the RIGHT, straight across the speaker
+   * button it is anchored to: the button's own rect stayed clear (the panel
+   * ends 6px to its left) but the overflowing input sat on top of it and
+   * won every hit test over its upper two thirds, so the speaker looked
+   * overlapped and stopped toggling the panel shut.
+   */
+  min-width: 0;
+  height: 22px;
   margin: 0;
   accent-color: var(--youtube);
   cursor: pointer;
@@ -661,52 +810,51 @@ html.stream-focused .stream-card__header {
 }
 
 /*
- * Dense grids and narrow tiles never have room for a mute button + full
- * slider alongside drag/focus/reload/remove, so the footer no longer tries
- * to fit both at once. The compact button above is a status/trigger only;
- * clicking it opens this full-width panel, which takes over the entire
- * footer (see the `is-volume-mode` rules below) regardless of tile size —
- * the fix for "no room" is giving the slider its own row, not shrinking or
- * hiding it.
+ * Wraps a volume trigger button together with its slider panel. Sized to
+ * exactly the trigger (26x26 — see .stream-card__mute-btn) and positioned
+ * so the panel below can anchor its `right: 100%` off THIS box, not the
+ * whole header/toolbar — that's what keeps the slider pinned immediately to
+ * the trigger's left instead of drifting to the footer's edge.
+ */
+.stream-card__volume-control {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+/*
+ * Compact slider-only popover, anchored off .stream-card__volume-control
+ * (not the footer) so it extends LEFT from the speaker button itself —
+ * `right: 100%` sits it flush against the trigger's left edge, `top: 0` +
+ * matching the trigger's own height keeps it in the same row as the header
+ * controls. It never drops down over the player below and never grows the
+ * header's height. It's free to overlap the name badge to its left (the
+ * badge already shrinks/truncates under container-query pressure — see
+ * .stream-card__name-badge) since a channel name is far less important than
+ * being able to adjust volume without hunting for the control.
  */
 .stream-card__youtube-volume-panel {
   display: none;
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  right: 100%;
+  margin-right: 6px;
   align-items: center;
-  gap: 8px;
-  width: 100%;
+  height: 26px;
+  width: 96px;
   min-width: 0;
-}
-
-.stream-card__header.is-volume-mode > *:not(.stream-card__youtube-volume-panel),
-.stream-card__toolbar.is-volume-mode > *:not(.stream-card__youtube-volume-panel) {
-  display: none;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 96%, black);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
 }
 
 .stream-card__header.is-volume-mode .stream-card__youtube-volume-panel,
 .stream-card__toolbar.is-volume-mode .stream-card__youtube-volume-panel {
   display: flex;
-}
-
-.stream-card__youtube-volume-panel-close {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  line-height: 0;
-  cursor: pointer;
-}
-
-.stream-card__youtube-volume-panel-close:hover {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .stream-card__player {
@@ -756,6 +904,18 @@ html.headers-hidden .stream-card {
   overflow: hidden;
 }
 
+/*
+ * --player-height is the landscape 16:9 cell. Locking portrait cards to it
+ * collapsed a 2-row 9:16 allocation into one landscape row and left a blank
+ * band in the second row. Portrait still spans two tracks; stretch into
+ * that area instead of inheriting the landscape height lock. Header hide
+ * only hides the header — orientation and row-span stay put.
+ */
+html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
+  .stream-card[data-orientation='portrait'] {
+  height: auto;
+}
+
 html.headers-hidden .stream-grid:not(:empty) .stream-card__player {
   flex: 1 1 auto;
   width: 100%;
@@ -783,6 +943,8 @@ html.headers-hidden .stream-card--kick:not(.is-focused):focus-within .stream-car
   display: none;
   flex: 0 0 auto;
   align-items: center;
+  /* Anchor for .stream-card__youtube-volume-panel's absolute positioning. */
+  position: relative;
   /* Identity left, actions right. The name badge takes the free space, so
      this only matters if the badge is ever empty. */
   justify-content: space-between;
@@ -1146,24 +1308,16 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
  * header. Scoped away from Focus View, which places every card on its own
  * two-row layout.
  *
- * `order: -1` (plus grid-auto-flow: dense on the grid itself, below) is load
- * bearing, not decorative: CSS Grid's implicit auto-placement walks items in
- * source order and never reserves a column for one arriving later. A
- * portrait card is usually the last stream added, so by the time
- * auto-placement reaches it every earlier row is already fully tiled by
- * landscape cards with no 2-row gap left to fall into — it got shoved into a
- * new row band below everything else instead of sitting beside the
- * landscape rows it's supposed to span. Sorting every portrait card first in
- * placement order — without touching the underlying stream list or DOM
- * order, so drag-reorder's data model is untouched — lets landscape cards
- * flow around it and fill the remaining columns for real.
+ * Placement follows DOM/store order — portrait status only changes the
+ * span, never the item's grid position. `grid-auto-flow: dense` on the
+ * grid backfills holes the 2-row span leaves, so landscape cards pack
+ * around the portrait wherever the user put it.
  */
-.stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] {
+.stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card[data-orientation='portrait'] {
   grid-row: span var(--portrait-row-span, 2);
-  order: -1;
 }
 
-.stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] .stream-card__player {
+.stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card[data-orientation='portrait'] .stream-card__player {
   flex: 1 1 auto;
   min-height: 0;
   height: auto;
@@ -1179,12 +1333,36 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
  * the relatively-positioned player, same centering trick used nowhere else
  * needed here since every other platform fills its cell edge-to-edge.
  */
-.stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] .stream-card__iframe {
+.stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card[data-orientation='portrait'] .stream-card__iframe {
   position: absolute;
   inset: 0;
   margin: auto;
   width: var(--portrait-content-width, 100%);
   height: var(--portrait-content-height, 100%);
+}
+
+/*
+ * TikTok is the exception to the fixed 9:16 box above, and it has to be.
+ * That box assumes the media really is 9:16, which is only true of the
+ * *card* allocation — a TikTok LIVE source is frequently something else
+ * (a duet/guest split is roughly square, a screen-shared source is
+ * landscape). Sizing the wrap to 9:16 and then letting the <video>'s
+ * object-fit: contain letterbox a non-9:16 source *inside* that box
+ * letterboxes twice, which is why the picture rendered far smaller than
+ * its allocation with a large black surround.
+ *
+ * The wrap gets the full player area instead and object-fit: contain does
+ * the fitting once, against the video's true intrinsic ratio — that is by
+ * definition the largest uncropped rectangle that fits, and for a genuinely
+ * 9:16 source it lands on exactly the same box the rule above computed.
+ * The 2-row Grid allocation, the centering, and the no-crop guarantee are
+ * all unchanged.
+ */
+.stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card[data-orientation='portrait'] .stream-card__tiktok-wrap {
+  inset: 0;
+  margin: 0;
+  width: 100%;
+  height: 100%;
 }
 
 /*
@@ -1213,6 +1391,121 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   grid-row: 2;
   width: var(--focus-tray-column-width, 100%);
   align-self: center;
+}
+
+/*
+ * Soft edge-fade on whichever side still has more tray content to scroll to
+ * (data-tray-overflow, set by StreamGrid.ts's updateFocusTrayOverflowIndicator
+ * — 'start'/'end'/'both'). mask-image is a stencil over the element's final
+ * rendered box, so it stays put as the content underneath scrolls — no extra
+ * wrapper element needed. The primary sits in row 1, centered with its own
+ * whitespace on either side, so a mask this shallow essentially never reaches
+ * it in practice.
+ */
+.stream-grid[data-view-mode='focus'][data-tray-overflow='end'] {
+  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+}
+
+.stream-grid[data-view-mode='focus'][data-tray-overflow='start'] {
+  mask-image: linear-gradient(to left, black calc(100% - 32px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to left, black calc(100% - 32px), transparent 100%);
+}
+
+.stream-grid[data-view-mode='focus'][data-tray-overflow='both'] {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 32px,
+    black calc(100% - 32px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 32px,
+    black calc(100% - 32px),
+    transparent 100%
+  );
+}
+
+/*
+ * Stronger visual promote-affordance beyond the header's cursor/title
+ * tooltip alone (Section 12): a small upward arrow fades in on hover/focus
+ * of a promotable tray header, and the whole card lifts slightly — signaling
+ * "click to bring this forward" without relying on hidden knowledge.
+ */
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):hover,
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):has(
+    .stream-card__header:focus-visible
+  ) {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.4);
+}
+
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__header {
+  position: relative;
+}
+
+.stream-grid[data-view-mode='focus']
+  .stream-card:not(.is-focus-primary)
+  .stream-card__header[role='button']::after {
+  content: '▲';
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  font-size: 0.7rem;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.stream-grid[data-view-mode='focus']
+  .stream-card:not(.is-focus-primary):hover
+  .stream-card__header[role='button']::after,
+.stream-grid[data-view-mode='focus']
+  .stream-card:not(.is-focus-primary)
+  .stream-card__header[role='button']:focus-visible::after {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) {
+    transition: none;
+  }
+
+  .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):hover,
+  .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):has(
+      .stream-card__header:focus-visible
+    ) {
+    transform: none;
+  }
+
+  .stream-grid[data-view-mode='focus']
+    .stream-card:not(.is-focus-primary)
+    .stream-card__header[role='button']::after {
+    transition: none;
+  }
+}
+
+/*
+ * The old solo per-card "expand" control (magnifying-glass icon, predates
+ * Focus View) is hidden on TRAY cards in Focus View — the two are
+ * redundant "make this stream big" affordances there, and click-to-promote
+ * (the header) is the tray's one way to make a stream big. On the PRIMARY
+ * card the same button is kept visible and repurposed (see
+ * syncFocusButtonLabel in StreamGrid.ts) as the Theater<->Focus tray
+ * toggle, so it must NOT be hidden here.
+ */
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__focus,
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__overlay-focus {
+  display: none;
 }
 
 /*
@@ -1246,18 +1539,71 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   margin: 0 auto;
 }
 
+/*
+ * grid-column: 1/-1 spans the FULL scrollable tray track width, not the
+ * visible scrollport — justify-self: center would center within that full
+ * span and drift left of the actual viewport once tray content overflows.
+ * Instead the flow position is pinned to the area's start (justify-self:
+ * start) so the natural/static position is always content-x 0, and the
+ * real visible centering is driven entirely by StreamGrid.ts's JS-computed
+ * --focus-primary-offset-left, applied here as a sticky left offset. Since
+ * a sticky left constraint only ever prevents the element's static
+ * position from scrolling below that offset (it never pulls a
+ * rightward-natural-position element leftward), pinning the natural
+ * position at 0 guarantees the offset binds immediately at scrollLeft=0
+ * and holds through the entire scroll range.
+ */
 .stream-grid[data-view-mode='focus'] .stream-card.is-focus-primary {
   grid-row: 1;
   grid-column: 1 / -1;
   width: var(--focus-primary-width, 100%);
-  justify-self: center;
+  justify-self: start;
   align-self: start;
   position: sticky;
-  left: 0;
+  left: var(--focus-primary-offset-left, 0px);
   cursor: default;
 }
 
 .stream-grid[data-view-mode='focus'] .stream-card.is-focus-primary .stream-card__player {
+  width: var(--focus-primary-width, 100%);
+  height: var(--focus-primary-height, auto);
+}
+
+/*
+ * Theater mode: same single-primary concept as Focus (same
+ * focusViewPrimaryId, same computeFocusViewLayout/updateFocusViewLayout
+ * math, same --focus-primary-offset-left centering var) but with no tray —
+ * every non-primary card is a hidden grid item (display: none removes it
+ * from the grid entirely, so it consumes no track/space), and there is
+ * nothing to horizontally scroll, so overflow stays hidden here instead of
+ * auto. Kept as its own selector rather than folded into the Focus rules
+ * above so Focus's tray-only concerns (overflow-x, mask fades, tray
+ * hover/promote affordances) never leak into Theater.
+ */
+.stream-grid[data-view-mode='theater'] {
+  grid-template-columns: 1fr;
+  grid-template-rows: var(--focus-primary-row-height, auto);
+  align-content: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.stream-grid[data-view-mode='theater'] .stream-card:not(.is-focus-primary) {
+  display: none;
+}
+
+.stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary {
+  grid-row: 1;
+  grid-column: 1 / -1;
+  width: var(--focus-primary-width, 100%);
+  justify-self: start;
+  align-self: start;
+  position: sticky;
+  left: var(--focus-primary-offset-left, 0px);
+  cursor: default;
+}
+
+.stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary .stream-card__player {
   width: var(--focus-primary-width, 100%);
   height: var(--focus-primary-height, auto);
 }
@@ -1329,8 +1675,10 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
 
 .stream-card__tiktok-status {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 12px;
   width: 100%;
   height: 100%;
   margin: 0;
@@ -1342,9 +1690,14 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   background: var(--surface);
 }
 
+.stream-card__tiktok-status-message {
+  margin: 0;
+  max-width: 16rem;
+}
+
 .stream-card__tiktok-status-link {
   display: inline-block;
-  margin-top: 6px;
+  flex: 0 0 auto;
   color: var(--tiktok);
   font-weight: 600;
   text-decoration: none;
@@ -1372,6 +1725,193 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
 
 .empty-state[hidden] {
   display: none;
+}
+
+/*
+ * Undo toast (Section 16): shown for a few seconds after any stream removal
+ * (Grid or Focus View — see main.ts's bindStreamRemoved wiring), never a
+ * modal, never blocking the grid underneath it.
+ */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
+  color: var(--text);
+  font-size: 0.9rem;
+  transform: translate(-50%, 0);
+  animation: undo-toast-in 0.18s ease-out;
+}
+
+.undo-toast[hidden] {
+  display: none;
+}
+
+@keyframes undo-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .undo-toast {
+    animation: none;
+  }
+}
+
+.undo-toast__message {
+  white-space: nowrap;
+}
+
+.undo-toast__action {
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid var(--accent);
+  border-radius: calc(var(--radius) - 4px);
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.undo-toast__action:hover,
+.undo-toast__action:focus-visible {
+  background: var(--accent);
+  color: var(--text);
+}
+
+/*
+ * Story card preview (Section 18/13): shows the real rendered PNG before
+ * download, not a placeholder — the same canvas renderShareCard draws for
+ * the actual download, just previewed as an <img> via an object URL first.
+ *
+ * Sized to the dialog itself, with a separate full-viewport dimmer that is
+ * a plain rgba fill — never backdrop-filter / filter / blur / transform.
+ * Those compositor effects were pausing every Twitch embed underneath.
+ */
+.story-preview {
+  position: fixed;
+  z-index: 90;
+  top: 8vh;
+  left: 0;
+  right: 0;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  margin-inline: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  pointer-events: none;
+}
+
+.story-preview[hidden] {
+  display: none;
+}
+
+.story-preview__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 89;
+  background: rgba(0, 0, 0, 0.65);
+  pointer-events: auto;
+}
+
+.story-preview__backdrop[hidden] {
+  display: none;
+}
+
+.story-preview__panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-height: min(84dvh, 84vh);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+
+.story-preview__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.story-preview__close:hover,
+.story-preview__close:focus-visible {
+  background: color-mix(in srgb, var(--text) 10%, var(--bg));
+  outline: none;
+}
+
+.story-preview__image {
+  max-width: min(360px, calc(100vw - 64px));
+  max-height: min(70dvh, 70vh);
+  width: auto;
+  height: auto;
+  border-radius: calc(var(--radius) - 4px);
+  background: #0d0d0f;
+}
+
+.story-preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.story-preview__action {
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.story-preview__action:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.story-preview__download {
+  border: 0;
+  background: var(--accent);
+  color: white;
+}
+
+.story-preview__download:hover {
+  background: color-mix(in srgb, var(--accent) 88%, white);
 }
 
 html.show-welcome {
@@ -1656,22 +2196,19 @@ html.show-welcome .welcome-modal {
    * anchor those tracks' height without --player-height), a portrait stream
    * just becomes its own full-width row here, sized by its real 9:16 ratio
    * — the "own row at smaller breakpoints" fallback this layout was always
-   * meant to have. order:-1 (desktop's fix for auto-placement column
-   * reservation) is reset too — with one column there's nothing to reserve,
-   * and stacking portrait streams out of add/drag order would be confusing.
+   * meant to have.
    */
-  .stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] {
+  .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card[data-orientation='portrait'] {
     grid-row: auto;
-    order: 0;
   }
 
-  .stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] .stream-card__player {
+  .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card[data-orientation='portrait'] .stream-card__player {
     flex: none;
     aspect-ratio: 9 / 16;
     height: auto;
   }
 
-  .stream-grid:not([data-view-mode='focus']) .stream-card[data-orientation='portrait'] .stream-card__iframe {
+  .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card[data-orientation='portrait'] .stream-card__iframe {
     position: absolute;
     inset: 0;
     margin: 0;
@@ -1700,11 +2237,20 @@ html.show-welcome .welcome-modal {
   .toolbar__form {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'input submit';
     align-items: center;
     /* Override desktop flex: 1 1 280px — that made the form ~280px tall on phones. */
     flex: 0 0 auto;
     width: 100%;
     gap: 6px;
+  }
+
+  .toolbar__input-wrap {
+    grid-area: input;
+  }
+
+  .toolbar__form > button[type='submit'] {
+    grid-area: submit;
   }
 
   .toolbar__input-wrap {
@@ -1852,10 +2398,14 @@ html.show-welcome .welcome-modal {
     height: 12px;
   }
 
-  .stream-card__mute-btn,
-  .stream-card__youtube-volume-panel-close {
+  .stream-card__mute-btn {
     width: 24px;
     height: 24px;
+  }
+
+  .stream-card__youtube-volume-panel {
+    height: 24px;
+    width: 84px;
   }
 
   .stream-card__youtube-volume-slider {

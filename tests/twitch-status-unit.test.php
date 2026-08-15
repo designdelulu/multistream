@@ -133,8 +133,8 @@ $mixedTracker = make_dispatch_transport([
     'helix/users' => [
         'httpCode' => 200,
         'body' => ['data' => [
-            ['id' => '1', 'login' => 'shroud', 'display_name' => 'Shroud'],
-            ['id' => '2', 'login' => 'offlineuser', 'display_name' => 'OfflineUser'],
+            ['id' => '1', 'login' => 'shroud', 'display_name' => 'Shroud', 'profile_image_url' => 'https://example/shroud.jpg'],
+            ['id' => '2', 'login' => 'offlineuser', 'display_name' => 'OfflineUser', 'profile_image_url' => 'https://example/offlineuser.jpg'],
         ]],
         'error' => null,
     ],
@@ -192,6 +192,41 @@ try {
     check($cachedNotFound[0]['status'] === 'not_found', 'a cached not_found result is served without any upstream call');
 } catch (RuntimeException $e) {
     check(false, 'cached not_found lookup unexpectedly hit the network: ' . $e->getMessage());
+}
+
+// --- Case: a cached "exists" entry missing avatarUrl self-heals -----------
+// Simulates a stale cache entry written before profile_image_url was
+// available (e.g. a transient Helix hiccup). It must NOT be served as-is —
+// it should be treated as a miss, refetched, and healed with the avatar.
+
+cache_delete('twitch:live:staleavatar');
+cache_set('twitch:user:staleavatar', ['exists' => true, 'displayName' => 'StaleAvatar'], 24 * 60 * 60);
+
+$healTracker = make_dispatch_transport([
+    'oauth2/token' => ok_token_response(),
+    'helix/users' => [
+        'httpCode' => 200,
+        'body' => ['data' => [
+            ['id' => '99', 'login' => 'staleavatar', 'display_name' => 'StaleAvatar', 'profile_image_url' => 'https://example/staleavatar.jpg'],
+        ]],
+        'error' => null,
+    ],
+    'helix/streams' => ['httpCode' => 200, 'body' => ['data' => []], 'error' => null],
+]);
+$GLOBALS['twitch_http_transport'] = $healTracker->transport;
+
+$healed = build_twitch_status_results(['staleavatar']);
+check(call_count($healTracker, 'helix/users') === 1, 'a cached entry missing avatarUrl is treated as a miss and refetched');
+check($healed[0]['avatarUrl'] === 'https://example/staleavatar.jpg', 'the refetch heals the entry with the real avatarUrl');
+
+$GLOBALS['twitch_http_transport'] = static function (string $method, string $url): array {
+    throw new RuntimeException("unexpected upstream call on a cache hit: {$method} {$url}");
+};
+try {
+    $healedAgain = build_twitch_status_results(['staleavatar']);
+    check($healedAgain[0]['avatarUrl'] === 'https://example/staleavatar.jpg', 'once healed, the entry is served from cache with the avatar intact');
+} catch (RuntimeException $e) {
+    check(false, 'a healed cache entry unexpectedly hit the network: ' . $e->getMessage());
 }
 
 // --- Case: expired access token — 401 triggers exactly one retry ----------
