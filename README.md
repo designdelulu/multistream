@@ -1,6 +1,6 @@
 # MultiStream.cc
 
-Watch **Twitch**, **Kick**, **YouTube**, and **TikTok LIVE** streams online on one page — a responsive grid that keeps every player as large as possible at 16:9.
+Watch **Twitch**, **Kick**, **YouTube**, and **TikTok LIVE** streams online on one page — a responsive grid that keeps landscape players as large as possible at **16:9** and portrait streams (YouTube Shorts, TikTok LIVE) at their true **9:16** shape.
 
 ![MultiStream.cc — Watch Twitch, Kick, YouTube, and TikTok LIVE streams online](./public/og-image.png)
 
@@ -19,24 +19,24 @@ Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](http
 
 ## What it does
 
-MultiStream.cc is a modern multi-stream viewer for Twitch and Kick — watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
+MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and experimental TikTok LIVE — watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
 
-- **Twitch + Kick + YouTube** on the same page via official embeds (same approach as [MultistreamGrid](https://multistreamgrid.com))
+- **Twitch + Kick + YouTube + experimental TikTok LIVE** on the same page — official embeds for the first three; TikTok uses a resolver + `<video>` player (see [TikTok LIVE setup](#tiktok-live-setup-experimental))
 - **YouTube channels resolve to whatever's live right now** — a handle, username, channel ID, or channel URL is checked server-side on each load; a direct video/Shorts/live URL loads exactly that video, no lookup needed
-- **Responsive grid** that packs every player on-screen at the largest 16:9 size (MultiTwitch-style)
+- **Responsive grid** that packs landscape streams at the largest 16:9 size and portrait streams at true 9:16 (MultiTwitch-style packing for 16:9; a dedicated 2-row portrait rule for 9:16)
 - **Portrait streams (YouTube Shorts, Experimental TikTok LIVE) get their own grid rule** — a portrait tile always spans exactly 2 landscape rows in Grid View, letterboxed to its true 9:16 shape rather than stretched; Focus View sizes a portrait primary by its own aspect ratio instead
 - **Focus View** — toggle to a large-primary-plus-tray layout; click a tray stream's header to promote it to primary without remounting any player (see [Focus View](#focus-view) below)
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
-- **Username dropdown** — type a name (or `@name`) and pick Twitch or Kick; Enter uses your last-chosen platform
-- **Share link / Clear all** in the toolbar
+- **Username dropdown** — type a name (or `@name`) and pick **Twitch**, **Kick**, **YouTube**, or **TikTok LIVE (Experimental)**; Enter uses your last-chosen platform. Paste any supported URL to skip the dropdown.
+- **Share menu** — Copy Watch URL, preview or download a Story Card image of your lineup, or share a watch-party link; **Clear all** removes every stream
 - **Hide headers** — headers are shown by default (remembered in `localStorage` once toggled); in compact mode each card is video-only at rest, and hovering a card opens a toolbar **below** the embed (name, drag, focus, remove) so Twitch is never obscured
 - **Drag to reorder** stream cards (drag the card header, or the drag handle in the hover toolbar when headers are hidden); URL updates without remounting players
 - **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
-- **Shareable path URLs** like `/t:username/k:username`
+- **Shareable path URLs** like `/t:username/k:username/y:handle:username/tt:creator`
 - **× close** and **focus** controls per stream — focus fills the area below the toolbar, opens that stream’s Twitch chat, and remounts unmuted (Kick has no chat panel)
 - **Twitch chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
 - **Streams always boot muted** — unmute on focus or from the platform's own player chrome
-- **Static deploy for everything except one thing** — direct video URLs, and all of Twitch/Kick, need no backend at all. Resolving a YouTube handle/channel to its current live video needs a small server-side PHP endpoint (API keys can't live in client JS) — see [YouTube setup](#youtube-setup) below.
+- **Mostly static deploy** — Twitch and Kick embeds, direct YouTube video URLs, and the app shell itself need no backend. YouTube channel/handle → live lookup, optional Twitch/Kick status metadata, and experimental TikTok LIVE playback each use a small same-origin PHP script in `dist/api/` (see [YouTube setup](#youtube-setup), [Twitch setup](#twitch-setup), [Kick setup](#kick-setup), and [TikTok LIVE setup](#tiktok-live-setup-experimental) below). No database, no framework, no user accounts.
 
 Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) project, rebuilt for modern platforms and maintainability.
 
@@ -54,7 +54,7 @@ Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) p
 | **Tablet / iPad** (641px–1024px) | Same packing grid | Show / hide toggle | Touch-friendly controls; chat panel slightly narrower |
 | **Phone** (≤640px) | Single-column scroll | Hidden | Streams stack vertically; toolbar stacks for easy tapping |
 
-Works in modern desktop and mobile browsers (Chrome, Firefox, Safari, Edge). Performance depends on how many live embeds are open — each stream is a full Twitch or Kick player. Fewer streams = smoother playback, especially on laptops and phones.
+Works in modern desktop and mobile browsers (Chrome, Firefox, Safari, Edge). Performance depends on how many live embeds are open — each stream is a full platform player (Twitch/Kick/YouTube iframe, or a TikTok `<video>` feed). Fewer streams = smoother playback, especially on laptops and phones.
 
 ---
 
@@ -65,7 +65,7 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (default `http://localhost:5173/`). Add streams from the toolbar or open a path URL like `/t:username/k:username`.
+Open the URL Vite prints (default `http://localhost:5173/`). Add streams from the toolbar or open a path URL like `/t:username/k:username/y:handle:username/tt:creator`.
 
 ### Production build
 
@@ -94,7 +94,9 @@ dist/
 ├── api/
 │   ├── youtube-resolve.php
 │   ├── twitch-status.php
-│   └── tiktok-resolve.php
+│   ├── kick-status.php
+│   ├── tiktok-resolve.php
+│   └── tiktok-avatar.php
 ├── og-image.png
 ├── robots.txt
 ├── sitemap.xml
@@ -105,12 +107,12 @@ Steps:
 
 1. Run `npm run build` locally whenever you change the app.
 2. In DreamHost File Manager or FTP, open the folder for **multistream.cc**.
-3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes `api/youtube-resolve.php`, `api/twitch-status.php`, and `api/tiktok-resolve.php`.
+3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes all five files under `api/` (`youtube-resolve.php`, `twitch-status.php`, `kick-status.php`, `tiktok-resolve.php`, and `tiktok-avatar.php`).
 4. Confirm `index.html` sits directly in the domain root.
-5. Complete the one-time [YouTube setup](#youtube-setup) and [Twitch setup](#twitch-setup) below (both are config files outside the web root) — channel/handle resolution and live-status checks won't work until that's done, but direct video URLs and the Twitch/Kick/YouTube embeds themselves all work without it.
+5. Complete the one-time [YouTube setup](#youtube-setup), [Twitch setup](#twitch-setup), and [Kick setup](#kick-setup) below (config files outside the web root) — channel/handle resolution and live-status checks won't work until that's done, but direct video URLs, Twitch/Kick/YouTube embeds, and TikTok LIVE (via `tiktok-resolve.php`, no credentials) all work as soon as `dist/` is uploaded.
 6. Visit `https://multistream.cc/` — Twitch embeds will automatically use `multistream.cc` as the `parent` domain.
 
-Path URLs like `/t:username/k:username/y:handle:username` require the included `.htaccess` SPA fallback on Apache/DreamHost.
+Path URLs like `/t:username/k:username/y:handle:username/tt:creator` require the included `.htaccess` SPA fallback on Apache/DreamHost.
 
 ---
 
@@ -158,9 +160,9 @@ The dot's tooltip and accessible label always carry the full text (e.g. "Live ·
 
 ### Refreshing status
 
-**Refresh Twitch statuses**, in the toolbar, re-checks every Twitch card's status in one batched request. It only ever updates the status dot and header meta text — it never reloads, remounts, or otherwise touches any player or iframe. If an offline channel comes back live, its dot updates immediately, but the embed itself isn't restarted; use the card's own reload control if you want to actually (re)connect to the now-live stream.
+Automatic Twitch status checks run every 3 minutes while the tab is open, visible, and online, and once more when you return to a backgrounded tab if the last check is stale — never while the tab is hidden, offline, or if a check is already in progress. Those automatic passes only update the status dot and header meta text; they never reload, remount, or otherwise touch any player or iframe.
 
-The same check also runs automatically every 3 minutes while the tab is open, visible, and online, and once more when you return to a backgrounded tab if the last check is stale — never while the tab is hidden, offline, or if a check is already in progress.
+The toolbar **Refresh** button is separate and more forceful: it reloads already-loaded stream players and refreshes Twitch, YouTube, and Kick metadata together. Use it when you want players to reconnect after a long session. If an offline channel comes back live, its dot updates on the next status pass, but the embed itself isn't restarted until you hit **Refresh** or the card's own reload control.
 
 ### Cache
 
@@ -181,6 +183,47 @@ One-time setup on your DreamHost account, **after** you've uploaded `dist/`:
 4. That's it — no restart needed. If the cache directory can't be created/written, checks still work, just without caching.
 
 If the config is missing or Twitch rejects the credentials, every Twitch card just shows no status badge (an "unavailable" result) rather than any error — the embed itself is completely unaffected.
+
+---
+
+## Kick setup
+
+Checking whether a Kick channel exists, whether it's live, and pulling category/viewer/duration metadata uses Kick's official API via OAuth 2.1 client credentials — same architecture as [Twitch setup](#twitch-setup) above, through `public/api/kick-status.php`.
+
+**This is advisory only.** A missing/misconfigured key, a Kick API outage, or a network hiccup never blocks playback — the real Kick embed still mounts and plays normally; cards just show no status dot or header metadata until a check succeeds.
+
+### Status states
+
+Each Kick card shows the same style of status dot Twitch uses (in the header, and in the hover toolbar when headers are hidden). When live, category, viewer count, and duration appear inline after the platform badge when Kick provides them:
+
+| State | Dot | Meaning |
+|---|---|---|
+| `live` | pulsing red | The account exists and is currently broadcasting. |
+| `offline` | muted gray | The account exists but isn't currently broadcasting. |
+| `not_found` | steady red-orange | Kick confirms no account exists for that slug. |
+| `unavailable` | muted gray | Status couldn't be determined (endpoint, credentials, network, Kick API, or rate limit) — never removes the card or affects the embed. |
+
+Until credentials are installed, cards render with no status metadata at all — same as before Kick status existed — and the player works normally.
+
+### Refreshing status
+
+The toolbar **Refresh** button re-checks Twitch, YouTube, and Kick metadata in one action, and also reloads any already-loaded stream players. It never reloads the page or changes your lineup. Automatic checks run on the same ~3-minute cadence as Twitch while the tab is open and visible.
+
+One-time setup on your DreamHost account, **after** you've uploaded `dist/`:
+
+1. Create an app at [kick.com/settings/developer](https://kick.com/settings/developer) and copy its **Client ID** and **Client Secret**.
+2. Create a file **outside** the `multistream.cc/` web root — e.g. at `~/multistream-secrets/kick-config.php`, the same directory `youtube-config.php` and `twitch-config.php` already live in:
+   ```php
+   <?php
+   return [
+       'client_id' => 'YOUR_KICK_CLIENT_ID_HERE',
+       'client_secret' => 'YOUR_KICK_CLIENT_SECRET_HERE',
+   ];
+   ```
+3. Open `dist/api/kick-status.php` (before uploading, or edit it directly on the server) and check the `KICK_CONFIG_PATH`/`KICK_CACHE_DIR` constants near the top match your account's layout — same `~/<domain>/api/` assumption as the other resolvers, and the same shared cache directory.
+4. That's it — no restart needed. If the cache directory can't be created/written, checks still work, just without caching.
+
+If the config is missing, every Kick card renders exactly as it did before status metadata existed — no dot, no viewer count, fully working player.
 
 ---
 
@@ -205,30 +248,31 @@ To disable TikTok LIVE without touching anything else, see
 
 ### Share a layout
 
-Add streams to the URL path, separated by slashes. Use `t:` for Twitch and `k:` for Kick (lowercase prefixes):
+Add streams to the URL path, separated by slashes. Use `t:` for Twitch, `k:` for Kick, `y:` for YouTube, and `tt:` for TikTok LIVE (lowercase prefixes):
 
 ```
-https://multistream.cc/t:username/t:username/t:username/k:username/k:username/k:username
+https://multistream.cc/t:username/k:username/y:handle:username/tt:creator
 ```
 
 Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:username`) still work.
 
-Use **Share link** in the toolbar to copy the current URL. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Clear, Headers, Chat) are icons that expand their labels on hover.
+Open the toolbar **Share** menu to **Copy Watch URL**, **Preview Story Card**, **Download Story Card**, or **Share Watch Party**. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Refresh, Clear, Headers, Chat) are icons that expand their labels on hover.
 
 **Hide headers** collapses each card’s top bar for a denser grid. At rest you see **video only**. Hover a card and the player shrinks slightly so a control strip opens **below** the iframe — channel name, **drag to reorder**, magnifying-glass **Focus**, and **×** remove. Controls never stack over the embed (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)).
 
 ### Add streams from the toolbar
 
-Type a username to open a Twitch / Kick dropdown (leading `@` is stripped). Enter on a plain username uses your **last-chosen platform** (saved in `localStorage`). Explicit prefixes and URLs skip the dropdown and add immediately:
+Type a username to open a **Twitch / Kick / YouTube / TikTok LIVE (Experimental)** suggestion dropdown (leading `@` is stripped). Enter on a plain username uses your **last-chosen platform** (saved in `localStorage`). Explicit prefixes and URLs skip the dropdown and add immediately:
 
 | You enter | Result |
 |---|---|
-| Plain `username` / `@username` + dropdown | Twitch, Kick, or YouTube from the row you click |
+| Plain `username` / `@username` + dropdown | Twitch, Kick, YouTube, or TikTok LIVE from the row you click |
 | Plain `username` + Enter | Last-used platform |
-| `t:username` / `k:username` / `y:username` | That platform |
+| `t:username` / `k:username` / `y:username` / `tt:handle` | That platform |
 | `twitch.tv/username` / `kick.com/username` | Platform from URL |
 | A YouTube video/Shorts/live/`youtu.be` URL | That exact video |
 | A YouTube `/@handle`, `/channel/UC…`, or channel URL | That channel's current live stream |
+| A TikTok LIVE URL (`tiktok.com/@handle/live`, profile URL, or `vm`/`vt` share link) | Experimental TikTok LIVE for that creator |
 
 Drag a card’s **header** to reorder streams (or the **drag** handle in the hover toolbar when headers are hidden); the path URL updates and players keep playing (DOM move only).
 
@@ -253,11 +297,12 @@ opens its Twitch chat — see the `×` close and focus controls bullet above.
 
 ## Architecture
 
-Vanilla **TypeScript + Vite** on the frontend — no React. Three small PHP
+Vanilla **TypeScript + Vite** on the frontend — no React. Five small PHP
 endpoints on the server: YouTube channel/handle resolution (see
 [YouTube setup](#youtube-setup)), Twitch channel existence/live-status
-(see [Twitch setup](#twitch-setup)), and the Experimental TikTok LIVE
-resolver (see [TikTok LIVE setup](#tiktok-live-setup-experimental) and
+(see [Twitch setup](#twitch-setup)), Kick live-status/metadata (see
+[Kick setup](#kick-setup)), the Experimental TikTok LIVE resolver plus
+avatar proxy (see [TikTok LIVE setup](#tiktok-live-setup-experimental) and
 [docs/TIKTOK.md](docs/TIKTOK.md)); everything else is a static deploy.
 
 ```
@@ -267,12 +312,13 @@ src/
 ├── components/    # Grid, toolbar, chat, reorder, player cards
 ├── lib/           # Grid/Focus View layout math, add/remove playback recovery, embed debug logging
 └── styles/        # Layout and UI
-public/api/        # youtube-resolve.php + twitch-status.php + tiktok-resolve.php — the server-side pieces
+public/api/        # youtube-resolve.php, twitch-status.php, kick-status.php,
+                   # tiktok-resolve.php, tiktok-avatar.php — the server-side pieces
 ```
 
 Each platform implements a small adapter:
 
-- `parseInput()` — username, URL, or `t:` / `k:` / `y:` prefix
+- `parseInput()` — username, URL, or `t:` / `k:` / `y:` / `tt:` prefix (TikTok accepts full URLs only — see [docs/TIKTOK.md](docs/TIKTOK.md))
 - `buildEmbedUrl()` — iframe src with correct embed parameters
 
 YouTube's adapter additionally encodes its structured identity (video vs.
@@ -289,12 +335,13 @@ through `buildEmbedUrl` (which only handles the direct-video case).
 - **Twitch** uses the official video iframe (`player.twitch.tv/?channel=…`). Embeds must stay **visible and unobscured** (≥400×300, nothing stacked over the iframe) for muted autoplay in Chrome. Hide-headers mode keeps controls in a strip below the player, not on top of it.
 - **Twitch** embeds require a matching `parent` domain (injected automatically from `window.location.hostname`).
 - **Kick** uses the official iframe embed: `https://player.kick.com/{username}` ([Kick Help Center](https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream)). Documented query params are only `autoplay`, `muted`, and `allowfullscreen` — there is **no separate embed mode** that toggles volume UI on/off.
-- **Layout packing** follows MultiTwitch’s `optimize_size` idea: pick the column count and 16:9 size that fits *every* stream in the streams pane. Chat docks beside the grid and triggers a reflow — it does not cover players (Twitch pauses embeds that are clipped or scrolled off-screen).
+- **Layout packing** follows MultiTwitch’s `optimize_size` idea: pick the column count and 16:9 size that fits every *landscape* stream in the streams pane. Portrait tiles (9:16) use a separate 2-row rule instead of being squeezed into a partial landscape row — see the portrait bullet below. Chat docks beside the grid and triggers a reflow — it does not cover players (Twitch pauses embeds that are clipped or scrolled off-screen).
 - **Portrait tiles (YouTube Shorts, Experimental TikTok LIVE)** always span exactly 2 landscape grid rows in Grid View — not an aspect-ratio-derived fraction — so their bottom edge lines up with the second landscape row regardless of column position. The allocated 2-row box accounts for both the grid gap and each row's header chrome; the video itself is never stretched to fill it — it's letterboxed inside at its true 9:16 shape, centered with side whitespace when the box is wider than the video's own aspect. This is a general `orientation === 'portrait'` rule, not a YouTube-specific one — see [docs/TIKTOK.md](docs/TIKTOK.md) for TikTok LIVE's architecture and risk.
 - **Kick volume / control size:** Kick’s embed switches UI by **iframe layout width**. Below **769px** it uses mobile/tablet chrome (tiny overlays, often no volume). At **769px+** it uses desktop chrome with a speaker icon — hover the video, then the speaker, for the volume slider. When the packed cell is narrower than 769px, MultiStream still renders the Kick iframe at ≥769px and **CSS-scales** it into the cell so desktop chrome (including volume) stays available while the grid fits on-screen.
 - **Mute on load:** All platforms boot muted. Focus reloads/unmutes the focused stream (user click); exit keeps that stream unmuted. Tab hide / focus-hide pauses or blanks background players depending on platform, and resumes with each card's saved mute preference — **except YouTube**, see below.
 - **YouTube** uses the official IFrame Player API (`www.youtube.com/iframe_api`), with a bare-iframe fallback if that script is blocked. Channel/handle inputs resolve to a live `videoId` server-side on every load (see [YouTube setup](#youtube-setup)); direct video/Shorts/live/`youtu.be` URLs resolve locally with no network call. **Autoplay:** YouTube's own policy forbids multiple simultaneously autoplaying embeds, so only the very first YouTube player mounted in a page session ever requests autoplay — every later one (additional adds, focus-exit, tab-resume) stays paused until a real click, either on this app's Focus control or YouTube's own native play button. Embedding-disabled or unavailable videos show a clear in-tile message via the player's `onError` event; an offline channel shows "isn't live right now" rather than loading anything else.
-- **Chat** is Twitch-only (Kick and YouTube have no equivalent panel in this app). Hidden on phones.
+- **TikTok LIVE (experimental)** has no official embed — playback is a plain `<video>` element fed by mpegts.js after `tiktok-resolve.php` returns a temporary CDN URL (see [TikTok LIVE setup](#tiktok-live-setup-experimental)). Every card is marked Experimental. Portrait-only; uses the same 2-row grid rule as YouTube Shorts.
+- **Chat** is Twitch-only (Kick, YouTube, and TikTok have no equivalent panel in this app). Hidden on phones.
 
 ---
 
