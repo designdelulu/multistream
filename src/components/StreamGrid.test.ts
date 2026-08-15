@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetKickDurationTimerForTests,
+  __resetPlaybackRecoveryForTests,
   __resetTwitchDurationTimerForTests,
   __resetTwitchMutePollTimerForTests,
   __resetYouTubeDurationTimerForTests,
@@ -11,6 +12,7 @@ import {
   beginFocusExitRecovery,
   bindFocusViewEntry,
   bindFocusViewPromotion,
+  bindFocusViewToggle,
   bindStreamRemoved,
   getFocusedStreamId,
   getFocusViewPrimaryId,
@@ -164,6 +166,7 @@ function endedStats(videoId: string): YouTubeStatsResult {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  __resetPlaybackRecoveryForTests();
   __resetTwitchDurationTimerForTests();
   __resetYouTubeDurationTimerForTests();
   document.documentElement.classList.remove('headers-hidden');
@@ -768,6 +771,7 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
   afterEach(() => {
     // Destroy every constructed player via the real removal path and stop
     // the shared mute-poll timer, so no real setInterval survives this test.
+    __resetPlaybackRecoveryForTests();
     syncStreamGrid(container, fakeStore([]));
     __resetTwitchMutePollTimerForTests();
     delete (globalThis as unknown as { Twitch?: unknown }).Twitch;
@@ -899,6 +903,37 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
     // regression in stall recovery.
     expect(playerB.playCallCount).toBe(1);
     expect(playerB.isPaused()).toBe(false);
+  });
+
+  it('beginAddRemoveRecovery resumes a paused Theater/Focus primary — operation-scoped recovery must not skip it', async () => {
+    const twitchStreams: StreamRef[] = ['a', 'b'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    const [playerA, playerB] = createdTwitchPlayers;
+    playerA.play();
+    playerB.play();
+
+    syncViewMode(container, 'theater', twitchStreams);
+    setFocusViewPrimary(container, 'twitch:a');
+    expect(getFocusViewPrimaryId()).toBe('twitch:a');
+
+    const snapshotIds = snapshotPlayingTwitchPlayers(container);
+    expect(snapshotIds).toContain('twitch:a');
+
+    playerA.pause();
+    playerB.pause();
+    beginAddRemoveRecovery(container, snapshotIds, 'view-mode');
+
+    await vi.waitFor(() => {
+      expect(playerA.playCallCount).toBeGreaterThanOrEqual(2);
+    });
+    expect(playerA.isPaused()).toBe(false);
   });
 
   it('a player latched offline via the real Twitch OFFLINE event is excluded from the snapshot even while isPaused() reports false', async () => {
@@ -1061,7 +1096,7 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
     expect(snapshot).toEqual(expect.arrayContaining(['twitch:a', 'twitch:b', 'twitch:c']));
   });
 
-  it('headers-hidden reorder recovery restores 12 playing Twitch players across 20 operations', async () => {
+  it('headers-hidden reorder recovery restores 12 playing Twitch players across 20 operations', { timeout: 15_000 }, async () => {
     document.documentElement.classList.add('headers-hidden');
     try {
       const twitchStreams: StreamRef[] = Array.from({ length: 12 }, (_, i) => ({
@@ -1074,18 +1109,25 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
 
       syncStreamGrid(container, fakeStore(twitchStreams));
       await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(12));
+      const players = [...createdTwitchPlayers];
 
       for (let op = 0; op < 20; op++) {
-        for (const player of createdTwitchPlayers) player.play();
+        for (const player of players) player.play();
         const snapshotIds = snapshotReorderRecoveryIds(container);
         expect(snapshotIds).toHaveLength(12);
-        for (const player of createdTwitchPlayers) player.pause();
+        for (const player of players) player.pause();
+
+        // Drive pass 0 on a virtual clock so a busy full-suite event loop
+        // cannot starve the 0ms play() behind the 250ms circuit remount.
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
         beginAddRemoveRecovery(container, snapshotIds, 'reorder');
-        await vi.waitFor(() => {
-          expect(createdTwitchPlayers.every((player) => player.isPaused() === false)).toBe(true);
-        });
+        vi.advanceTimersByTime(1);
+        expect(players.every((player) => player.isPaused() === false)).toBe(true);
+        __resetPlaybackRecoveryForTests();
+        vi.useRealTimers();
       }
     } finally {
+      vi.useRealTimers();
       document.documentElement.classList.remove('headers-hidden');
     }
   });
@@ -2191,6 +2233,57 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
     expect(playerB.setMutedCalls).toEqual([]);
     expect(cardB.dataset.embedMuted).toBe('1');
   });
+
+  it('Full Window ↔ Theater keeps the same primary card, iframe, and Twitch.Player', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+      { id: 'twitch:b', platform: 'twitch', channel: 'b', muted: true, orientation: 'landscape' },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    const player = createdTwitchPlayers[0];
+    enterTheater(container, 'twitch:a', streams);
+
+    const card = container.querySelector<HTMLElement>('[data-stream-id="twitch:a"]')!;
+    const mount = card.querySelector<HTMLElement>('.stream-card__iframe')!;
+    expect(mount).toBeTruthy();
+
+    bindFocusViewToggle(() => {
+      const next = container.dataset.viewMode === 'theater' ? 'focus' : 'theater';
+      syncViewMode(container, next, streams);
+    });
+
+    card.querySelector<HTMLButtonElement>('.stream-card__focus')!.click();
+    expect(container.dataset.viewMode).toBe('focus');
+    expect(container.querySelector('[data-stream-id="twitch:a"]')).toBe(card);
+    expect(card.querySelector('.stream-card__iframe')).toBe(mount);
+    expect(createdTwitchPlayers[0]).toBe(player);
+
+    card.querySelector<HTMLButtonElement>('.stream-card__focus')!.click();
+    expect(container.dataset.viewMode).toBe('theater');
+    expect(container.querySelector('[data-stream-id="twitch:a"]')).toBe(card);
+    expect(card.querySelector('.stream-card__iframe')).toBe(mount);
+    expect(createdTwitchPlayers).toHaveLength(2);
+  });
+
+  it('Full Window primary control becomes a film icon labeled Enter Theater Mode', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(1));
+    const button = container.querySelector<HTMLButtonElement>('[data-stream-id="twitch:a"] .stream-card__focus')!;
+    expect(button.title).toBe('Focus stream');
+
+    enterTheater(container, 'twitch:a', streams);
+    expect(button.title).toBe('Enter Theater Mode');
+    expect(button.getAttribute('aria-label')).toBe('Enter Theater Mode');
+    expect(button.innerHTML).toContain('rect');
+
+    syncViewMode(container, 'focus', streams);
+    expect(button.title).toBe('Exit Theater Mode');
+    expect(button.getAttribute('aria-label')).toBe('Exit Theater Mode');
+  });
 });
 
 describe('bindStreamRemoved — Undo hook fires with the removed stream and its previous index', () => {
@@ -2436,6 +2529,28 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
     expect(withoutComments).toMatch(
       /html\.headers-hidden[\s\S]*?\[data-orientation=['"]portrait['"]\]\s*\{[^}]*height:\s*auto/,
+    );
+  });
+
+  it('headers-hidden Grid --player-height lock does not apply in Full Window or Theater', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(withoutComments).toMatch(
+      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\)\s+\.stream-card\s*\{[^}]*height:\s*var\(--player-height/,
+    );
+    expect(withoutComments).toMatch(
+      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\):not\(:empty\)\s+\.stream-card__player\s*\{[^}]*height:\s*auto\s*!important/,
+    );
+    expect(withoutComments).toMatch(
+      /\.stream-grid\[data-view-mode='theater'\] \.stream-card\.is-focus-primary \{[^}]*align-self:\s*center/,
+    );
+    expect(withoutComments).toMatch(
+      /\.stream-grid\[data-view-mode='focus'\] \.stream-card\.is-focus-primary \{[^}]*align-self:\s*center/,
+    );
+    expect(withoutComments).toMatch(
+      /html\.headers-hidden[\s\S]*?\[data-view-mode='theater'\][\s\S]*?--focus-primary-height/,
     );
   });
 

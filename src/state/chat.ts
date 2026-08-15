@@ -5,6 +5,8 @@ const STORAGE_KEY = 'multistream:chat-visible';
 
 type Listener = () => void;
 
+const CHAT_PLATFORMS = new Set(['twitch', 'kick']);
+
 /**
  * Fresh session (no stored key) defaults CLOSED — chat only opens once the
  * user explicitly opens it (or a prior session's explicit choice is being
@@ -31,16 +33,24 @@ function persistVisiblePreference(visible: boolean): void {
   }
 }
 
+function chatStreams(store: StreamStore): StreamRef[] {
+  return store.getStreams().filter((stream) => CHAT_PLATFORMS.has(stream.platform));
+}
+
 function twitchStreams(store: StreamStore): StreamRef[] {
   return store.getStreams().filter((stream) => stream.platform === 'twitch');
+}
+
+export function isChatPlatform(platform: string | undefined): boolean {
+  return platform === 'twitch' || platform === 'kick';
 }
 
 export function createChatStore(streamStore: StreamStore) {
   let visible = loadVisiblePreference();
   let selectedId: string | null = null;
-  // Transient, never persisted — locked while a non-Twitch stream is
-  // focused (see main.ts's bindStreamFocus wiring), since chat only ever
-  // supports Twitch and a focused YouTube/Kick card has nothing to show.
+  // Transient, never persisted — locked while a non-chat stream is focused
+  // (see main.ts's bindStreamFocus wiring). Twitch and Kick both have a
+  // same-origin chat panel; YouTube/TikTok still have nothing to show.
   let toggleAllowed = true;
   const listeners = new Set<Listener>();
 
@@ -51,7 +61,7 @@ export function createChatStore(streamStore: StreamStore) {
   }
 
   function syncSelection(): void {
-    const streams = twitchStreams(streamStore);
+    const streams = chatStreams(streamStore);
     if (streams.length === 0) {
       selectedId = null;
       return;
@@ -100,7 +110,7 @@ export function createChatStore(streamStore: StreamStore) {
     },
 
     hasChatSupport(): boolean {
-      return twitchStreams(streamStore).length > 0;
+      return chatStreams(streamStore).length > 0;
     },
 
     hasAnyStreams(): boolean {
@@ -111,12 +121,16 @@ export function createChatStore(streamStore: StreamStore) {
       return twitchStreams(streamStore);
     },
 
+    getChatStreams(): StreamRef[] {
+      return chatStreams(streamStore);
+    },
+
     getSelectedId(): string | null {
       return selectedId;
     },
 
     setSelectedId(id: string): void {
-      if (!twitchStreams(streamStore).some((stream) => stream.id === id)) {
+      if (!chatStreams(streamStore).some((stream) => stream.id === id)) {
         return;
       }
       selectedId = id;
@@ -126,7 +140,7 @@ export function createChatStore(streamStore: StreamStore) {
     getSelectedStream(): StreamRef | null {
       syncSelection();
       if (!selectedId) return null;
-      return twitchStreams(streamStore).find((stream) => stream.id === selectedId) ?? null;
+      return chatStreams(streamStore).find((stream) => stream.id === selectedId) ?? null;
     },
 
     subscribe(listener: Listener): () => void {

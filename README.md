@@ -33,8 +33,8 @@ MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and ex
 - **Drag to reorder** stream cards (drag the card header, or the drag handle in the hover toolbar when headers are hidden); URL updates without remounting players
 - **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
 - **Shareable path URLs** like `/t:username/k:username/y:handle:username/tt:creator`
-- **× close** and **focus** controls per stream — focus fills the area below the toolbar, opens that stream’s Twitch chat, and remounts unmuted (Kick has no chat panel)
-- **Twitch chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
+- **× close** and **focus** controls per stream — focus fills the area below the toolbar, opens that stream’s Twitch or Kick chat, and remounts unmuted
+- **Twitch / Kick chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
 - **Streams always boot muted** — unmute on focus or from the platform's own player chrome
 - **Mostly static deploy** — Twitch and Kick embeds, direct YouTube video URLs, and the app shell itself need no backend. YouTube channel/handle → live lookup, optional Twitch/Kick status metadata, and experimental TikTok LIVE playback each use a small same-origin PHP script in `dist/api/` (see [YouTube setup](#youtube-setup), [Twitch setup](#twitch-setup), [Kick setup](#kick-setup), and [TikTok LIVE setup](#tiktok-live-setup-experimental) below). No database, no framework, no user accounts.
 
@@ -95,6 +95,8 @@ dist/
 │   ├── youtube-resolve.php
 │   ├── twitch-status.php
 │   ├── kick-status.php
+│   ├── kick-webhook.php
+│   ├── kick-chat.php
 │   ├── tiktok-resolve.php
 │   └── tiktok-avatar.php
 ├── og-image.png
@@ -107,7 +109,7 @@ Steps:
 
 1. Run `npm run build` locally whenever you change the app.
 2. In DreamHost File Manager or FTP, open the folder for **multistream.cc**.
-3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes all five files under `api/` (`youtube-resolve.php`, `twitch-status.php`, `kick-status.php`, `tiktok-resolve.php`, and `tiktok-avatar.php`).
+3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes all seven files under `api/` (`youtube-resolve.php`, `twitch-status.php`, `kick-status.php`, `kick-webhook.php`, `kick-chat.php`, `tiktok-resolve.php`, and `tiktok-avatar.php`).
 4. Confirm `index.html` sits directly in the domain root.
 5. Complete the one-time [YouTube setup](#youtube-setup), [Twitch setup](#twitch-setup), and [Kick setup](#kick-setup) below (config files outside the web root) — channel/handle resolution and live-status checks won't work until that's done, but direct video URLs, Twitch/Kick/YouTube embeds, and TikTok LIVE (via `tiktok-resolve.php`, no credentials) all work as soon as `dist/` is uploaded.
 6. Visit `https://multistream.cc/` — Twitch embeds will automatically use `multistream.cc` as the `parent` domain.
@@ -221,7 +223,13 @@ One-time setup on your DreamHost account, **after** you've uploaded `dist/`:
    ];
    ```
 3. Open `dist/api/kick-status.php` (before uploading, or edit it directly on the server) and check the `KICK_CONFIG_PATH`/`KICK_CACHE_DIR` constants near the top match your account's layout — same `~/<domain>/api/` assumption as the other resolvers, and the same shared cache directory.
-4. That's it — no restart needed. If the cache directory can't be created/written, checks still work, just without caching.
+4. That's it for metadata — no restart needed. If the cache directory can't be created/written, checks still work, just without caching.
+
+5. **Kick chat (optional, after the app credentials already work).** In Kick Settings → Developer → the MultiStream.cc app → **Enable Webhooks**, enter:
+
+   `https://multistream.cc/api/kick-webhook.php`
+
+   Chat is real-time via Kick's official `chat.message.sent` event. There is no historical backfill — the panel starts from messages received after the webhook is live. Sending chat from MultiStream is not wired yet (that needs a user/bot OAuth token, not the existing App Access Token).
 
 If the config is missing, every Kick card renders exactly as it did before status metadata existed — no dot, no viewer count, fully working player.
 
@@ -291,17 +299,17 @@ primary is sized by 16:9.
 
 This is a different control from each card's own **Focus** (magnifying
 glass) button, which fills the streams pane with just that one stream and
-opens its Twitch chat — see the `×` close and focus controls bullet above.
+opens its Twitch or Kick chat — see the `×` close and focus controls bullet above.
 
 ---
 
 ## Architecture
 
-Vanilla **TypeScript + Vite** on the frontend — no React. Five small PHP
+Vanilla **TypeScript + Vite** on the frontend — no React. Seven small PHP
 endpoints on the server: YouTube channel/handle resolution (see
 [YouTube setup](#youtube-setup)), Twitch channel existence/live-status
-(see [Twitch setup](#twitch-setup)), Kick live-status/metadata (see
-[Kick setup](#kick-setup)), the Experimental TikTok LIVE resolver plus
+(see [Twitch setup](#twitch-setup)), Kick live-status/metadata plus official
+Kick chat webhook/poll (see [Kick setup](#kick-setup)), the Experimental TikTok LIVE resolver plus
 avatar proxy (see [TikTok LIVE setup](#tiktok-live-setup-experimental) and
 [docs/TIKTOK.md](docs/TIKTOK.md)); everything else is a static deploy.
 
@@ -313,7 +321,8 @@ src/
 ├── lib/           # Grid/Focus View layout math, add/remove playback recovery, embed debug logging
 └── styles/        # Layout and UI
 public/api/        # youtube-resolve.php, twitch-status.php, kick-status.php,
-                   # tiktok-resolve.php, tiktok-avatar.php — the server-side pieces
+                   # kick-webhook.php, kick-chat.php, tiktok-resolve.php,
+                   # tiktok-avatar.php — the server-side pieces
 ```
 
 Each platform implements a small adapter:

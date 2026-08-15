@@ -59,9 +59,10 @@ skipped just because there's no pipeline enforcing it.
 
 ## Before uploading to DreamHost specifically
 
-6. Confirm all five API scripts are present in the build output:
+6. Confirm all seven API scripts are present in the build output:
    `dist/api/youtube-resolve.php`, `dist/api/twitch-status.php`,
-   `dist/api/kick-status.php`, `dist/api/tiktok-resolve.php`, and
+   `dist/api/kick-status.php`, `dist/api/kick-webhook.php`,
+   `dist/api/kick-chat.php`, `dist/api/tiktok-resolve.php`, and
    `dist/api/tiktok-avatar.php` — see
    [README.md § YouTube setup](../README.md#youtube-setup),
    [§ Twitch setup](../README.md#twitch-setup), and

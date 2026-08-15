@@ -18,10 +18,10 @@ Watch Twitch, Kick, YouTube, and experimental TikTok LIVE on one page. MultiStre
 | Drag reorder | Drag card headers — or the drag handle in the hover toolbar when headers are hidden |
 | Focus (headers hidden) | Magnifying glass in the hover toolbar |
 | Session restore | Last lineup saved in `localStorage`; share URLs in the path take priority |
-| Focus mode | Expand one stream, unmute it, open Twitch chat when available |
+| Focus mode | Expand one stream, unmute it, open Twitch or Kick chat when available |
 | Focus View | Toolbar toggle: large primary + a tray of the rest; click a tray stream's header to promote it, no remount |
 | Portrait streams (Shorts, TikTok LIVE) | Get their own 2-row-tall grid slot in Grid View, letterboxed to true 9:16 — never stretched |
-| Twitch chat | Docked sidebar on desktop/tablet (Kick and YouTube have no equivalent panel) |
+| Twitch / Kick chat | Docked sidebar on desktop/tablet (YouTube has no equivalent panel) |
 | Muted by default | Every stream boots muted; unmute via focus or the player's own controls |
 | Twitch + Kick status | Live/offline/not-found/unavailable dot plus category/viewers/duration when live; refreshed automatically and via toolbar **Refresh** |
 
@@ -78,7 +78,7 @@ one stream and opens its chat.
 
 - Click the expand (focus) control on a card (header button, or magnifying glass in no-header mode).
 - That stream fills the area below the toolbar and reloads **unmuted**.
-- Twitch chat opens automatically for focused Twitch streams.
+- Twitch or Kick chat opens automatically for the focused stream.
 - In no-header mode, the focused stream's **header bar reappears** so you can × minimize.
 - Press **Escape** or × / focus again to exit. The focused stream **stays unmuted**; other streams resume with their previous mute state.
 

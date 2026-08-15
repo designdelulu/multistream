@@ -46,7 +46,7 @@ import {
   YOUTUBE_STATS_POLL_INTERVAL_MS,
 } from './lib/youtubeStatusScheduler';
 import { phoneMediaQuery } from './lib/viewport';
-import { createChatStore } from './state/chat';
+import { createChatStore, isChatPlatform } from './state/chat';
 import { createHeadersStore } from './state/headers';
 import { createStreamStore, detectStreamListChange } from './state/streams';
 import { createViewModeStore } from './state/viewMode';
@@ -161,9 +161,11 @@ function afterHeadersToggle(): void {
  * Twitch player staying paused after Theater→Grid). Snapshotting on the way
  * into Theater and replaying play() on the way out — the same pattern
  * beginFocusExitRecovery already uses for the older solo-focus feature —
- * closes that gap immediately instead of waiting on the watchdog. Scoped to
- * 'theater' specifically (not 'focus', whose tray tiles stay visible and
- * never collapse) so a Theater<->Focus toggle mid-session is unaffected.
+ * closes that gap immediately instead of waiting on the watchdog. Entering
+ * Theater (from Grid or from Focus) now also runs beginAddRemoveRecovery so
+ * the still-visible primary is recovered after the resize; this snapshot is
+ * only consumed on the way *out* of Theater, when hidden secondaries become
+ * visible again.
  */
 let theaterEntrySnapshot: { ids: string[]; startedAt: number } | null = null;
 
@@ -217,11 +219,9 @@ function afterViewModeToggle(): void {
       return;
     }
 
-    if (nextMode !== 'theater') {
-      requestAnimationFrame(() => {
-        beginAddRemoveRecovery(gridEl, playingBefore, 'view-mode');
-      });
-    }
+    requestAnimationFrame(() => {
+      beginAddRemoveRecovery(gridEl, playingBefore, 'view-mode');
+    });
   });
 }
 
@@ -231,9 +231,9 @@ function afterViewModeToggle(): void {
  * is now unreachable). Runs on every view-mode change (afterViewModeToggle)
  * and every primary promotion (bindFocusViewPrimaryChanged) so switching
  * primary mid-Focus follows the same "lock to whichever stream is now big"
- * rule as first entering Theater. Chat only ever supports Twitch — for a
- * non-Twitch primary the toggle is locked out entirely rather than left
- * open on an unrelated Twitch stream that merely happens to share the grid.
+ * rule as first entering Theater. Chat supports Twitch and Kick — for a
+ * YouTube/TikTok primary the toggle is locked out rather than left open on
+ * an unrelated chat stream that merely happens to share the grid.
  */
 function syncPrimaryChat(): void {
   const primaryId = viewModeStore.getMode() !== 'grid' ? getFocusViewPrimaryId() : null;
@@ -248,8 +248,8 @@ function syncPrimaryChat(): void {
     const platform = gridEl.querySelector<HTMLElement>(
       `.stream-card[data-stream-id="${CSS.escape(primaryId)}"]`,
     )?.dataset.platform;
-    chatStore.setToggleAllowed(platform === 'twitch');
-    if (platform === 'twitch') {
+    chatStore.setToggleAllowed(isChatPlatform(platform));
+    if (isChatPlatform(platform)) {
       chatStore.setSelectedId(primaryId);
       chatStore.setVisible(true, { persist: false });
     } else {
@@ -602,13 +602,12 @@ bindStreamFocus((focused, streamId) => {
       `.stream-card[data-stream-id="${CSS.escape(streamId)}"]`,
     )?.dataset.platform;
 
-    // Chat only ever supports Twitch — while focused on a YouTube/Kick
+    // Chat supports Twitch and Kick. While focused on a YouTube/TikTok
     // stream, the toggle would otherwise still open a dropdown of whatever
-    // other Twitch streams happen to be in the grid, unrelated to what's on
+    // other chat streams happen to be in the grid, unrelated to what's on
     // screen. Lock it out entirely for the duration of that focus session.
-    chatStore.setToggleAllowed(platform === 'twitch');
-
-    if (platform === 'twitch') {
+    chatStore.setToggleAllowed(isChatPlatform(platform));
+    if (isChatPlatform(platform)) {
       chatStore.setSelectedId(streamId);
       chatStore.setVisible(true, { persist: false });
     } else {

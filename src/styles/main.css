@@ -554,6 +554,84 @@ html.stream-focused .stream-card__header {
   border: 0;
 }
 
+.chat-panel__kick {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-panel__kick[hidden] {
+  display: none !important;
+}
+
+.chat-panel__kick-empty {
+  margin: auto;
+  padding: 24px 20px;
+  max-width: 260px;
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.chat-panel__kick-empty[hidden] {
+  display: none;
+}
+
+.chat-panel__kick-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-panel__kick-msg {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.chat-panel__kick-reply {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.chat-panel__kick-line {
+  display: block;
+}
+
+.chat-panel__kick-badge {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  color: var(--text);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.chat-panel__kick-user {
+  font-weight: 700;
+}
+
+.chat-panel__kick-emote {
+  height: 1.35em;
+  width: auto;
+  vertical-align: middle;
+}
+
+.chat-panel__kick-composer[hidden] {
+  display: none !important;
+}
+
 .chat-panel__message {
   margin: auto;
   padding: 24px 20px;
@@ -896,8 +974,12 @@ html.stream-focused .stream-card__toolbar {
  * cell. A plain height shrink would clip Kick’s bottom chrome (volume / pause).
  * On hover we re-scale with min(widthScale, heightScale) so the full player
  * still fits inside the smaller box.
+ *
+ * GRID ONLY. Full Window / Theater size the primary with --focus-primary-*
+ * and must not inherit the Grid --player-height lock — that is what collapsed
+ * a 16:9 Full Window player into a short strip when headers were hidden.
  */
-html.headers-hidden .stream-card {
+html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card {
   display: flex;
   flex-direction: column;
   height: var(--player-height, auto);
@@ -916,7 +998,7 @@ html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mo
   height: auto;
 }
 
-html.headers-hidden .stream-grid:not(:empty) .stream-card__player {
+html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']):not(:empty) .stream-card__player {
   flex: 1 1 auto;
   width: 100%;
   min-height: 0;
@@ -924,8 +1006,10 @@ html.headers-hidden .stream-grid:not(:empty) .stream-card__player {
   aspect-ratio: unset;
 }
 
-html.headers-hidden .stream-card--kick:not(.is-focused):hover .stream-card__iframe,
-html.headers-hidden .stream-card--kick:not(.is-focused):focus-within .stream-card__iframe {
+html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
+  .stream-card--kick:not(.is-focused):hover .stream-card__iframe,
+html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
+  .stream-card--kick:not(.is-focused):focus-within .stream-card__iframe {
   /* 9999px fallback when --player-height is unset (phone stack) → width scale wins. */
   transform: translate(-50%, -50%)
     scale(
@@ -1256,7 +1340,7 @@ html.headers-hidden .stream-card__overlay-controls {
   color: var(--danger);
 }
 
-.stream-grid:not(:empty) .stream-card__player {
+.stream-grid:not(:empty):not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card__player {
   aspect-ratio: unset;
   height: var(--player-height, auto);
 }
@@ -1378,10 +1462,10 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
 .stream-grid[data-view-mode='focus'],
 .stream-grid[data-view-mode='focus'][data-has-kick='1'] {
   grid-template-columns: repeat(var(--focus-tray-count, 1), var(--focus-tray-column-width, 1fr));
-  grid-template-rows: var(--focus-primary-row-height, auto) var(--focus-tray-row-height, auto);
+  grid-template-rows: minmax(0, 1fr) var(--focus-tray-row-height, auto);
   grid-auto-columns: var(--focus-tray-column-width, 1fr);
   grid-auto-flow: column;
-  align-content: start;
+  align-content: stretch;
   justify-content: center;
   overflow-x: auto;
   overflow-y: hidden;
@@ -1558,7 +1642,7 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   grid-column: 1 / -1;
   width: var(--focus-primary-width, 100%);
   justify-self: start;
-  align-self: start;
+  align-self: center;
   position: sticky;
   left: var(--focus-primary-offset-left, 0px);
   cursor: default;
@@ -1582,8 +1666,8 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
  */
 .stream-grid[data-view-mode='theater'] {
   grid-template-columns: 1fr;
-  grid-template-rows: var(--focus-primary-row-height, auto);
-  align-content: center;
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
   justify-content: center;
   overflow: hidden;
 }
@@ -1597,7 +1681,7 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   grid-column: 1 / -1;
   width: var(--focus-primary-width, 100%);
   justify-self: start;
-  align-self: start;
+  align-self: center;
   position: sticky;
   left: var(--focus-primary-offset-left, 0px);
   cursor: default;
@@ -1606,6 +1690,27 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
 .stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary .stream-card__player {
   width: var(--focus-primary-width, 100%);
   height: var(--focus-primary-height, auto);
+}
+
+/*
+ * Headers-hidden Full Window / Theater: keep the JS contain-fit box.
+ * Grid --player-height must not win here (see the Grid-only headers-hidden
+ * lock above). Hover toolbar may still open below the player; it must not
+ * flex-shrink the 16:9/9:16 box.
+ */
+html.headers-hidden .stream-grid[data-view-mode='focus'] .stream-card.is-focus-primary,
+html.headers-hidden .stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary {
+  height: auto;
+  overflow: hidden;
+}
+
+html.headers-hidden .stream-grid[data-view-mode='focus'] .stream-card.is-focus-primary .stream-card__player,
+html.headers-hidden .stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary .stream-card__player {
+  flex: 0 0 auto;
+  width: var(--focus-primary-width, 100%);
+  height: var(--focus-primary-height, auto);
+  min-height: 0;
+  aspect-ratio: unset;
 }
 
 .stream-card__iframe {

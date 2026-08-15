@@ -111,6 +111,36 @@ define('KICK_TOKEN_REFRESH_MARGIN_SECONDS', 300);
 define('KICK_LOCK_WAIT_MS', 150);
 define('KICK_LOCK_WAIT_MAX_MS', 2000);
 define('KICK_UPSTREAM_TIMEOUT_SECONDS', 5);
+if (!defined('KICK_CHAT_MAX_MESSAGES')) {
+    define('KICK_CHAT_MAX_MESSAGES', 150);
+}
+if (!defined('KICK_CHAT_BUFFER_TTL')) {
+    define('KICK_CHAT_BUFFER_TTL', 48 * 60 * 60);
+}
+if (!defined('KICK_CHAT_SUB_CACHE_TTL')) {
+    define('KICK_CHAT_SUB_CACHE_TTL', 6 * 60 * 60);
+}
+if (!defined('KICK_WEBHOOK_MAX_SKEW_SECONDS')) {
+    define('KICK_WEBHOOK_MAX_SKEW_SECONDS', 600);
+}
+if (!defined('KICK_PUBLIC_KEY_CACHE_TTL')) {
+    define('KICK_PUBLIC_KEY_CACHE_TTL', 24 * 60 * 60);
+}
+/** Kick's documented webhook signing key — public, used when /public-key is unreachable. */
+if (!defined('KICK_WEBHOOK_PUBLIC_KEY_FALLBACK')) {
+    define(
+        'KICK_WEBHOOK_PUBLIC_KEY_FALLBACK',
+        "-----BEGIN PUBLIC KEY-----\n" .
+        "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq/+l1WnlRrGSolDMA+A8\n" .
+        "6rAhMbQGmQ2SapVcGM3zq8ANXjnhDWocMqfWcTd95btDydITa10kDvHzw9WQOqp2\n" .
+        "MZI7ZyrfzJuz5nhTPCiJwTwnEtWft7nV14BYRDHvlfqPUaZ+1KR4OCaO/wWIk/rQ\n" .
+        "L/TjY0M70gse8rlBkbo2a8rKhu69RQTRsoaf4DVhDPEeSeI5jVrRDGAMGL3cGuyY\n" .
+        "6CLKGdjVEM78g3JfYOvDU/RvfqD7L89TZ3iN94jrmWdGz34JNlEI5hqK8dd7C5EF\n" .
+        "BEbZ5jgB8s8ReQV8H+MkuffjdAj3ajDDX3DOJMIut1lBrUVD1AaSrGCKHooWoL2e\n" .
+        "twIDAQAB\n" .
+        "-----END PUBLIC KEY-----",
+    );
+}
 
 // --- Response helpers --------------------------------------------------
 
@@ -261,21 +291,26 @@ function kick_release_lock($handle): void
 /**
  * Tests set $GLOBALS['kick_http_transport'] to a closure with this shape
  * before requiring this file (with KICK_STATUS_TESTING defined), so no real
- * network call is ever made in automated tests.
+ * network call is ever made in automated tests. Optional `$rawBody` is a JSON
+ * POST/PATCH body; injectable transports receive it as `$params['_json']` so
+ * existing 4-argument test closures keep working.
  *
  * @return array{httpCode:int,body:?array,error:?string}
  */
-function kick_perform_http_request(string $method, string $url, array $params, array $headers): array
+function kick_perform_http_request(string $method, string $url, array $params, array $headers, ?string $rawBody = null): array
 {
     $transport = $GLOBALS['kick_http_transport'] ?? null;
     if ($transport !== null) {
+        if ($rawBody !== null) {
+            $params = array_merge($params, ['_json' => $rawBody]);
+        }
         return $transport($method, $url, $params, $headers);
     }
-    return kick_curl_json_request($method, $url, $params, $headers);
+    return kick_curl_json_request($method, $url, $params, $headers, $rawBody);
 }
 
 /** @return array{httpCode:int,body:?array,error:?string} */
-function kick_curl_json_request(string $method, string $url, array $params, array $headers): array
+function kick_curl_json_request(string $method, string $url, array $params, array $headers, ?string $rawBody = null): array
 {
     if (!function_exists('curl_init')) {
         error_log('kick-status: curl extension not available');
@@ -294,9 +329,13 @@ function kick_curl_json_request(string $method, string $url, array $params, arra
     if ($method === 'POST') {
         $opts[CURLOPT_URL] = $url;
         $opts[CURLOPT_POST] = true;
-        $opts[CURLOPT_POSTFIELDS] = http_build_query($params);
+        $opts[CURLOPT_POSTFIELDS] = $rawBody ?? http_build_query($params);
     } else {
         $opts[CURLOPT_URL] = $params ? ($url . '?' . http_build_query($params)) : $url;
+        if ($rawBody !== null) {
+            $opts[CURLOPT_CUSTOMREQUEST] = $method;
+            $opts[CURLOPT_POSTFIELDS] = $rawBody;
+        }
     }
 
     curl_setopt_array($ch, $opts);
@@ -406,6 +445,59 @@ function kick_call_api(string $path, string $queryString, ?string &$errorCode): 
 
     if ($result['httpCode'] !== 200 || !is_array($result['body'])) {
         error_log('kick-status: ' . $path . ' returned http ' . $result['httpCode']);
+        $errorCode = 'api_error';
+        return null;
+    }
+
+    $errorCode = null;
+    return $result['body'];
+}
+
+/**
+ * JSON-bodied Kick API call (POST subscriptions, etc.). GET still uses
+ * kick_call_api. Same 401-retry / rate-limit contract.
+ *
+ * @param array<string,mixed>|null $jsonBody
+ * @return array<string,mixed>|null
+ */
+function kick_call_api_json(string $method, string $path, array $query, ?array $jsonBody, ?string &$errorCode): ?array
+{
+    $token = kick_get_app_token($errorCode);
+    if ($token === null) return null;
+
+    $url = KICK_API_BASE . $path;
+    if ($query !== []) {
+        $url .= '?' . http_build_query($query);
+    }
+    $rawBody = $jsonBody !== null ? json_encode($jsonBody, JSON_UNESCAPED_SLASHES) : null;
+    if ($jsonBody !== null && $rawBody === false) {
+        $errorCode = 'api_error';
+        return null;
+    }
+
+    $headers = ['Accept: application/json', 'Authorization: Bearer ' . $token];
+    if ($rawBody !== null) {
+        $headers[] = 'Content-Type: application/json';
+    }
+
+    $result = kick_perform_http_request($method, $url, [], $headers, $rawBody);
+
+    if ($result['httpCode'] === 401) {
+        kick_cache_delete('kick:app-token');
+        $token = kick_get_app_token($errorCode);
+        if ($token === null) return null;
+        $headers[1] = 'Authorization: Bearer ' . $token;
+        $result = kick_perform_http_request($method, $url, [], $headers, $rawBody);
+    }
+
+    if ($result['httpCode'] === 429) {
+        error_log('kick-status: ' . $path . ' rate-limited');
+        $errorCode = 'rate_limited';
+        return null;
+    }
+
+    if ($result['httpCode'] !== 200 || !is_array($result['body'])) {
+        error_log('kick-status: ' . $method . ' ' . $path . ' returned http ' . $result['httpCode']);
         $errorCode = 'api_error';
         return null;
     }
@@ -761,6 +853,425 @@ function build_kick_status_results(array $channels): array
     }
 
     return $results;
+}
+
+// --- Kick Events / chat helpers (webhook + poll endpoints) ----------------
+
+function kick_chat_dir(): string
+{
+    return KICK_CACHE_DIR . '/kick-chat';
+}
+
+function kick_chat_dir_ready(): bool
+{
+    if (!kick_cache_dir_ready()) return false;
+    $dir = kick_chat_dir();
+    if (is_dir($dir)) return is_writable($dir);
+    $ok = @mkdir($dir, 0700, true);
+    if (!$ok) {
+        error_log('kick-status: could not create kick-chat cache dir');
+    }
+    return $ok;
+}
+
+function kick_chat_buffer_path(string $slug): string
+{
+    return kick_chat_dir() . '/' . $slug . '.json';
+}
+
+/** @return array{updatedAt:int,messages:list<array<string,mixed>>} */
+function kick_chat_empty_buffer(): array
+{
+    return ['updatedAt' => time(), 'messages' => []];
+}
+
+/**
+ * @return array{updatedAt:int,messages:list<array<string,mixed>>}
+ */
+function kick_chat_buffer_read(string $slug): array
+{
+    $path = kick_chat_buffer_path($slug);
+    if (!is_readable($path)) return kick_chat_empty_buffer();
+    $raw = @file_get_contents($path);
+    if ($raw === false) return kick_chat_empty_buffer();
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded) || !isset($decoded['messages']) || !is_array($decoded['messages'])) {
+        return kick_chat_empty_buffer();
+    }
+    $updatedAt = isset($decoded['updatedAt']) ? (int) $decoded['updatedAt'] : 0;
+    if ($updatedAt > 0 && (time() - $updatedAt) > KICK_CHAT_BUFFER_TTL) {
+        @unlink($path);
+        return kick_chat_empty_buffer();
+    }
+    return [
+        'updatedAt' => $updatedAt,
+        'messages' => array_values($decoded['messages']),
+    ];
+}
+
+/**
+ * @param array{updatedAt:int,messages:list<array<string,mixed>>} $buffer
+ */
+function kick_chat_buffer_write(string $slug, array $buffer): void
+{
+    if (!kick_chat_dir_ready()) return;
+    $path = kick_chat_buffer_path($slug);
+    $payload = json_encode($buffer, JSON_UNESCAPED_SLASHES);
+    if ($payload === false) return;
+    $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, $payload, LOCK_EX) === false) return;
+    @rename($tmp, $path);
+}
+
+function kick_chat_prune_inactive_buffers(): void
+{
+    if (!kick_chat_dir_ready()) return;
+    $cutoff = time() - KICK_CHAT_BUFFER_TTL;
+    $files = @glob(kick_chat_dir() . '/*.json') ?: [];
+    foreach ($files as $file) {
+        $mtime = @filemtime($file);
+        if ($mtime !== false && $mtime < $cutoff) {
+            @unlink($file);
+        }
+    }
+}
+
+/**
+ * @param callable(array{updatedAt:int,messages:list<array<string,mixed>>}):array{updatedAt:int,messages:list<array<string,mixed>>} $mutator
+ */
+function kick_chat_buffer_update(string $slug, callable $mutator): void
+{
+    if (!kick_chat_dir_ready()) return;
+    $path = kick_chat_buffer_path($slug);
+    $handle = @fopen($path, 'c+');
+    if ($handle === false) return;
+    if (!flock($handle, LOCK_EX)) {
+        fclose($handle);
+        return;
+    }
+    try {
+        $raw = stream_get_contents($handle);
+        $decoded = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+        $buffer = is_array($decoded) && isset($decoded['messages']) && is_array($decoded['messages'])
+            ? ['updatedAt' => (int) ($decoded['updatedAt'] ?? time()), 'messages' => array_values($decoded['messages'])]
+            : kick_chat_empty_buffer();
+        $buffer = $mutator($buffer);
+        $buffer['updatedAt'] = time();
+        if (count($buffer['messages']) > KICK_CHAT_MAX_MESSAGES) {
+            $buffer['messages'] = array_slice($buffer['messages'], -KICK_CHAT_MAX_MESSAGES);
+        }
+        $payload = json_encode($buffer, JSON_UNESCAPED_SLASHES);
+        if ($payload === false) return;
+        rewind($handle);
+        ftruncate($handle, 0);
+        fwrite($handle, $payload);
+        fflush($handle);
+    } finally {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+}
+
+/**
+ * @param array<string,mixed> $payload Kick chat.message.sent body
+ * @return array<string,mixed>|null stored message, or null if unusable
+ */
+function kick_chat_normalize_message(array $payload): ?array
+{
+    $messageId = isset($payload['message_id']) && is_string($payload['message_id'])
+        ? trim($payload['message_id'])
+        : '';
+    if ($messageId === '') return null;
+
+    $sender = is_array($payload['sender'] ?? null) ? $payload['sender'] : [];
+    $identity = is_array($sender['identity'] ?? null) ? $sender['identity'] : [];
+    $badgesIn = is_array($identity['badges'] ?? null) ? $identity['badges'] : [];
+    $badges = [];
+    foreach ($badgesIn as $badge) {
+        if (!is_array($badge)) continue;
+        $type = isset($badge['type']) && is_string($badge['type']) ? $badge['type'] : '';
+        $text = isset($badge['text']) && is_string($badge['text']) ? $badge['text'] : $type;
+        if ($text === '') continue;
+        $entry = ['type' => $type, 'text' => $text];
+        if (isset($badge['count']) && is_numeric($badge['count'])) {
+            $entry['count'] = (int) $badge['count'];
+        }
+        $badges[] = $entry;
+    }
+
+    $color = isset($identity['username_color']) && is_string($identity['username_color'])
+        ? $identity['username_color']
+        : null;
+    if ($color !== null && !preg_match('/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/', $color)) {
+        $color = null;
+    }
+
+    $emotes = [];
+    if (is_array($payload['emotes'] ?? null)) {
+        foreach ($payload['emotes'] as $emote) {
+            if (!is_array($emote)) continue;
+            $emoteId = isset($emote['emote_id']) ? (string) $emote['emote_id'] : '';
+            if ($emoteId === '' || !preg_match('/^[0-9]+$/', $emoteId)) continue;
+            $positions = [];
+            if (is_array($emote['positions'] ?? null)) {
+                foreach ($emote['positions'] as $pos) {
+                    if (!is_array($pos)) continue;
+                    $positions[] = ['s' => (int) ($pos['s'] ?? 0), 'e' => (int) ($pos['e'] ?? 0)];
+                }
+            }
+            $emotes[] = ['emoteId' => $emoteId, 'positions' => $positions];
+        }
+    }
+
+    $repliesTo = null;
+    if (is_array($payload['replies_to'] ?? null)) {
+        $parent = $payload['replies_to'];
+        $parentSender = is_array($parent['sender'] ?? null) ? $parent['sender'] : [];
+        $repliesTo = [
+            'messageId' => isset($parent['message_id']) && is_string($parent['message_id'])
+                ? $parent['message_id']
+                : '',
+            'content' => isset($parent['content']) && is_string($parent['content']) ? $parent['content'] : '',
+            'username' => isset($parentSender['username']) && is_string($parentSender['username'])
+                ? $parentSender['username']
+                : '',
+        ];
+    }
+
+    $profilePicture = isset($sender['profile_picture']) && is_string($sender['profile_picture'])
+        && preg_match('#^https://#i', $sender['profile_picture'])
+        ? $sender['profile_picture']
+        : null;
+
+    return [
+        'messageId' => $messageId,
+        'createdAt' => isset($payload['created_at']) && is_string($payload['created_at'])
+            ? $payload['created_at']
+            : '',
+        'content' => isset($payload['content']) && is_string($payload['content']) ? $payload['content'] : '',
+        'sender' => [
+            'username' => isset($sender['username']) && is_string($sender['username'])
+                ? $sender['username']
+                : 'unknown',
+            'color' => $color,
+            'profilePicture' => $profilePicture,
+            'badges' => $badges,
+        ],
+        'emotes' => $emotes,
+        'repliesTo' => $repliesTo,
+    ];
+}
+
+/**
+ * Append a normalized chat message. Dedupes on messageId. Returns true if stored.
+ *
+ * @param array<string,mixed> $message
+ */
+function kick_chat_append_message(string $slug, array $message): bool
+{
+    $stored = false;
+    kick_chat_buffer_update($slug, static function (array $buffer) use ($message, &$stored): array {
+        foreach ($buffer['messages'] as $existing) {
+            if (($existing['messageId'] ?? '') === $message['messageId']) {
+                return $buffer;
+            }
+        }
+        $buffer['messages'][] = $message;
+        $stored = true;
+        return $buffer;
+    });
+    return $stored;
+}
+
+/**
+ * @return list<array<string,mixed>>
+ */
+function kick_chat_messages_after(string $slug, ?string $afterId): array
+{
+    $buffer = kick_chat_buffer_read($slug);
+    if ($afterId === null || $afterId === '') {
+        return $buffer['messages'];
+    }
+    $index = null;
+    foreach ($buffer['messages'] as $i => $msg) {
+        if (($msg['messageId'] ?? '') === $afterId) {
+            $index = $i;
+            break;
+        }
+    }
+    if ($index === null) {
+        return $buffer['messages'];
+    }
+    return array_slice($buffer['messages'], $index + 1);
+}
+
+function kick_chat_resolve_broadcaster_id(string $slug, ?string &$errorCode): ?int
+{
+    $resolved = kick_resolve_channels([$slug], $errorCode);
+    if ($resolved === null) return null;
+    $entry = $resolved[$slug] ?? null;
+    if (!is_array($entry) || empty($entry['found'])) return null;
+    $id = $entry['broadcasterUserId'] ?? null;
+    if (is_int($id) && $id > 0) return $id;
+    if (is_numeric($id) && (int) $id > 0) return (int) $id;
+    $identity = kick_cache_get("kick:identity:{$slug}");
+    if (is_array($identity) && !empty($identity['broadcasterUserId'])) {
+        return (int) $identity['broadcasterUserId'];
+    }
+    return null;
+}
+
+/**
+ * Reuse an existing chat.message.sent webhook subscription when Kick already
+ * has one for this broadcaster. Never unsubscribes — subscriptions are
+ * app-level and shared across visitors.
+ *
+ * @return array{ok:bool,subscriptionId:?string,reused:bool,error:?string}
+ */
+function kick_ensure_chat_subscription(int $broadcasterUserId): array
+{
+    $cacheKey = 'kick:chat-sub:' . $broadcasterUserId;
+    $cached = kick_cache_get($cacheKey);
+    if (is_array($cached) && !empty($cached['id']) && is_string($cached['id'])) {
+        return ['ok' => true, 'subscriptionId' => $cached['id'], 'reused' => true, 'error' => null];
+    }
+
+    $errorCode = null;
+    $existing = kick_call_api(
+        'events/subscriptions',
+        'broadcaster_user_id=' . $broadcasterUserId,
+        $errorCode,
+    );
+    if (is_array($existing)) {
+        foreach (($existing['data'] ?? []) as $item) {
+            if (!is_array($item)) continue;
+            $event = (string) ($item['event'] ?? '');
+            $method = (string) ($item['method'] ?? 'webhook');
+            if ($event === 'chat.message.sent' && $method === 'webhook' && !empty($item['id'])) {
+                $id = (string) $item['id'];
+                kick_cache_set($cacheKey, ['id' => $id], KICK_CHAT_SUB_CACHE_TTL);
+                return ['ok' => true, 'subscriptionId' => $id, 'reused' => true, 'error' => null];
+            }
+        }
+    }
+
+    $created = kick_call_api_json('POST', 'events/subscriptions', [], [
+        'broadcaster_user_id' => $broadcasterUserId,
+        'events' => [['name' => 'chat.message.sent', 'version' => 1]],
+        'method' => 'webhook',
+    ], $errorCode);
+
+    if (!is_array($created)) {
+        return ['ok' => false, 'subscriptionId' => null, 'reused' => false, 'error' => $errorCode ?? 'api_error'];
+    }
+
+    $id = null;
+    foreach (($created['data'] ?? []) as $item) {
+        if (is_array($item) && !empty($item['id'])) {
+            $id = (string) $item['id'];
+            break;
+        }
+        // Kick may return { name, error } per event when the sub already exists.
+        if (is_array($item) && (($item['name'] ?? '') === 'chat.message.sent') && empty($item['error'])) {
+            $id = isset($item['subscription_id']) ? (string) $item['subscription_id'] : 'existing';
+            break;
+        }
+    }
+    if ($id === null && isset($created['data']) && is_array($created['data']) && $created['data'] === []) {
+        // Empty data with HTTP 200: treat as "already subscribed" and cache a marker
+        // so we don't POST on every poll.
+        $id = 'existing';
+    }
+    if ($id === null) {
+        return ['ok' => false, 'subscriptionId' => null, 'reused' => false, 'error' => 'api_error'];
+    }
+    kick_cache_set($cacheKey, ['id' => $id], KICK_CHAT_SUB_CACHE_TTL);
+    return ['ok' => true, 'subscriptionId' => $id, 'reused' => false, 'error' => null];
+}
+
+function kick_webhook_header(string $name): string
+{
+    $serverKey = 'HTTP_' . strtoupper(str_replace('-', '_', $name));
+    $value = $_SERVER[$serverKey] ?? '';
+    return is_string($value) ? $value : '';
+}
+
+function kick_get_webhook_public_key(): string
+{
+    $override = $GLOBALS['kick_webhook_public_key'] ?? null;
+    if (is_string($override) && $override !== '') return $override;
+
+    $cached = kick_cache_get('kick:webhook-public-key');
+    if (is_string($cached) && str_contains($cached, 'BEGIN PUBLIC KEY')) {
+        return $cached;
+    }
+
+    $errorCode = null;
+    $body = kick_call_api('public-key', '', $errorCode);
+    $pem = null;
+    if (is_array($body)) {
+        if (isset($body['data']['public_key']) && is_string($body['data']['public_key'])) {
+            $pem = $body['data']['public_key'];
+        } elseif (isset($body['public_key']) && is_string($body['public_key'])) {
+            $pem = $body['public_key'];
+        }
+    }
+    if (is_string($pem) && str_contains($pem, 'BEGIN PUBLIC KEY')) {
+        kick_cache_set('kick:webhook-public-key', $pem, KICK_PUBLIC_KEY_CACHE_TTL);
+        return $pem;
+    }
+
+    return KICK_WEBHOOK_PUBLIC_KEY_FALLBACK;
+}
+
+function kick_webhook_timestamp_fresh(string $timestamp): bool
+{
+    if ($timestamp === '') return false;
+    try {
+        $sent = new DateTimeImmutable($timestamp);
+    } catch (Exception $e) {
+        return false;
+    }
+    $now = new DateTimeImmutable('now');
+    $delta = abs($now->getTimestamp() - $sent->getTimestamp());
+    return $delta <= KICK_WEBHOOK_MAX_SKEW_SECONDS;
+}
+
+function kick_verify_webhook_signature(string $messageId, string $timestamp, string $rawBody, string $signatureB64, string $publicKeyPem): bool
+{
+    if ($messageId === '' || $timestamp === '' || $signatureB64 === '' || $publicKeyPem === '') {
+        return false;
+    }
+    $decoded = base64_decode($signatureB64, true);
+    if ($decoded === false || $decoded === '') return false;
+    $payload = $messageId . '.' . $timestamp . '.' . $rawBody;
+    $ok = openssl_verify($payload, $decoded, $publicKeyPem, OPENSSL_ALGO_SHA256);
+    return $ok === 1;
+}
+
+/**
+ * Dispatch a verified Kick webhook body. Unknown event types return true so
+ * Kick does not disable delivery; only chat.message.sent is stored today.
+ *
+ * @param array<string,mixed> $payload
+ */
+function kick_handle_webhook_event(string $eventType, string $eventVersion, array $payload): bool
+{
+    if ($eventType !== 'chat.message.sent') {
+        return true;
+    }
+    if ($eventVersion !== '' && $eventVersion !== '1') {
+        return false;
+    }
+    $message = kick_chat_normalize_message($payload);
+    if ($message === null) return false;
+    $broadcaster = is_array($payload['broadcaster'] ?? null) ? $payload['broadcaster'] : [];
+    $slug = isset($broadcaster['channel_slug']) && is_string($broadcaster['channel_slug'])
+        ? kick_normalize_slug($broadcaster['channel_slug'])
+        : '';
+    if ($slug === '' || !kick_is_valid_slug($slug)) return false;
+    kick_chat_append_message($slug, $message);
+    return true;
 }
 
 // --- Request handling -----------------------------------------------------

@@ -94,6 +94,17 @@ const ICON_MAGNIFIER =
   '<path d="M11.1 11.1 13.75 13.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
   '</svg>';
 
+/** Four-corner Full Window glyph — the Grid-mode Focus control. */
+const ICON_FULL_WINDOW =
+  '<span aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 5V1.5H5M9 1.5H12.5V5M12.5 9V12.5H9M5 12.5H1.5V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+
+/** Film-strip / cinema glyph — Full Window → Theater affordance. */
+const ICON_THEATER =
+  '<span aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+  '<rect x="2.5" y="3.5" width="11" height="9" rx="1.2" stroke="currentColor" stroke-width="1.5"/>' +
+  '<path d="M5 3.5v9M11 3.5v9M2.5 6.5h2.5M2.5 9.5h2.5M11 6.5h2.5M11 9.5h2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+  '</svg></span>';
+
 const ICON_CLOSE =
   '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">' +
   '<path d="M4 4 12 12M12 4 4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
@@ -175,19 +186,14 @@ let focusViewPrimaryChangedHandler: (() => void) | null = null;
 let focusViewPrimaryId: string | null = null;
 
 /**
- * True for whichever stream the viewer is actively watching large right now
- * — either the old solo-focus card (focusedStreamId) or the current
- * Theater/Focus primary (focusViewPrimaryId). The stall-recovery sweeps below
- * (verifyAndRecoverTwitchPlayer, recoverStalledTwitchPlayers,
- * createTwitchRecoveryTarget) all skip this stream on purpose — reloading or
- * replaying the one stream someone is actively watching is more disruptive
- * than a muted-tile stall. Those guards predate Theater/Focus and only ever
- * checked focusedStreamId; since that solo-focus mechanism is no longer wired
- * to any UI (always null), they were silently giving the Theater/Focus
- * primary zero protection — a tray touch/scroll arming the interaction-nudge
- * window (via the chat-panel resize it triggers) could then hit the primary
- * with an unwanted play() during the recovery sweep. This function is what
- * closes that gap.
+ * True for whichever stream the viewer is watching large right now — either
+ * the old solo-focus card (focusedStreamId) or the current Theater/Focus
+ * primary (focusViewPrimaryId). Hover/watchdog stall sweeps skip this
+ * stream so a tray scroll or interaction-nudge cannot play() the primary.
+ *
+ * Operation-scoped recovery (createTwitchRecoveryTarget / beginAddRemoveRecovery)
+ * does NOT use this guard: Full Window ↔ Theater resizes the primary on
+ * purpose, and that primary must be eligible for the bounded play() pass.
  */
 function isActivelyWatchedStream(streamId: string): boolean {
   return focusedStreamId === streamId || focusViewPrimaryId === streamId;
@@ -2461,14 +2467,24 @@ function syncCloseButtonLabel(button: HTMLButtonElement | null, isExitControl: b
  */
 function syncFocusButtonLabel(button: HTMLButtonElement | null, isToggleControl: boolean, trayVisible: boolean): void {
   if (!button) return;
+  const isOverlay = button.classList.contains('stream-card__overlay-focus');
   if (isToggleControl) {
-    button.title = trayVisible ? 'Hide other streams' : 'Show other streams';
-    button.setAttribute('aria-label', trayVisible ? 'Hide other streams (exit Focus)' : 'Show other streams (Focus)');
-    button.setAttribute('aria-pressed', trayVisible ? 'true' : 'false');
+    if (trayVisible) {
+      button.title = 'Exit Theater Mode';
+      button.setAttribute('aria-label', 'Exit Theater Mode');
+      button.setAttribute('aria-pressed', 'true');
+      button.innerHTML = isOverlay ? ICON_MAGNIFIER : ICON_FULL_WINDOW;
+    } else {
+      button.title = 'Enter Theater Mode';
+      button.setAttribute('aria-label', 'Enter Theater Mode');
+      button.setAttribute('aria-pressed', 'false');
+      button.innerHTML = ICON_THEATER;
+    }
   } else {
     button.title = 'Focus stream';
     button.setAttribute('aria-label', 'Focus stream in browser window');
     button.setAttribute('aria-pressed', 'false');
+    button.innerHTML = isOverlay ? ICON_MAGNIFIER : ICON_FULL_WINDOW;
   }
 }
 
@@ -2849,8 +2865,7 @@ function createPlayerElement(
   focusButton.title = 'Focus stream';
   focusButton.setAttribute('aria-label', 'Focus stream in browser window');
   focusButton.setAttribute('aria-pressed', 'false');
-  focusButton.innerHTML =
-    '<span aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 5V1.5H5M9 1.5H12.5V5M12.5 9V12.5H9M5 12.5H1.5V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+  focusButton.innerHTML = ICON_FULL_WINDOW;
   focusButton.addEventListener('click', () => handleCardFocusClick(container, stream));
 
   const removeButton = document.createElement('button');
@@ -4089,7 +4104,6 @@ function createTwitchRecoveryTarget(streamId: string, startedAt: number): Recove
       if (!card?.isConnected) return false;
       if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') return false;
       if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return false;
-      if (isActivelyWatchedStream(streamId)) return false;
       if (!twitchPlayers.has(streamId)) return false;
       // Nothing to resume on a channel that is off the air.
       if (twitchPlayback.get(streamId) === 'offline') return false;
@@ -4376,6 +4390,19 @@ const LAYOUT_CIRCUIT_COOLDOWN_MS = 12_000;
 let layoutCircuitTimer = 0;
 let layoutCircuitCooldownUntil = 0;
 
+/**
+ * Test-only: cancel in-flight operation recovery and the 250ms layout circuit
+ * breaker so leftover timers cannot remount cards in a later test. Playback
+ * recovery is a module singleton; begin() cancels prior runs but does not
+ * clear the circuit timer from a previous test's container.
+ */
+export function __resetPlaybackRecoveryForTests(): void {
+  playbackRecovery.cancel('test-reset');
+  window.clearTimeout(layoutCircuitTimer);
+  layoutCircuitTimer = 0;
+  layoutCircuitCooldownUntil = 0;
+}
+
 function armLayoutCircuitBreaker(container: HTMLElement, snapshotIds: readonly string[]): void {
   window.clearTimeout(layoutCircuitTimer);
   layoutCircuitTimer = 0;
@@ -4390,8 +4417,14 @@ function runLayoutCircuitBreaker(container: HTMLElement, snapshotIds: readonly s
   if (document.hidden) return;
   if (Date.now() < layoutCircuitCooldownUntil) return;
 
+  // The coordinator is still trying play() on these ids (passes at 0/750/1500/3000ms).
+  // Remounting them at 250ms fights that schedule and, in tests, replaces the
+  // FakeTwitchPlayer the waiter is watching so the original instance stays paused.
+  const pending = new Set(playbackRecovery.pendingIds());
+
   const stuck: HTMLElement[] = [];
   for (const streamId of snapshotIds) {
+    if (pending.has(streamId)) continue;
     const card = cardForStream(streamId);
     if (!card?.isConnected || !container.contains(card)) continue;
     if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
@@ -4908,6 +4941,9 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
   const visibleTrayCount = Math.max(1, Math.min(trayCount, targetVisibleTrayCount(areaWidth)));
 
   container.style.setProperty('--grid-columns', '1');
+  container.style.removeProperty('--player-height');
+  container.style.removeProperty('--grid-row-height');
+  container.style.removeProperty('--player-width');
   container.style.setProperty('--focus-primary-width', `${Math.floor(result.primaryWidth)}px`);
   container.style.setProperty('--focus-primary-height', `${Math.floor(result.primaryHeight)}px`);
   container.style.setProperty(
