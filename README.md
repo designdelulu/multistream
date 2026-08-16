@@ -1,6 +1,6 @@
 # MultiStream.cc
 
-Watch **Twitch**, **Kick**, **YouTube**, and **TikTok LIVE** streams online on one page — a responsive grid that keeps landscape players as large as possible at **16:9** and portrait streams (YouTube Shorts, TikTok LIVE) at their true **9:16** shape.
+Watch **Twitch**, **Kick**, **YouTube**, and **TikTok LIVE** streams online on one page — a responsive grid that keeps landscape players as large as possible at **16:9** and portrait streams (YouTube Shorts, TikTok LIVE) at their true **9:16** shape. **Start a Live Watch Party**, share one link, and everyone who joins follows your lineup as you add, remove, replace, or reorder streams.
 
 ![MultiStream.cc — Watch Twitch, Kick, YouTube, and TikTok LIVE streams online](./public/og-image.png)
 
@@ -17,9 +17,18 @@ Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](http
 
 ---
 
+## At a glance
+
+- **Watch together** — Twitch, Kick, YouTube, and TikTok LIVE in one responsive grid (official embeds plus experimental TikTok LIVE resolver).
+- **Live Watch Parties** — Share one short link at `/w/ROOM_ID`. Viewers see your current lineup and automatically follow along when you change streams. MultiStream synchronizes the watching configuration, not the video — each viewer still loads streams directly from the platforms.
+- **Static sharing** — Need a fixed lineup instead? **Copy Watch URL** encodes the current streams into a permanent path URL that does not change.
+- **Your streams stay direct** — MultiStream coordinates the interface; playback always comes from Twitch, Kick, YouTube, or TikTok.
+
+---
+
 ## What it does
 
-MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and experimental TikTok LIVE — watch parties, co-stream monitoring, and tournament weekends. Add channels from the toolbar or share a URL with your lineup already configured.
+MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and experimental TikTok LIVE — co-stream monitoring, tournament weekends, and live watch parties. Add channels from the toolbar, share a fixed lineup URL, or start a Live Watch Party so viewers follow what you're watching.
 
 - **Twitch + Kick + YouTube + experimental TikTok LIVE** on the same page — official embeds for the first three; TikTok uses a resolver + `<video>` player (see [TikTok LIVE setup](#tiktok-live-setup-experimental))
 - **YouTube channels resolve to whatever's live right now** — a handle, username, channel ID, or channel URL is checked server-side on each load; a direct video/Shorts/live URL loads exactly that video, no lookup needed

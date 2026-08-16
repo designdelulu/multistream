@@ -1,7 +1,7 @@
 {
   "name": "multistream",
   "version": "0.1.0",
-  "description": "A modern multi-stream viewer — watch Twitch, Kick, YouTube, and experimental TikTok LIVE streams online on one page.",
+  "description": "A modern multi-stream viewer — watch Twitch, Kick, YouTube, and experimental TikTok LIVE streams online on one page, with Live Watch Parties and static share URLs.",
   "type": "module",
   "author": "Eric Barker (https://ericbarker.co)",
   "license": "MIT",

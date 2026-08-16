@@ -1,6 +1,6 @@
 # MultiStream.cc — User guide
 
-Watch Twitch, Kick, YouTube, and experimental TikTok LIVE on one page. MultiStream.cc is a modern multi-stream viewer — this guide covers the features and how to use them.
+Watch Twitch, Kick, YouTube, and experimental TikTok LIVE on one page — or start a **Live Watch Party** and share one link so viewers automatically follow your lineup as you change streams. MultiStream.cc is a modern multi-stream viewer — this guide covers the features and how to use them.
 
 **Live site:** [multistream.cc](https://multistream.cc)
 
@@ -12,7 +12,7 @@ Watch Twitch, Kick, YouTube, and experimental TikTok LIVE on one page. MultiStre
 |---|---|
 | Multi-platform grid | Twitch, Kick, and YouTube via official embeds; experimental TikTok LIVE via resolver + `<video>` player |
 | Username dropdown | Type a name (or `@name`) and choose Twitch, Kick, YouTube, or TikTok LIVE (Experimental) |
-| Share menu | Copy Watch URL, preview or download a Story Card image, or share a watch-party link |
+| Share menu | **Copy Watch URL** (static lineup), **Start Live Watch Party** (live `/w/ROOM_ID` link viewers follow), Story Card preview/download, or **Share Watch Party** |
 | Clear all | Remove every stream (with confirmation) |
 | Hide headers | Compact grid; hover a card to reveal controls below the video (never over it) |
 | Drag reorder | Drag card headers — or the drag handle in the hover toolbar when headers are hidden |

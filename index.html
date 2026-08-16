@@ -32,7 +32,7 @@
     <title>Watch Twitch, Kick, YouTube &amp; TikTok LIVE Streams Online | MultiStream.cc</title>
     <meta
       name="description"
-      content="Watch Twitch, Kick, YouTube, and TikTok LIVE (experimental) streams online on one page. MultiStream.cc is a modern multi-stream viewer with a responsive grid — 16:9 for landscape streams, 9:16 for portrait — and shareable lineup URLs."
+      content="Watch Twitch, Kick, YouTube, and TikTok LIVE (experimental) streams online on one page. Start a Live Watch Party, share one link, and viewers automatically follow your lineup as you change streams."
     />
     <meta
       name="keywords"
@@ -47,7 +47,7 @@
     <meta property="og:title" content="Watch Twitch, Kick, YouTube &amp; TikTok LIVE Streams Online | MultiStream.cc" />
     <meta
       property="og:description"
-      content="Watch Twitch, Kick, YouTube, and TikTok LIVE (experimental) streams online on one page. MultiStream.cc is a modern multi-stream viewer — share your layout with a URL."
+      content="Watch Twitch, Kick, YouTube, and TikTok LIVE (experimental) on one page. Start a Live Watch Party — share one link and viewers follow your lineup as you change streams."
     />
     <meta property="og:site_name" content="MultiStream.cc" />
     <meta property="og:image" content="https://multistream.cc/og-image.png" />
@@ -63,7 +63,7 @@
     <meta name="twitter:title" content="Watch Twitch, Kick, YouTube &amp; TikTok LIVE Streams Online | MultiStream.cc" />
     <meta
       name="twitter:description"
-      content="Watch Twitch, Kick, YouTube, and TikTok LIVE (experimental) streams online on one page. A modern multi-stream viewer with shareable lineup URLs."
+      content="Watch Twitch, Kick, YouTube, and TikTok LIVE (experimental) on one page. Live Watch Parties let viewers follow your lineup automatically — or copy a static watch URL."
     />
     <meta name="twitter:image" content="https://multistream.cc/og-image.png" />
     <meta
@@ -77,13 +77,14 @@
         "name": "MultiStream.cc",
         "alternateName": ["MultiStream", "multistream.cc"],
         "url": "https://multistream.cc/",
-        "description": "A modern multi-stream viewer to watch Twitch, Kick, YouTube, and TikTok LIVE (experimental) streams online on one page in a shareable, responsive grid layout.",
+        "description": "A modern multi-stream viewer to watch Twitch, Kick, YouTube, and TikTok LIVE (experimental) streams online on one page — with Live Watch Parties that keep viewers synced to the host's lineup, plus static share URLs.",
         "applicationCategory": "EntertainmentApplication",
         "operatingSystem": "Web",
         "featureList": [
           "Watch Twitch, Kick, YouTube, and TikTok LIVE streams online together",
+          "Live Watch Party — share one link; viewers follow the host's lineup automatically",
+          "Static share URL with a fixed channel lineup",
           "Responsive multi-stream grid — 16:9 landscape and 9:16 portrait tiles",
-          "Shareable URL with channel lineup",
           "Twitch and Kick chat panel"
         ],
         "image": "https://multistream.cc/og-image.png",
@@ -118,21 +119,23 @@
     <noscript>
       <p>
         MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and TikTok LIVE
-        (experimental) — add channels from the toolbar or open a shareable URL with your lineup.
+        (experimental) — add channels from the toolbar, copy a static watch URL, or start a Live Watch Party.
       </p>
     </noscript>
     <section class="seo-landing" aria-label="About MultiStream.cc">
       <h1>Watch Twitch, Kick, YouTube &amp; TikTok LIVE streams online</h1>
       <p>
         MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and TikTok LIVE
-        (experimental). Add channels from the toolbar or open a shareable URL with your lineup
-        already configured.
+        (experimental). Add channels from the toolbar, share a fixed lineup with <strong>Copy Watch URL</strong>,
+        or start a <strong>Live Watch Party</strong> — one link where viewers automatically follow what you're
+        watching as you change streams.
       </p>
       <p>
         Streams are arranged in a responsive grid — landscape players scale to the largest
         16:9 size that fits, and portrait streams (YouTube Shorts, TikTok LIVE) keep their
-        true 9:16 shape in dedicated 2-row slots. Share path URLs like
-        <code>/t:username/k:username/y:handle:username/tt:creator</code> with your watch party.
+        true 9:16 shape in dedicated 2-row slots. Static path URLs look like
+        <code>/t:username/k:username/y:handle:username/tt:creator</code>; live watch parties use
+        <code>/w/ROOM_ID</code>.
       </p>
       <p>
         <a href="https://github.com/designdelulu/multistream">Source code on GitHub</a>
@@ -157,8 +160,8 @@
           <p>
             Watch Twitch, Kick, YouTube, and TikTok LIVE <strong>(Experimental)</strong> side by
             side in one responsive grid — a modern multi-stream viewer with minimal friction. Add
-            Twitch and Kick channels, YouTube videos, livestreams, and channels, or a TikTok LIVE
-            URL, then rearrange and share your lineup with friends.
+            channels, rearrange the grid, then share a fixed lineup or start a
+            <strong>Live Watch Party</strong> so friends follow what you're watching automatically.
           </p>
 
           <h3>Quick start</h3>
@@ -167,6 +170,12 @@
               Type a username and pick <strong>Twitch</strong>, <strong>Kick</strong>,
               <strong>YouTube</strong>, or <strong>TikTok LIVE (Experimental)</strong> from the
               suggestions — or paste a full stream URL and the provider is detected automatically.
+            </li>
+            <li>
+              Open <strong>Share → Start Live Watch Party</strong> to get a live link at
+              <code>/w/ROOM_ID</code>. When you add, remove, replace, or reorder streams, everyone
+              in the party follows along. Need a fixed snapshot instead? Use
+              <strong>Copy Watch URL</strong>.
             </li>
             <li>
               For <strong>TikTok LIVE</strong>, the suggestion accepts a username,
