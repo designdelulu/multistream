@@ -1,5 +1,6 @@
 import Sortable from 'sortablejs';
 import { logPlayerEvent } from '../lib/embedDebug';
+import { isPhoneViewport } from '../lib/viewport';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
 
@@ -208,6 +209,8 @@ export function disposeOrphanDragClones(root: ParentNode = document.body): void 
  * `handle` selector moves to match whichever surface is actually visible.
  *
  * Theater/Focus (any non-'grid' view mode) → dragging disabled entirely.
+ * Phone stack too: Sortable's header handle uses touch-action: none, which
+ * steals vertical scroll, and drag-to-reorder never worked on a phone.
  * This is load-bearing, not cosmetic: a completed drag calls
  * store.reorderStreams -> setStreams -> syncStreamGrid. Grid placement is
  * CSS `order` (store index), not insertBefore of iframe-bearing cards —
@@ -225,6 +228,10 @@ export function bindStreamReorder(
 ): { sync: () => void } {
   function isPrimaryModeActive(): boolean {
     return grid.dataset.viewMode !== 'grid';
+  }
+
+  function phoneViewport(): boolean {
+    return typeof window.matchMedia === 'function' && isPhoneViewport();
   }
 
   let dropTargetId: string | null = null;
@@ -265,7 +272,7 @@ export function bindStreamReorder(
     filter:
       '.stream-card__focus, .stream-card__reload, .stream-card__close, .stream-card__overlay-focus, .stream-card__overlay-reload, .stream-card__overlay-remove, a, input, select, textarea',
     preventOnFilter: false,
-    disabled: isPrimaryModeActive(),
+    disabled: isPrimaryModeActive() || phoneViewport(),
     onChoose: () => {
       // Snapshot before is-dragging punches through iframes / freezes
       // headers-hidden hover toolbars. Hover-open already may have paused
@@ -347,7 +354,7 @@ export function bindStreamReorder(
 
   function sync(): void {
     const hidden = headersStore.isHidden();
-    gridSortable.option('disabled', isPrimaryModeActive());
+    gridSortable.option('disabled', isPrimaryModeActive() || phoneViewport());
     // Only the element matching `handle` can start a drag — Focus/Reload/
     // Close in the toolbar are siblings of the grip button, not descendants
     // of it, so switching this selector is what makes them un-draggable

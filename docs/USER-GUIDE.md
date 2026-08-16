@@ -138,7 +138,7 @@ https://multistream.cc/t:username/k:username/y:handle:username/tt:creator
 | Tablet | Same grid, slightly narrower chat | Show / hide |
 | Phone | Single-column scroll | Hidden |
 
-On phones and tablets you can keep several streams loaded, but the browser usually plays only one at a time.
+On a phone, streams stack in a single column. About three 16:9 streams fit on screen at once; scroll to move between them. Twitch may need a moment on-screen before video fully plays.
 
 Performance depends on how many live embeds are open. Fewer streams = smoother playback.
 

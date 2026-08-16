@@ -10,6 +10,7 @@ import {
   refreshKickStatus,
   refreshTwitchStatus,
 } from './StreamGrid';
+import { isPhoneViewport } from '../lib/viewport';
 import type { Platform } from '../types';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
@@ -454,8 +455,17 @@ export function bindStreamToolbar(
     });
   }
 
+  function phoneViewport(): boolean {
+    return typeof window.matchMedia === 'function' && isPhoneViewport();
+  }
+
   function syncHeadersButton(): void {
     if (!headersButton) return;
+    if (phoneViewport()) {
+      headersButton.hidden = true;
+      return;
+    }
+    headersButton.hidden = false;
     const hidden = headersStore.isHidden();
     const focused = isStreamFocused();
     const label = hidden ? 'Show headers' : 'Hide headers';
@@ -812,6 +822,7 @@ export function bindStreamToolbar(
 
   headersButton?.addEventListener('click', () => {
     if (isStreamFocused()) return;
+    if (phoneViewport()) return;
     headersStore.toggle();
   });
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   applyDropIntent,
   bindStreamReorder,
@@ -435,6 +435,36 @@ describe('bindStreamReorder', () => {
     expect(sortable.options.handle).toBe('.stream-card__overlay-drag');
 
     document.body.removeChild(grid);
+  });
+
+  it('disables Sortable on a phone viewport so header drags do not steal scroll', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('max-width: 640px'),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      onchange: null,
+      dispatchEvent: () => false,
+    }));
+
+    const grid = document.createElement('div');
+    grid.dataset.viewMode = 'grid';
+    document.body.appendChild(grid);
+    try {
+      const { sync } = bindStreamReorder(
+        grid,
+        { getStreams: () => [], reorderStreams: () => {} } as unknown as StreamStore,
+        fakeHeadersStore(),
+      );
+      sync();
+      const sortable = sortableInstance(grid);
+      expect(sortable.options.disabled).toBe(true);
+    } finally {
+      document.body.removeChild(grid);
+      vi.unstubAllGlobals();
+    }
   });
 });
 

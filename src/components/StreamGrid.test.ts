@@ -31,6 +31,8 @@ import {
   snapshotReorderRecoveryIds,
   captureTwitchPlayerIdentities,
   diffTwitchPlayerIdentities,
+  applyPhoneVisiblePlayback,
+  __resetPhoneVisiblePlaybackForTests,
   syncStreamGrid,
   syncViewMode,
   twitchStatusDotProps,
@@ -2554,6 +2556,63 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     );
   });
 
+  it('phone stack restores 16:9 (and Hide Headers 16:9) at equal-or-higher specificity than the desktop --player-height lock', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    // Must include the same :not(focus):not(theater) pair as the desktop
+    // `aspect-ratio: unset; height: var(--player-height)` lock, otherwise
+    // that lock wins on phones where --player-height is cleared and every
+    // iframe collapses to 0px.
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.stream-grid:not\(:empty\):not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\)\s+\.stream-card__player\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*9/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\):not\(:empty\)\s+\.stream-card__player\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*9/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?html\.headers-hidden\s+\.stream-card__toolbar\s*\{[^}]*height:\s*var\(--toolbar-open-height/,
+    );
+  });
+
+  it('phone chrome hides Hide Headers, restores header scrolling, and enlarges the welcome panel', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const html: string = fs.readFileSync('index.html', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?#headers-toggle\s*\{[^}]*display:\s*none/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.stream-card__header\s*\{[^}]*touch-action:\s*auto/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.welcome-modal__panel\s*\{[^}]*max-height:\s*calc\(\s*100dvh/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.site-intro__desktop-only\s*\{[^}]*display:\s*none/,
+    );
+    expect(html).toMatch(/matchMedia\('\(max-width: 640px\)'\)/);
+    expect(html).toContain('class="site-intro__desktop-only"');
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.stream-card__focus,\s*\.stream-card__overlay-focus\s*\{[^}]*display:\s*none/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.toolbar__share-menu\s*\{[^}]*left:\s*0/,
+    );
+    expect(html).not.toMatch(/only one plays at a time/i);
+    expect(html).toContain('about 3 fit on screen');
+    expect(html).toContain('Twitch may need you to stay on it a moment');
+    expect(html).toMatch(
+      /<li class="site-intro__desktop-only">\s*Use <strong>Focus<\/strong>/,
+    );
+    expect(html).toMatch(
+      /<li class="site-intro__desktop-only">\s*Switch to <strong>Focus view<\/strong>/,
+    );
+  });
+
   it('TikTok unavailable UI stacks a centered message above the Open on TikTok link', async () => {
     syncStreamGrid(container, fakeStore([
       { id: 'tiktok:offlineuser', platform: 'tiktok', channel: 'offlineuser', muted: true, orientation: 'portrait' },
@@ -3012,5 +3071,239 @@ describe('portrait grid row-track height (--grid-row-height)', () => {
 
     expect(container.style.getPropertyValue('--grid-row-height')).toBe('');
     expect(container.style.getPropertyValue('--player-height')).toBe('');
+  });
+});
+
+describe('phone visible playback (scroll-to-play)', () => {
+  class FakeTwitchPlayer {
+    static readonly READY = 'READY';
+    static readonly PLAY = 'PLAY';
+    static readonly PLAYING = 'PLAYING';
+    static readonly PAUSE = 'PAUSE';
+    static readonly ENDED = 'ENDED';
+    static readonly PLAYBACK_BLOCKED = 'PLAYBACK_BLOCKED';
+    static readonly OFFLINE = 'OFFLINE';
+    static readonly ONLINE = 'ONLINE';
+
+    paused = true;
+    muted: boolean;
+    playCallCount = 0;
+    pauseCallCount = 0;
+
+    constructor(
+      public elementId: string,
+      public options: Twitch.PlayerOptions,
+    ) {
+      this.muted = options.muted ?? true;
+    }
+    play(): void {
+      this.paused = false;
+      this.playCallCount += 1;
+    }
+    pause(): void {
+      this.paused = true;
+      this.pauseCallCount += 1;
+    }
+    isPaused(): boolean {
+      return this.paused;
+    }
+    setMuted(muted: boolean): void {
+      this.muted = muted;
+    }
+    getMuted(): boolean {
+      return this.muted;
+    }
+    setChannel(): void {}
+    getCurrentTime(): number {
+      return 0;
+    }
+    getPlaybackStats(): Twitch.PlaybackStats {
+      return {};
+    }
+    addEventListener(): void {}
+    removeEventListener(): void {}
+    destroy(): void {}
+  }
+
+  class FakeYouTubePlayer {
+    playCallCount = 0;
+    pauseCallCount = 0;
+    constructor(
+      public elementId: string,
+      public options: YT.PlayerOptions,
+    ) {
+      queueMicrotask(() => this.options.events?.onReady?.({ target: this as unknown as YT.Player }));
+    }
+    playVideo(): void {
+      this.playCallCount += 1;
+    }
+    pauseVideo(): void {
+      this.pauseCallCount += 1;
+    }
+    mute(): void {}
+    unMute(): void {}
+    isMuted(): boolean {
+      return true;
+    }
+    getVolume(): number {
+      return 100;
+    }
+    getCurrentTime(): number {
+      return 0;
+    }
+    getDuration(): number {
+      return 0;
+    }
+    destroy(): void {}
+  }
+
+  let container: HTMLElement;
+  let createdTwitchPlayers: FakeTwitchPlayer[];
+  let createdYouTubePlayers: FakeYouTubePlayer[];
+
+  function fakeStore(streams: StreamRef[]): StreamStore {
+    return { getStreams: () => streams } as StreamStore;
+  }
+
+  function phoneMatchMedia(query: string) {
+    return {
+      matches: query.includes('max-width: 640px'),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      onchange: null,
+      dispatchEvent: () => false,
+    };
+  }
+
+  beforeEach(() => {
+    createdTwitchPlayers = [];
+    createdYouTubePlayers = [];
+    container = document.createElement('div');
+    container.id = 'stream-grid';
+    document.body.append(container);
+    vi.stubGlobal('matchMedia', phoneMatchMedia);
+
+    const twitchCreated = createdTwitchPlayers;
+    (globalThis as unknown as { Twitch: unknown }).Twitch = {
+      Player: class extends FakeTwitchPlayer {
+        constructor(elementId: string, options: Twitch.PlayerOptions) {
+          super(elementId, options);
+          twitchCreated.push(this);
+        }
+      },
+    };
+    const youtubeCreated = createdYouTubePlayers;
+    (globalThis as unknown as { YT: unknown }).YT = {
+      Player: class extends FakeYouTubePlayer {
+        constructor(elementId: string, options: YT.PlayerOptions) {
+          super(elementId, options);
+          youtubeCreated.push(this);
+        }
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'ok', results: [] }) }),
+    );
+  });
+
+  afterEach(() => {
+    __resetPhoneVisiblePlaybackForTests();
+    __resetPlaybackRecoveryForTests();
+    syncStreamGrid(container, fakeStore([]));
+    __resetTwitchMutePollTimerForTests();
+    delete (globalThis as unknown as { Twitch?: unknown }).Twitch;
+    delete (globalThis as unknown as { YT?: unknown }).YT;
+    vi.unstubAllGlobals();
+    container.remove();
+  });
+
+  it('plays the most-visible Twitch/YouTube card and pauses the others, without blanking Kick', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+      { id: 'twitch:b', platform: 'twitch', channel: 'b', muted: true, orientation: 'landscape' },
+      {
+        id: 'youtube:video:dQw4w9WgXcQ',
+        platform: 'youtube',
+        channel: 'video:dQw4w9WgXcQ',
+        muted: true,
+        orientation: 'landscape',
+      },
+      { id: 'kick:kicker', platform: 'kick', channel: 'kicker', muted: true, orientation: 'landscape' },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    await vi.waitFor(() => expect(createdYouTubePlayers).toHaveLength(1));
+
+    const kickIframe = container.querySelector<HTMLIFrameElement>(
+      '[data-stream-id="kick:kicker"] iframe.stream-card__iframe',
+    );
+    expect(kickIframe).toBeTruthy();
+    const kickSrcBefore = kickIframe!.src;
+    expect(kickSrcBefore).not.toBe('about:blank');
+    expect(kickSrcBefore).not.toBe('');
+
+    for (const player of createdTwitchPlayers) player.play();
+
+    applyPhoneVisiblePlayback(container, [
+      { id: 'twitch:a', ratio: 0.9 },
+      { id: 'twitch:b', ratio: 0.2 },
+      { id: 'youtube:video:dQw4w9WgXcQ', ratio: 0.1 },
+      { id: 'kick:kicker', ratio: 0.1 },
+    ]);
+
+    expect(createdTwitchPlayers[0].isPaused()).toBe(false);
+    expect(createdTwitchPlayers[1].isPaused()).toBe(true);
+    expect(createdYouTubePlayers[0].pauseCallCount).toBeGreaterThan(0);
+    expect(createdYouTubePlayers[0].playCallCount).toBe(0);
+    expect(kickIframe!.src).toBe(kickSrcBefore);
+    expect(kickIframe!.src).not.toBe('about:blank');
+  });
+
+  it('switches playback to a newly most-visible YouTube card', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+      {
+        id: 'youtube:video:dQw4w9WgXcQ',
+        platform: 'youtube',
+        channel: 'video:dQw4w9WgXcQ',
+        muted: true,
+        orientation: 'landscape',
+      },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(1));
+    await vi.waitFor(() => expect(createdYouTubePlayers).toHaveLength(1));
+    createdTwitchPlayers[0].play();
+
+    applyPhoneVisiblePlayback(container, [
+      { id: 'twitch:a', ratio: 0.8 },
+      { id: 'youtube:video:dQw4w9WgXcQ', ratio: 0.2 },
+    ]);
+    expect(createdTwitchPlayers[0].isPaused()).toBe(false);
+
+    applyPhoneVisiblePlayback(container, [
+      { id: 'twitch:a', ratio: 0.2 },
+      { id: 'youtube:video:dQw4w9WgXcQ', ratio: 0.85 },
+    ]);
+    expect(createdTwitchPlayers[0].isPaused()).toBe(true);
+    expect(createdYouTubePlayers[0].playCallCount).toBeGreaterThan(0);
+  });
+
+  it('does not enter Theater when a card Focus control is clicked on a phone viewport', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(1));
+    const entry = vi.fn();
+    bindFocusViewEntry(entry);
+    container.querySelector<HTMLButtonElement>('[data-stream-id="twitch:a"] .stream-card__focus')!.click();
+    expect(entry).not.toHaveBeenCalled();
+    expect(container.dataset.viewMode).not.toBe('theater');
+    expect(container.dataset.viewMode).not.toBe('focus');
   });
 });

@@ -4,6 +4,17 @@ import {
   SHARE_CARD_WIDTH,
   SHARE_URL_FONT_MAX,
   SHARE_URL_FONT_MIN,
+  STORY_BRAND_BASELINE_Y,
+  STORY_CAPTION_BASELINE_Y,
+  STORY_CAPTION_FONT_SIZE,
+  STORY_CENTER_X,
+  STORY_COMPACT_ROW_EXTRA,
+  STORY_COUNT_BASELINE_Y,
+  STORY_GRID_START_Y,
+  STORY_HEADLINE_BASELINE_Y,
+  STORY_PILL_W,
+  STORY_PILL_X,
+  STORY_ROOMY_ROW_EXTRA,
   buildShareCardData,
   fitWatchUrl,
   shareCardUrlBox,
@@ -193,5 +204,41 @@ describe('fitWatchUrl', () => {
         expect(measureUrl(line, layout.fontSize)).toBeLessThanOrEqual(200.5);
       }
     }
+  });
+});
+
+describe('story layout metrics', () => {
+  it('centers the header block and LIVE NOW pill', () => {
+    expect(STORY_CENTER_X).toBe(SHARE_CARD_WIDTH / 2);
+    expect(STORY_PILL_X).toBe((SHARE_CARD_WIDTH - STORY_PILL_W) / 2);
+  });
+
+  it('keeps avatars at the same start Y and halves the count-to-grid gap', () => {
+    expect(STORY_GRID_START_Y).toBe(560);
+    expect(STORY_GRID_START_Y - STORY_COUNT_BASELINE_Y).toBe(45);
+    expect(STORY_COUNT_BASELINE_Y - STORY_HEADLINE_BASELINE_Y).toBe(110);
+    expect(STORY_BRAND_BASELINE_Y).toBeGreaterThan(108);
+  });
+
+  it('leaves at least 10px between a compact platform label and the next avatar', () => {
+    const handleFontSize = 22;
+    const platformFontSize = 18;
+    const platformBelowAvatar = handleFontSize + platformFontSize + 24;
+    const gap = STORY_COMPACT_ROW_EXTRA - platformBelowAvatar;
+    expect(gap).toBeGreaterThanOrEqual(10);
+    expect(STORY_ROOMY_ROW_EXTRA - (30 + 24 + 24)).toBeGreaterThanOrEqual(10);
+  });
+
+  it('doubles the disclosure caption and sits it above the old 1860 baseline', () => {
+    expect(STORY_CAPTION_FONT_SIZE).toBe(44);
+    expect(STORY_CAPTION_BASELINE_Y).toBe(1840);
+  });
+
+  it('uses the compact row extra in shareCardUrlBox geometry', () => {
+    const { gridBottom } = shareCardUrlBox(13);
+    const columns = 4;
+    const cellSize = 190;
+    const rows = Math.ceil(13 / columns);
+    expect(gridBottom).toBe(STORY_GRID_START_Y + rows * (cellSize + STORY_COMPACT_ROW_EXTRA));
   });
 });

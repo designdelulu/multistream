@@ -1,4 +1,7 @@
 node_modules
+tools/testreel/node_modules
+tools/testreel/output/
+tools/testreel/testreel-output/
 dist
 .upstream-reference
 .DS_Store

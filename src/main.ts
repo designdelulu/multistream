@@ -11,6 +11,8 @@ import {
   bindStreamFocus,
   bindStreamRemoved,
   bindTabVisibilityPlayers,
+  bindPhoneVisiblePlayback,
+  syncPhoneVisiblePlayback,
   getFocusViewPrimaryId,
   isKickStatusRefreshInFlight,
   isTwitchStatusRefreshInFlight,
@@ -45,7 +47,7 @@ import {
   createYouTubeStatusScheduler,
   YOUTUBE_STATS_POLL_INTERVAL_MS,
 } from './lib/youtubeStatusScheduler';
-import { phoneMediaQuery } from './lib/viewport';
+import { isPhoneViewport, phoneMediaQuery } from './lib/viewport';
 import { createChatStore, isChatPlatform } from './state/chat';
 import { createHeadersStore } from './state/headers';
 import { createStreamStore, detectStreamListChange } from './state/streams';
@@ -61,6 +63,21 @@ const store = createStreamStore();
 const chatStore = createChatStore(store);
 const headersStore = createHeadersStore();
 const viewModeStore = createViewModeStore();
+
+/**
+ * Phones have no Hide Headers control. Strip the class without calling
+ * setHidden(false), which would persist '0' and wipe a desktop preference.
+ * Restores from the store when leaving the phone breakpoint.
+ */
+function applyPhoneHeadersOverride(): void {
+  if (typeof window.matchMedia === 'function' && isPhoneViewport()) {
+    document.documentElement.classList.remove('headers-hidden');
+    return;
+  }
+  document.documentElement.classList.toggle('headers-hidden', headersStore.isHidden());
+}
+
+applyPhoneHeadersOverride();
 const grid = document.querySelector<HTMLElement>('#stream-grid');
 const chatPanel = document.querySelector<HTMLElement>('#chat-panel');
 const streamArea = document.querySelector<HTMLElement>('.stream-area');
@@ -136,6 +153,7 @@ function afterLayoutPaint(fn: () => void): void {
 }
 
 function afterHeadersToggle(): void {
+  applyPhoneHeadersOverride();
   const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
   quietLayout(2500);
   reorder.sync();
@@ -204,6 +222,7 @@ function afterViewModeToggle(): void {
   // recover players and to re-measure once any provider embeds have
   // finished reflowing after becoming visible.
   updateGridLayout(gridEl);
+  syncPhoneVisiblePlayback(gridEl);
   quietLayout(2500);
   afterLayoutPaint(() => {
     measureAndLayout();
@@ -545,6 +564,7 @@ reorder.sync();
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);
+bindPhoneVisiblePlayback(gridEl);
 bindPlaybackRecovery();
 bindFocusViewPromotion(gridEl);
 /*
@@ -694,7 +714,14 @@ viewModeStore.subscribe(afterViewModeToggle);
 const phoneQuery = phoneMediaQuery();
 
 function handleViewportChange(): void {
+  applyPhoneHeadersOverride();
+  if (typeof window.matchMedia === 'function' && isPhoneViewport() && viewModeStore.getMode() !== 'grid') {
+    viewModeStore.setMode('grid');
+  }
+  reorder.sync();
+  toolbar.sync();
   updateLayout();
+  syncPhoneVisiblePlayback(gridEl);
   armInteractionNudge();
 }
 

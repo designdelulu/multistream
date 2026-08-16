@@ -2274,6 +2274,14 @@ html.show-welcome .welcome-modal {
     display: none;
   }
 
+  #headers-toggle {
+    display: none;
+  }
+
+  .site-intro__desktop-only {
+    display: none;
+  }
+
   .stream-grid {
     grid-template-columns: 1fr;
     gap: 16px;
@@ -2283,12 +2291,69 @@ html.show-welcome .welcome-modal {
   }
 
   /*
-   * Desktop packing sets height: var(--player-height). On phones that var is
-   * cleared, so absolute iframes collapsed the player to 0px — no video.
+   * Desktop packing sets height: var(--player-height) and unsets aspect-ratio
+   * with a selector more specific than `.stream-grid:not(:empty) .player`.
+   * On phones that var is cleared, so the weaker rule lost and absolute
+   * iframes collapsed the player to 0px — no video. Match the desktop
+   * selector so this wins on equal specificity + source order.
    */
-  .stream-grid:not(:empty) .stream-card__player {
+  .stream-grid:not(:empty):not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card__player {
     aspect-ratio: 16 / 9;
     height: auto;
+  }
+
+  /*
+   * Hide Headers on phone: the desktop rule sizes the card to
+   * --player-height (empty here) and unsets the player's aspect-ratio, so
+   * the same 0px collapse happened with headers off. Size from 16:9 again.
+   * Portrait keeps 9:16 — the landscape rule above would otherwise win
+   * because html.headers-hidden adds an element to its specificity.
+   */
+  html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card {
+    height: auto;
+  }
+
+  html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']):not(:empty) .stream-card__player {
+    flex: none;
+    aspect-ratio: 16 / 9;
+  }
+
+  html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']):not(:empty)
+    .stream-card[data-orientation='portrait']
+    .stream-card__player {
+    flex: none;
+    aspect-ratio: 9 / 16;
+  }
+
+  /*
+   * No hover on a phone, so the headers-hidden toolbar never opened. Keep
+   * the 30px strip visible whenever headers are hidden.
+   */
+  html.headers-hidden .stream-card__toolbar {
+    height: var(--toolbar-open-height);
+    min-height: var(--toolbar-open-height);
+    max-height: var(--toolbar-open-height);
+    opacity: 1;
+    border-top: 1px solid var(--border);
+  }
+
+  /*
+   * Same Kick re-scale the desktop hover path uses, applied while the
+   * toolbar is always open so native chrome is not clipped.
+   */
+  html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
+    .stream-card--kick:not(.is-focused)
+    .stream-card__iframe {
+    transform: translate(-50%, -50%)
+      scale(
+        min(
+          var(--kick-scale, 1),
+          calc(
+            (var(--player-height, 9999px) - var(--toolbar-open-height)) /
+              (var(--kick-render-width) * 9 / 16)
+          )
+        )
+      );
   }
 
   /*
@@ -2410,6 +2475,12 @@ html.show-welcome .welcome-modal {
     opacity: 1;
   }
 
+  .toolbar__share-menu {
+    left: 0;
+    right: auto;
+    min-width: min(220px, calc(100vw - 24px));
+  }
+
   .toolbar__mobile-note {
     margin: 0;
     padding: 0;
@@ -2436,7 +2507,7 @@ html.show-welcome .welcome-modal {
     margin: 0 auto;
     padding: 12px 12px 10px;
     border-radius: 10px;
-    max-height: min(82dvh, 82vh);
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 16px);
   }
 
   .welcome-modal__enter {
@@ -2464,12 +2535,14 @@ html.show-welcome .welcome-modal {
     margin-bottom: 8px;
   }
 
-  /* One compact row: badge · name · close */
+  /* One compact row: badge · name · close. Not a drag handle on phones. */
   .stream-card__header {
     flex-wrap: nowrap;
     gap: 6px;
     padding: 4px 8px;
     min-height: 0;
+    cursor: default;
+    touch-action: auto;
   }
 
   .stream-card__name-badge-platform {
@@ -2495,6 +2568,11 @@ html.show-welcome .welcome-modal {
     height: 24px;
     font-size: 1rem;
     border-radius: 4px;
+  }
+
+  .stream-card__focus,
+  .stream-card__overlay-focus {
+    display: none;
   }
 
   .stream-card__focus svg,

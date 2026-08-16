@@ -19,7 +19,7 @@ import {
   type YouTubeStatsRefreshReason,
   type YouTubeStatsRefreshResult,
 } from '../lib/youtubeStatusCoordinator';
-import { isStackedStreamLayout } from '../lib/viewport';
+import { isPhoneViewport, isStackedStreamLayout } from '../lib/viewport';
 import mpegts from 'mpegts.js';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import { checkKickStatus, type KickStatusResult } from '../platforms/kickStatus';
@@ -2749,6 +2749,7 @@ function handleCardCloseClick(container: HTMLElement, store: StreamStore, stream
 
 /** On the current primary, repurposed as the Focus toggle; on anything else, Theater's one entry point (see syncFocusButtonLabel's doc comment). */
 function handleCardFocusClick(container: HTMLElement, stream: StreamRef): void {
+  if (typeof window.matchMedia === 'function' && isPhoneViewport()) return;
   if (isCurrentPrimaryInPrimaryMode(container, stream.id)) {
     focusViewToggleHandler?.();
     return;
@@ -3178,6 +3179,173 @@ export function bindTabVisibilityPlayers(container: HTMLElement): void {
     hideBlankTimer = 0;
     resumeStreamPlayers(container);
   });
+}
+
+/**
+ * Phone stacked layout only: play the most-visible stream, pause the rest.
+ * Kick has no player API — pausing it would blank+remount (and remute), so
+ * Kick is left playing. Twitch fallback iframes and unresolved YouTube/
+ * TikTok mounts are skipped the same way. Theater/Focus keep their own
+ * freeze path and are not observed.
+ */
+const PHONE_VISIBLE_MIN_RATIO = 0.5;
+const PHONE_VISIBLE_HYSTERESIS = 0.08;
+
+let phoneVisibleObserver: IntersectionObserver | null = null;
+let phoneVisibleContainer: HTMLElement | null = null;
+let phoneVisiblePrimaryId: string | null = null;
+const phoneVisibleRatios = new Map<string, number>();
+
+function phoneStackActive(): boolean {
+  return typeof window.matchMedia === 'function' && isStackedStreamLayout();
+}
+
+function pausePhoneVisibleCard(card: HTMLElement): void {
+  if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
+  const streamId = card.dataset.streamId ?? '';
+  if (card.dataset.platform === 'kick') return;
+  if (card.dataset.platform === 'twitch') {
+    if (card.dataset.twitchMode !== 'api') return;
+    const player = twitchPlayers.get(streamId);
+    if (player && !player.isPaused()) player.pause();
+    return;
+  }
+  if (card.dataset.platform === 'youtube') {
+    youtubePlayers.get(streamId)?.pauseVideo();
+    return;
+  }
+  if (card.dataset.platform === 'tiktok') {
+    tiktokPlayers.get(streamId)?.video.pause();
+  }
+}
+
+function playPhoneVisibleCard(card: HTMLElement): void {
+  if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
+  const streamId = card.dataset.streamId ?? '';
+  if (card.dataset.platform === 'kick') return;
+  if (card.dataset.platform === 'twitch') {
+    if (card.dataset.twitchMode !== 'api') return;
+    const player = twitchPlayers.get(streamId);
+    if (!player) return;
+    if (player.isPaused()) {
+      player.play();
+      player.setMuted(preferredMuted(card));
+    }
+    return;
+  }
+  if (card.dataset.platform === 'youtube') {
+    youtubePlayers.get(streamId)?.playVideo();
+    return;
+  }
+  if (card.dataset.platform === 'tiktok') {
+    const entry = tiktokPlayers.get(streamId);
+    if (entry) safeCall(() => void entry.video.play());
+  }
+}
+
+export function applyPhoneVisiblePlayback(
+  container: HTMLElement,
+  visibilities: ReadonlyArray<{ id: string; ratio: number }>,
+): string | null {
+  if (!phoneStackActive()) return phoneVisiblePrimaryId;
+  const mode = container.dataset.viewMode;
+  if (mode === 'focus' || mode === 'theater') return phoneVisiblePrimaryId;
+
+  let bestId: string | null = null;
+  let bestRatio = 0;
+  const ratioById = new Map<string, number>();
+  for (const { id, ratio } of visibilities) {
+    ratioById.set(id, ratio);
+    if (ratio > bestRatio) {
+      bestRatio = ratio;
+      bestId = id;
+    }
+  }
+
+  const currentId = phoneVisiblePrimaryId;
+  const currentRatio = currentId ? (ratioById.get(currentId) ?? 0) : 0;
+  let next = currentId;
+  if (bestRatio < PHONE_VISIBLE_MIN_RATIO) {
+    next = currentRatio >= PHONE_VISIBLE_MIN_RATIO - PHONE_VISIBLE_HYSTERESIS ? currentId : null;
+  } else if (!currentId || currentRatio < PHONE_VISIBLE_MIN_RATIO - PHONE_VISIBLE_HYSTERESIS) {
+    next = bestId;
+  } else if (bestId && bestId !== currentId && bestRatio >= currentRatio + PHONE_VISIBLE_HYSTERESIS) {
+    next = bestId;
+  }
+
+  phoneVisiblePrimaryId = next;
+
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    const id = card.dataset.streamId ?? '';
+    if (next && id === next) playPhoneVisibleCard(card);
+    else pausePhoneVisibleCard(card);
+  }
+
+  return phoneVisiblePrimaryId;
+}
+
+function phoneVisibleObserverCallback(entries: IntersectionObserverEntry[]): void {
+  if (!phoneVisibleContainer) return;
+  for (const entry of entries) {
+    const id = (entry.target as HTMLElement).dataset.streamId;
+    if (!id) continue;
+    phoneVisibleRatios.set(id, entry.intersectionRatio);
+  }
+  applyPhoneVisiblePlayback(
+    phoneVisibleContainer,
+    [...phoneVisibleRatios.entries()].map(([id, ratio]) => ({ id, ratio })),
+  );
+}
+
+export function bindPhoneVisiblePlayback(container: HTMLElement): void {
+  phoneVisibleContainer = container;
+  syncPhoneVisiblePlayback(container);
+}
+
+export function syncPhoneVisiblePlayback(container: HTMLElement): void {
+  phoneVisibleContainer = container;
+  const stacked =
+    phoneStackActive() &&
+    container.dataset.viewMode !== 'focus' &&
+    container.dataset.viewMode !== 'theater';
+
+  if (!stacked) {
+    const wasObserving = phoneVisibleObserver !== null;
+    phoneVisibleObserver?.disconnect();
+    phoneVisibleObserver = null;
+    phoneVisibleRatios.clear();
+    if (wasObserving && typeof window.matchMedia === 'function' && !isStackedStreamLayout()) {
+      for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+        playPhoneVisibleCard(card);
+      }
+    }
+    phoneVisiblePrimaryId = null;
+    return;
+  }
+
+  if (typeof IntersectionObserver === 'undefined') return;
+
+  if (!phoneVisibleObserver) {
+    phoneVisibleObserver = new IntersectionObserver(phoneVisibleObserverCallback, {
+      threshold: [0, 0.25, 0.5, 0.75, 1],
+    });
+  }
+
+  const cards = [...container.querySelectorAll<HTMLElement>('.stream-card')];
+  const liveIds = new Set(cards.map((card) => card.dataset.streamId ?? ''));
+  for (const id of [...phoneVisibleRatios.keys()]) {
+    if (!liveIds.has(id)) phoneVisibleRatios.delete(id);
+  }
+  phoneVisibleObserver.disconnect();
+  for (const card of cards) phoneVisibleObserver.observe(card);
+}
+
+export function __resetPhoneVisiblePlaybackForTests(): void {
+  phoneVisibleObserver?.disconnect();
+  phoneVisibleObserver = null;
+  phoneVisibleContainer = null;
+  phoneVisiblePrimaryId = null;
+  phoneVisibleRatios.clear();
 }
 
 export function bindStreamFocus(handler: FocusChangeHandler): void {
@@ -4653,6 +4821,7 @@ export function syncStreamGrid(container: HTMLElement, store: StreamStore): void
     focusViewPrimaryId = streams[0]?.id ?? null;
   }
   syncFocusViewDom(container);
+  syncPhoneVisiblePlayback(container);
 }
 
 type CardChrome = { header: number; borderX: number; borderY: number };

@@ -104,7 +104,10 @@
         if (!localStorage.getItem('multistream:welcome-dismissed')) {
           document.documentElement.classList.add('show-welcome');
         }
-        if (localStorage.getItem('multistream:headers-hidden') === '1') {
+        if (
+          localStorage.getItem('multistream:headers-hidden') === '1' &&
+          !window.matchMedia('(max-width: 640px)').matches
+        ) {
           document.documentElement.classList.add('headers-hidden');
         }
       } catch (e) {}
@@ -169,25 +172,27 @@
               For <strong>TikTok LIVE</strong>, the suggestion accepts a username,
               <code>@username</code>, or a full live/share URL.
             </li>
-            <li>Use <strong>Focus</strong> on a stream to expand it and turn sound on.</li>
-            <li>
+            <li class="site-intro__desktop-only">
+              Use <strong>Focus</strong> on a stream to expand it and turn sound on.
+            </li>
+            <li class="site-intro__desktop-only">
               Switch to <strong>Focus view</strong> for one large primary stream and a tray of the
               rest — click a tray stream's header to swap it into the primary spot without
               interrupting playback.
             </li>
-            <li>
+            <li class="site-intro__desktop-only">
               Hover the toolbar icons to <strong>Share</strong>, <strong>Clear</strong>, hide
               headers, or open Twitch or Kick chat.
             </li>
-            <li>
+            <li class="site-intro__desktop-only">
               Prefer a denser grid? <strong>Hide headers</strong> — at rest you see video only;
               hover a card and a strip opens <strong>below</strong> it (focus, remove, drag).
             </li>
           </ul>
 
           <p class="site-intro__mobile-limit">
-            On phones and tablets you can keep several streams in the page, but the browser usually
-            plays only one at a time due to platform restrictions.
+            On a phone, streams stack in a column. About three fit on screen at once. Scroll to move
+            between them. Twitch may need you to stay on it a moment before the video fully plays.
           </p>
         </section>
 
@@ -350,8 +355,8 @@
           </div>
         </div>
         <p class="toolbar__mobile-note">
-          On mobile you can add multiple streams, but only one plays at a time due to browser
-          restrictions.
+          Scroll between streams — about 3 fit on screen. Twitch may need a moment on-screen before
+          video plays.
         </p>
         <div id="twitch-status-announcer" class="visually-hidden" role="status" aria-live="polite"></div>
       </header>

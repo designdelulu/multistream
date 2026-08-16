@@ -147,6 +147,22 @@ export const SHARE_URL_LINE_HEIGHT = 1.28;
 export const SHARE_URL_LAST_LINE_OFFSET = 100;
 export const SHARE_URL_ATTRIBUTION_OFFSET = 60;
 
+/** Centered Story header + grid. Avatars stay at STORY_GRID_START_Y. */
+export const STORY_CENTER_X = SHARE_CARD_WIDTH / 2;
+export const STORY_PILL_W = 190;
+export const STORY_PILL_H = 52;
+export const STORY_PILL_X = (SHARE_CARD_WIDTH - STORY_PILL_W) / 2;
+export const STORY_BRAND_BASELINE_Y = 153;
+export const STORY_TAGLINE_BASELINE_Y = 187;
+export const STORY_PILL_Y = 233;
+export const STORY_HEADLINE_BASELINE_Y = 405;
+export const STORY_COUNT_BASELINE_Y = 515;
+export const STORY_GRID_START_Y = 560;
+export const STORY_ROOMY_ROW_EXTRA = 90;
+export const STORY_COMPACT_ROW_EXTRA = 74;
+export const STORY_CAPTION_FONT_SIZE = 44;
+export const STORY_CAPTION_BASELINE_Y = 1840;
+
 const URL_BREAK_CHARS = new Set(['/', ':', '?', '&', '=', '-', '_']);
 
 export function shortenWatchUrl(url: string): string {
@@ -174,12 +190,12 @@ export function shareCardUrlBox(entryCount: number): { gridBottom: number; box: 
   const roomy = entryCount <= ROOMY_TIER_MAX;
   const columns = roomy ? (entryCount <= 2 ? Math.max(entryCount, 1) : entryCount <= 4 ? 2 : 3) : 4;
   const cellSize = roomy ? (columns === 2 ? 320 : 280) : 190;
-  const rowHeight = cellSize + (roomy ? 90 : 70);
+  const rowHeight = cellSize + (roomy ? STORY_ROOMY_ROW_EXTRA : STORY_COMPACT_ROW_EXTRA);
   const shown = entryCount <= COMPACT_TIER_MAX ? entryCount : COMPACT_TIER_SHOWN_WITH_OVERFLOW;
   const overflow = Math.max(0, entryCount - shown);
   const cells = shown + (overflow > 0 ? 1 : 0);
   const rows = Math.max(1, Math.ceil(cells / columns));
-  const gridBottom = 560 + rows * rowHeight;
+  const gridBottom = STORY_GRID_START_Y + rows * rowHeight;
   const lastLineY = SHARE_CARD_HEIGHT - SHARE_URL_LAST_LINE_OFFSET;
   const urlTopLimit = gridBottom + 28;
   return {
@@ -355,41 +371,35 @@ export async function renderShareCard(
   ctx.fillRect(0, 0, SHARE_CARD_WIDTH, SHARE_CARD_HEIGHT);
 
   ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = 'left';
+  ctx.textAlign = 'center';
   ctx.fillStyle = '#f3f3f5';
   ctx.font = '700 44px system-ui, -apple-system, sans-serif';
-  ctx.fillText('MultiStream.cc', 64, 108);
+  ctx.fillText('MultiStream.cc', STORY_CENTER_X, STORY_BRAND_BASELINE_Y);
   ctx.fillStyle = '#9b9ba8';
   ctx.font = '500 24px system-ui, -apple-system, sans-serif';
-  ctx.fillText('A product of Design Delulu', 64, 142);
+  ctx.fillText('A product of Design Delulu', STORY_CENTER_X, STORY_TAGLINE_BASELINE_Y);
 
-  const pillX = 64;
-  const pillY = 188;
-  const pillW = 190;
-  const pillH = 52;
   ctx.fillStyle = '#ff5d5d';
-  roundedRectPath(ctx, pillX, pillY, pillW, pillH, pillH / 2);
+  roundedRectPath(ctx, STORY_PILL_X, STORY_PILL_Y, STORY_PILL_W, STORY_PILL_H, STORY_PILL_H / 2);
   ctx.fill();
   ctx.fillStyle = '#0d0d0f';
   ctx.font = '700 24px system-ui, -apple-system, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(data.liveNowLabel, pillX + pillW / 2, pillY + pillH / 2 + 8);
+  ctx.fillText(data.liveNowLabel, STORY_PILL_X + STORY_PILL_W / 2, STORY_PILL_Y + STORY_PILL_H / 2 + 8);
 
-  ctx.textAlign = 'left';
   ctx.fillStyle = '#f3f3f5';
   ctx.font = '700 64px system-ui, -apple-system, sans-serif';
-  wrapText(ctx, data.headline, 64, 350, SHARE_CARD_WIDTH - 128, 74);
+  wrapText(ctx, data.headline, STORY_CENTER_X, STORY_HEADLINE_BASELINE_Y, SHARE_CARD_WIDTH - 128, 74);
 
   ctx.fillStyle = '#9b9ba8';
   ctx.font = '500 32px system-ui, -apple-system, sans-serif';
-  ctx.fillText(data.streamCountLabel, 64, 470);
+  ctx.fillText(data.streamCountLabel, STORY_CENTER_X, STORY_COUNT_BASELINE_Y);
 
   const totalCount = data.entries.length;
   const roomy = totalCount <= ROOMY_TIER_MAX;
   const columns = roomy ? (totalCount <= 2 ? Math.max(totalCount, 1) : totalCount <= 4 ? 2 : 3) : 4;
   const cellSize = roomy ? (columns === 2 ? 320 : 280) : 190;
   const gap = roomy ? 40 : 24;
-  const rowHeight = cellSize + (roomy ? 90 : 70);
+  const rowHeight = cellSize + (roomy ? STORY_ROOMY_ROW_EXTRA : STORY_COMPACT_ROW_EXTRA);
   const handleFontSize = roomy ? 30 : 22;
   const platformFontSize = roomy ? 24 : 18;
   const handleMaxChars = roomy ? 14 : 10;
@@ -401,7 +411,7 @@ export async function renderShareCard(
   const overflow = totalCount - shown.length;
   const gridWidth = columns * cellSize + (columns - 1) * gap;
   const startX = (SHARE_CARD_WIDTH - gridWidth) / 2;
-  const startY = 560;
+  const startY = STORY_GRID_START_Y;
 
   // Loaded in parallel up front — drawImage itself is synchronous, so every
   // avatar has to be a real (or null, on failure) HTMLImageElement before the
@@ -471,24 +481,10 @@ export async function renderShareCard(
     ctx.textBaseline = 'alphabetic';
   }
 
-  ctx.fillStyle = '#f3f3f5';
-  ctx.textAlign = 'center';
-  const { box: urlBox } = shareCardUrlBox(totalCount);
-  const urlLayout = fitWatchUrl(data.watchUrl, (text, size) => {
-    ctx.font = `600 ${size}px system-ui, -apple-system, sans-serif`;
-    return ctx.measureText(text).width;
-  }, urlBox);
-  ctx.font = `600 ${urlLayout.fontSize}px system-ui, -apple-system, sans-serif`;
-  const urlLineHeight = urlLayout.fontSize * SHARE_URL_LINE_HEIGHT;
-  const lastLineY = SHARE_CARD_HEIGHT - SHARE_URL_LAST_LINE_OFFSET;
-  const firstLineY = lastLineY - (urlLayout.lines.length - 1) * urlLineHeight;
-  urlLayout.lines.forEach((line, index) => {
-    ctx.fillText(line, SHARE_CARD_WIDTH / 2, firstLineY + index * urlLineHeight);
-  });
-
   ctx.fillStyle = '#9b9ba8';
-  ctx.font = '500 22px system-ui, -apple-system, sans-serif';
-  ctx.fillText('Live streams shown at time of sharing', SHARE_CARD_WIDTH / 2, SHARE_CARD_HEIGHT - 60);
+  ctx.textAlign = 'center';
+  ctx.font = `500 ${STORY_CAPTION_FONT_SIZE}px system-ui, -apple-system, sans-serif`;
+  ctx.fillText('Live streams shown at time of sharing', STORY_CENTER_X, STORY_CAPTION_BASELINE_Y);
 
   return true;
 }
