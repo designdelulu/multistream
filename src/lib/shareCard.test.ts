@@ -214,7 +214,7 @@ describe('story layout metrics', () => {
   });
 
   it('keeps avatars at the same start Y and halves the count-to-grid gap', () => {
-    expect(STORY_GRID_START_Y).toBe(560);
+    expect(STORY_GRID_START_Y).toBe(600);
     expect(STORY_GRID_START_Y - STORY_COUNT_BASELINE_Y).toBe(45);
     expect(STORY_COUNT_BASELINE_Y - STORY_HEADLINE_BASELINE_Y).toBe(110);
     expect(STORY_BRAND_BASELINE_Y).toBeGreaterThan(108);
@@ -231,7 +231,7 @@ describe('story layout metrics', () => {
 
   it('doubles the disclosure caption and sits it above the old 1860 baseline', () => {
     expect(STORY_CAPTION_FONT_SIZE).toBe(44);
-    expect(STORY_CAPTION_BASELINE_Y).toBe(1840);
+    expect(STORY_CAPTION_BASELINE_Y).toBe(1820);
   });
 
   it('uses the compact row extra in shareCardUrlBox geometry', () => {

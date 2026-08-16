@@ -152,16 +152,16 @@ export const STORY_CENTER_X = SHARE_CARD_WIDTH / 2;
 export const STORY_PILL_W = 190;
 export const STORY_PILL_H = 52;
 export const STORY_PILL_X = (SHARE_CARD_WIDTH - STORY_PILL_W) / 2;
-export const STORY_BRAND_BASELINE_Y = 153;
-export const STORY_TAGLINE_BASELINE_Y = 187;
-export const STORY_PILL_Y = 233;
-export const STORY_HEADLINE_BASELINE_Y = 405;
-export const STORY_COUNT_BASELINE_Y = 515;
-export const STORY_GRID_START_Y = 560;
+export const STORY_BRAND_BASELINE_Y = 193;
+export const STORY_TAGLINE_BASELINE_Y = 227;
+export const STORY_PILL_Y = 273;
+export const STORY_HEADLINE_BASELINE_Y = 445;
+export const STORY_COUNT_BASELINE_Y = 555;
+export const STORY_GRID_START_Y = 600;
 export const STORY_ROOMY_ROW_EXTRA = 90;
 export const STORY_COMPACT_ROW_EXTRA = 74;
 export const STORY_CAPTION_FONT_SIZE = 44;
-export const STORY_CAPTION_BASELINE_Y = 1840;
+export const STORY_CAPTION_BASELINE_Y = 1820;
 
 const URL_BREAK_CHARS = new Set(['/', ':', '?', '&', '=', '-', '_']);
 

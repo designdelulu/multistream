@@ -2005,6 +2005,10 @@ html.headers-hidden .stream-grid[data-view-mode='theater'] .stream-card.is-focus
   cursor: pointer;
 }
 
+.story-preview__action-short {
+  display: none;
+}
+
 .story-preview__action:hover {
   background: color-mix(in srgb, var(--text) 8%, transparent);
 }
@@ -2593,6 +2597,31 @@ html.show-welcome .welcome-modal {
 
   .stream-card__youtube-volume-slider {
     height: 24px;
+  }
+
+  .story-preview__image {
+    min-height: 0;
+  }
+
+  .story-preview__actions {
+    flex-wrap: nowrap;
+    width: 100%;
+    flex-shrink: 0;
+  }
+
+  .story-preview__action {
+    flex: 1;
+    padding: 10px 8px;
+    font-size: 0.82rem;
+    white-space: nowrap;
+  }
+
+  .story-preview__action-full {
+    display: none;
+  }
+
+  .story-preview__action-short {
+    display: inline;
   }
 }
 

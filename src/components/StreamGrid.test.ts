@@ -2522,6 +2522,12 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(html).toContain('Share Watch Party');
     expect(html).toContain('id="story-preview-backdrop"');
     expect(html).toContain('story-preview__backdrop');
+    expect(html).toContain('class="story-preview__action-full"');
+    expect(html).toContain('class="story-preview__action-short"');
+    expect(html).toMatch(/story-preview-download[\s\S]*?aria-label="Download Story Card"/);
+    expect(html).toMatch(/<span class="story-preview__action-short">Download<\/span>/);
+    expect(html).toMatch(/<span class="story-preview__action-short">Copy<\/span>/);
+    expect(html).toMatch(/<span class="story-preview__action-short">Share<\/span>/);
   });
 
   it('headers-hidden does not lock portrait cards to landscape --player-height', async () => {
@@ -2610,6 +2616,15 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     );
     expect(html).toMatch(
       /<li class="site-intro__desktop-only">\s*Switch to <strong>Focus view<\/strong>/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.story-preview__actions\s*\{[^}]*flex-wrap:\s*nowrap/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.story-preview__action-full\s*\{[^}]*display:\s*none/,
+    );
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.story-preview__action-short\s*\{[^}]*display:\s*inline/,
     );
   });
 

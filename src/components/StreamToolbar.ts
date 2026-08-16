@@ -525,11 +525,11 @@ export function bindStreamToolbar(
       if (!options?.keepOpen) closeShareMenu();
       return;
     }
-    const previous = feedbackEl.textContent ?? 'Copy Watch URL';
+    const previous = feedbackEl.innerHTML || 'Copy Watch URL';
     feedbackEl.textContent = 'Copied!';
     window.clearTimeout(shareResetTimer);
     shareResetTimer = window.setTimeout(() => {
-      feedbackEl.textContent = previous;
+      feedbackEl.innerHTML = previous;
       if (!options?.keepOpen) {
         closeShareMenu();
         shareMenuToggle?.focus();
