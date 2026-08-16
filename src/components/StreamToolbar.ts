@@ -1,6 +1,7 @@
-import { parseStreamInput } from '../platforms';
+import { parseStreamInput, buildPathFromStreams } from '../platforms';
 import { isTikTokShortLink, resolveTikTokShareLink } from '../platforms/tiktok';
 import { buildShareCardData, canvasToBlob, renderShareCard } from '../lib/shareCard';
+import type { WatchPartyController } from './WatchParty';
 import {
   isKickStatusRefreshInFlight,
   isStreamFocused,
@@ -168,6 +169,7 @@ export function bindStreamToolbar(
   viewModeStore: ViewModeStore,
   globalRefresh: GlobalRefreshDeps,
   storyPreviewHooks?: StoryPreviewHooks,
+  watchParty?: WatchPartyController,
 ): { sync: () => void } {
   const form = document.querySelector<HTMLFormElement>('#add-stream-form');
   const input = document.querySelector<HTMLInputElement>('#stream-input');
@@ -187,6 +189,17 @@ export function bindStreamToolbar(
   const storyPreviewDownload = document.querySelector<HTMLButtonElement>('#story-preview-download');
   const storyPreviewCopy = document.querySelector<HTMLButtonElement>('#story-preview-copy');
   const storyPreviewShare = document.querySelector<HTMLButtonElement>('#story-preview-share');
+  const startLivePartyButton = document.querySelector<HTMLButtonElement>(
+    '[data-action="start-live-party"]',
+  );
+  const copyLivePartyButton = document.querySelector<HTMLButtonElement>(
+    '[data-action="copy-live-party"]',
+  );
+  const endLivePartyButton = document.querySelector<HTMLButtonElement>(
+    '[data-action="end-live-party"]',
+  );
+  const partyStatus = document.querySelector<HTMLElement>('#watch-party-status');
+  const partyStatusText = document.querySelector<HTMLElement>('#watch-party-status-text');
 
   if (!form || !input || !suggestions) {
     throw new Error('Stream toolbar elements not found');
@@ -348,6 +361,7 @@ export function bindStreamToolbar(
 
   formEl.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (watchParty?.getRole() === 'viewer') return;
     if (tiktokShareLinkPending) return; // a share-link resolve is already in flight
     const value = stripAtPrefix(inputEl.value);
     if (!value) return;
@@ -439,11 +453,23 @@ export function bindStreamToolbar(
 
   function syncActionButtons(): void {
     const hasStreams = store.getStreams().length > 0;
+    const viewerLocked = watchParty?.getRole() === 'viewer';
     if (shareMenuToggle) shareMenuToggle.hidden = !hasStreams;
-    if (clearButton) clearButton.hidden = !hasStreams;
+    if (clearButton) clearButton.hidden = !hasStreams || viewerLocked;
     if (refreshButton) {
       refreshButton.hidden = !hasStreams;
     }
+    syncPartyMenu();
+  }
+
+  function syncPartyMenu(): void {
+    const role = watchParty?.getRole() ?? 'none';
+    if (startLivePartyButton) startLivePartyButton.hidden = role !== 'none';
+    if (copyLivePartyButton) copyLivePartyButton.hidden = role === 'none';
+    if (endLivePartyButton) endLivePartyButton.hidden = role !== 'host';
+    const text = watchParty?.getStatusText() ?? '';
+    if (partyStatusText) partyStatusText.textContent = text;
+    if (partyStatus) partyStatus.hidden = !text;
   }
 
   /** Visually-hidden aria-live text — never a modal/alert. Re-triggers even for a repeated message. */
@@ -506,11 +532,25 @@ export function bindStreamToolbar(
    * The `window.prompt` fallback (clipboard API unavailable/denied) closes
    * right away since there's nothing to flash.
    */
+  function staticWatchUrl(): string {
+    // Outside a live party, the address bar *is* the static lineup URL
+    // (including any debug query). During a party the bar is `/w/ROOM`, so
+    // Copy Watch URL has to rebuild the encoded lineup path.
+    if ((watchParty?.getRole() ?? 'none') === 'none') {
+      return window.location.href;
+    }
+    return `${window.location.origin}${buildPathFromStreams(store.getStreams())}`;
+  }
+
+  function liveOrStaticUrl(): string {
+    return watchParty?.getViewerUrl() || staticWatchUrl();
+  }
+
   async function copyWatchUrl(
     feedbackEl?: HTMLButtonElement,
-    options?: { keepOpen?: boolean },
+    options?: { keepOpen?: boolean; live?: boolean },
   ): Promise<void> {
-    const url = window.location.href;
+    const url = options?.live ? liveOrStaticUrl() : staticWatchUrl();
     try {
       await navigator.clipboard.writeText(url);
     } catch {
@@ -580,7 +620,7 @@ export function bindStreamToolbar(
   });
 
   async function shareWatchParty(): Promise<void> {
-    const url = window.location.href;
+    const url = liveOrStaticUrl();
     const shareData = {
       title: 'MultiStream.cc Watch Party',
       text: 'Join my live watch party on MultiStream.cc',
@@ -801,6 +841,45 @@ export function bindStreamToolbar(
       return;
     }
 
+    if (action === 'copy-live-party') {
+      void copyWatchUrl(actionButton, { live: true });
+      return;
+    }
+
+    if (action === 'start-live-party') {
+      closeShareMenu();
+      shareMenuToggle?.focus();
+      void (async () => {
+        const result = await watchParty?.start();
+        if (result?.ok && result.url) {
+          try {
+            await navigator.clipboard.writeText(result.url);
+          } catch {
+            window.prompt('Copy this live watch party link:', result.url);
+          }
+        } else if (result && !result.ok && result.error) {
+          window.alert(result.error);
+        }
+        syncPartyMenu();
+      })();
+      return;
+    }
+
+    if (action === 'end-live-party') {
+      closeShareMenu();
+      shareMenuToggle?.focus();
+      const ok = window.confirm('End this live watch party? Viewers will keep the last lineup.');
+      if (!ok) return;
+      void (async () => {
+        const result = await watchParty?.end();
+        if (result && !result.ok && result.error) {
+          window.alert(result.error);
+        }
+        syncPartyMenu();
+      })();
+      return;
+    }
+
     closeShareMenu();
     shareMenuToggle?.focus();
 
@@ -814,6 +893,7 @@ export function bindStreamToolbar(
   });
 
   clearButton?.addEventListener('click', () => {
+    if (watchParty?.getRole() === 'viewer') return;
     if (store.getStreams().length === 0) return;
     const ok = window.confirm('Remove all streams from this layout?');
     if (!ok) return;
@@ -873,6 +953,7 @@ export function bindStreamToolbar(
   store.subscribe(syncActionButtons);
   headersStore.subscribe(syncHeadersButton);
   viewModeStore.subscribe(syncFocusViewButton);
+  watchParty?.subscribe(syncActionButtons);
   sync();
   hideSuggestions();
 

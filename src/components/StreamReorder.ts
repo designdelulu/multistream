@@ -234,6 +234,10 @@ export function bindStreamReorder(
     return typeof window.matchMedia === 'function' && isPhoneViewport();
   }
 
+  function viewerLocked(): boolean {
+    return document.documentElement.classList.contains('watch-party-viewer');
+  }
+
   let dropTargetId: string | null = null;
   let dropInsertAfter = false;
   let lastPointer: { x: number; y: number } | null = null;
@@ -272,7 +276,7 @@ export function bindStreamReorder(
     filter:
       '.stream-card__focus, .stream-card__reload, .stream-card__close, .stream-card__overlay-focus, .stream-card__overlay-reload, .stream-card__overlay-remove, a, input, select, textarea',
     preventOnFilter: false,
-    disabled: isPrimaryModeActive() || phoneViewport(),
+    disabled: isPrimaryModeActive() || phoneViewport() || viewerLocked(),
     onChoose: () => {
       // Snapshot before is-dragging punches through iframes / freezes
       // headers-hidden hover toolbars. Hover-open already may have paused
@@ -354,7 +358,7 @@ export function bindStreamReorder(
 
   function sync(): void {
     const hidden = headersStore.isHidden();
-    gridSortable.option('disabled', isPrimaryModeActive() || phoneViewport());
+    gridSortable.option('disabled', isPrimaryModeActive() || phoneViewport() || viewerLocked());
     // Only the element matching `handle` can start a drag — Focus/Reload/
     // Close in the toolbar are siblings of the grip button, not descendants
     // of it, so switching this selector is what makes them un-draggable

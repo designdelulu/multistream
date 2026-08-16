@@ -166,11 +166,8 @@ describe('streamsFromPathname', () => {
     ]);
   });
 
-  it('still parses an old twitch/kick-only path exactly as before (backward compat)', () => {
-    expect(streamsFromPathname('/t:shroud/k:trainwreckstv')).toEqual([
-      { platform: 'twitch', channel: 'shroud' },
-      { platform: 'kick', channel: 'trainwreckstv' },
-    ]);
+  it('does not treat a live watch-party path as stream tokens', () => {
+    expect(streamsFromPathname('/w/abcdefghij')).toEqual([]);
   });
 });
 

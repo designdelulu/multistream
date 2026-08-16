@@ -1,3 +1,4 @@
+import { watchPartyIdFromPath, watchPartyPath } from '../lib/watchParty';
 import {
   buildPathFromStreams,
   parseStreamInput,
@@ -64,7 +65,8 @@ function loadFromStorage(): Omit<StreamRef, 'id' | 'muted' | 'orientation'>[] {
   }
 }
 
-function persistStreams(streams: StreamRef[]): void {
+function persistStreams(streams: StreamRef[], enabled: boolean): void {
+  if (!enabled) return;
   try {
     if (streams.length === 0) {
       localStorage.removeItem(STORAGE_KEY);
@@ -80,6 +82,9 @@ function persistStreams(streams: StreamRef[]): void {
 }
 
 function loadInitialStreams(): StreamRef[] {
+  // /w/ROOM is a live session, not a static lineup. Don't restore
+  // localStorage over it — the party client hydrates from the API.
+  if (watchPartyIdFromPath(window.location.pathname)) return [];
   const fromUrl = loadFromUrl();
   if (fromUrl.length > 0) return fromUrl;
   return toStreamRefs(loadFromStorage());
@@ -121,17 +126,22 @@ function dedupeStreams(streams: StreamRef[]): StreamRef[] {
   });
 }
 
-function syncUrl(streams: StreamRef[]): void {
-  const next = buildPathFromStreams(streams);
+function syncUrl(streams: StreamRef[], pathLock: string | null): void {
+  const next = pathLock ?? buildPathFromStreams(streams);
   window.history.replaceState(null, '', next);
 }
 
 export function createStreamStore() {
+  const initialPartyId = watchPartyIdFromPath(window.location.pathname);
+  let pathLock = initialPartyId ? watchPartyPath(initialPartyId) : null;
+  // Viewers joining /w/ROOM must not overwrite the host's saved lineup.
+  // Hosts re-enable persist after proving they hold the room token.
+  let persistEnabled = initialPartyId === null;
   let streams = dedupeStreams(loadInitialStreams());
   const listeners = new Set<Listener>();
 
-  syncUrl(streams);
-  persistStreams(streams);
+  syncUrl(streams, pathLock);
+  persistStreams(streams, persistEnabled);
 
   function notify(): void {
     for (const listener of listeners) {
@@ -141,8 +151,8 @@ export function createStreamStore() {
 
   function setStreams(next: StreamRef[]): void {
     streams = dedupeStreams(next);
-    syncUrl(streams);
-    persistStreams(streams);
+    syncUrl(streams, pathLock);
+    persistStreams(streams, persistEnabled);
     notify();
   }
 
@@ -214,6 +224,30 @@ export function createStreamStore() {
         next.push(stream);
       }
       setStreams(next);
+    },
+
+    /**
+     * Replace the whole lineup from a live-party snapshot. Same restore
+     * rules as a URL/localStorage load (TikTok stays portrait; YouTube
+     * Shorts orientation is not in the payload — see toStreamRefs).
+     */
+    replaceLineup(items: Omit<StreamRef, 'id' | 'muted' | 'orientation'>[]): void {
+      setStreams(toStreamRefs(items));
+    },
+
+    /** Keep `/w/ROOM` in the address bar while a live party is active. */
+    setPathLock(path: string | null): void {
+      pathLock = path;
+      syncUrl(streams, pathLock);
+    },
+
+    getPathLock(): string | null {
+      return pathLock;
+    },
+
+    setPersistEnabled(enabled: boolean): void {
+      persistEnabled = enabled;
+      persistStreams(streams, persistEnabled);
     },
 
     subscribe(listener: Listener): () => void {

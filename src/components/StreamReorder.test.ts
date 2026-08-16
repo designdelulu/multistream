@@ -437,6 +437,26 @@ describe('bindStreamReorder', () => {
     document.body.removeChild(grid);
   });
 
+  it('disables Sortable for live-party viewers so they cannot rearrange the host lineup', () => {
+    const grid = document.createElement('div');
+    grid.dataset.viewMode = 'grid';
+    document.documentElement.classList.add('watch-party-viewer');
+    document.body.appendChild(grid);
+    try {
+      const { sync } = bindStreamReorder(
+        grid,
+        { getStreams: () => [], reorderStreams: () => {} } as unknown as StreamStore,
+        fakeHeadersStore(),
+      );
+      sync();
+      const sortable = sortableInstance(grid);
+      expect(sortable.options.disabled).toBe(true);
+    } finally {
+      document.documentElement.classList.remove('watch-party-viewer');
+      document.body.removeChild(grid);
+    }
+  });
+
   it('disables Sortable on a phone viewport so header drags do not steal scroll', () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query.includes('max-width: 640px'),

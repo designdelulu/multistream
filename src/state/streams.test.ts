@@ -253,6 +253,57 @@ describe('createStreamStore — new portrait streams insert at index 0 only', ()
   });
 });
 
+describe('createStreamStore — live watch party path', () => {
+  it('does not restore localStorage over a /w/ROOM URL', () => {
+    localStorage.setItem(
+      'multistream:streams',
+      JSON.stringify([{ platform: 'twitch', channel: 'shroud' }]),
+    );
+    locationStub.pathname = '/w/abcdefghij';
+    const store = createStreamStore();
+    expect(store.getStreams()).toEqual([]);
+    expect(store.getPathLock()).toBe('/w/abcdefghij');
+    expect(localStorage.getItem('multistream:streams')).toBe(
+      JSON.stringify([{ platform: 'twitch', channel: 'shroud' }]),
+    );
+  });
+
+  it('replaceLineup hydrates a party snapshot without rewriting the locked path', () => {
+    locationStub.pathname = '/w/abcdefghij';
+    const replaced: string[] = [];
+    (window.history as { replaceState: (a: unknown, b: string, url: string) => void }).replaceState = (
+      _a,
+      _b,
+      url,
+    ) => {
+      replaced.push(url);
+    };
+    const store = createStreamStore();
+    store.replaceLineup([
+      { platform: 'twitch', channel: 'shroud' },
+      { platform: 'kick', channel: 'trainwreckstv' },
+    ]);
+    expect(store.getStreams().map((s) => s.id)).toEqual(['twitch:shroud', 'kick:trainwreckstv']);
+    expect(replaced.at(-1)).toBe('/w/abcdefghij');
+  });
+
+  it('unlocking the path writes the static lineup URL again', () => {
+    locationStub.pathname = '/w/abcdefghij';
+    const replaced: string[] = [];
+    (window.history as { replaceState: (a: unknown, b: string, url: string) => void }).replaceState = (
+      _a,
+      _b,
+      url,
+    ) => {
+      replaced.push(url);
+    };
+    const store = createStreamStore();
+    store.replaceLineup([{ platform: 'twitch', channel: 'shroud' }]);
+    store.setPathLock(null);
+    expect(replaced.at(-1)).toBe('/t:shroud');
+  });
+});
+
 describe('detectStreamListChange', () => {
   const mixed = [
     ...Array.from({ length: 14 }, (_, i) => `twitch:l${i}`),

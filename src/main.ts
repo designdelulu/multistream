@@ -37,6 +37,7 @@ import {
 } from './components/StreamGrid';
 import { bindStreamReorder } from './components/StreamReorder';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
+import { bindWatchParty } from './components/WatchParty';
 import { bindWelcomeModal } from './components/WelcomeModal';
 import { announceEmbedDebug, logPlayerEvent, twitchStatusFastPollEnabled } from './lib/embedDebug';
 import {
@@ -506,6 +507,8 @@ function recoverAfterStoryPreview(): void {
   });
 }
 
+const watchParty = bindWatchParty(store);
+
 const toolbar = bindStreamToolbar(
   store,
   headersStore,
@@ -550,6 +553,7 @@ const toolbar = bindStreamToolbar(
       recoverAfterStoryPreview();
     },
   },
+  watchParty,
 );
 const reorder = bindStreamReorder(gridEl, store, headersStore, {
   onDragChoose: () => {
@@ -561,6 +565,9 @@ const reorder = bindStreamReorder(gridEl, store, headersStore, {
   },
 });
 reorder.sync();
+watchParty.subscribe(() => {
+  reorder.sync();
+});
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
 bindTabVisibilityPlayers(gridEl);

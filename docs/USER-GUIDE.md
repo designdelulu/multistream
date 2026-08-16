@@ -100,17 +100,17 @@ The toolbar **Refresh** button reloads already-loaded stream players and refresh
 
 ## Sharing a lineup
 
+There are two share modes:
+
+### Static share
+
+A snapshot of the current lineup. The URL does not change later if you add or remove streams.
+
 1. Add the streams you want.
-2. Open the toolbar **Share** menu:
-   - **Copy Watch URL** — copies the current page URL
-   - **Preview Story Card** — opens a full-screen preview of a shareable lineup image (players keep playing behind the dimmed backdrop)
-   - **Download Story Card** — saves that image as a PNG
-   - **Share Watch Party** — uses the native share sheet when available, otherwise copies the URL
-3. Anyone opening the copied URL gets the same lineup.
+2. Open the toolbar **Share** menu and choose **Copy Watch URL**.
+3. Anyone opening that URL gets that exact lineup.
 
-If you close the tab and come back to the home page without a path URL, your last lineup is restored automatically. Share URLs always win when the path includes streams.
-
-You can also build URLs by hand:
+You can also build static URLs by hand:
 
 ```
 https://multistream.cc/t:username/k:username/y:handle:username/tt:creator
@@ -118,6 +118,27 @@ https://multistream.cc/t:username/k:username/y:handle:username/tt:creator
 
 - `t:` = Twitch, `k:` = Kick, `y:` = YouTube, `tt:` = TikTok LIVE (lowercase preferred; uppercase still works for `t:`/`k:`)
 - Legacy query form: `?streams=t:username,k:username`
+
+### Live watch party
+
+A persistent room. Viewers who open the party link see your current lineup, and it updates automatically when you add, remove, replace, or rearrange streams. Video is not rebroadcast — each viewer still loads Twitch/Kick/YouTube/TikTok directly.
+
+1. Add the streams you want.
+2. Open **Share → Start Live Watch Party**. The live link (`https://multistream.cc/w/ROOM_ID`) is copied for you.
+3. Use **Copy Live Party Link** or **Share Watch Party** to send that same room URL.
+4. **End Watch Party** when you are done. Viewers keep the last lineup as a normal static page.
+
+Only the host can change the shared lineup. Host control is stored in this browser (`localStorage`); refresh keeps you in control of the same room. Viewers cannot add, remove, or drag streams.
+
+Viewer pages check for lineup changes about every 2 seconds. A room stays available for 7 days after the last host update (24 hours after it is ended).
+
+The rest of the Share menu is unchanged:
+
+- **Preview Story Card** — full-screen preview of a shareable lineup image (players keep playing behind the dimmed backdrop)
+- **Download Story Card** — saves that image as a PNG
+- **Share Watch Party** — native share sheet when available (live party link if a party is active, otherwise the current page URL)
+
+If you close the tab and come back to the home page without a path URL, your last lineup is restored automatically. Static share URLs always win when the path includes streams. A `/w/ROOM_ID` live-party URL wins over both.
 
 ---
 

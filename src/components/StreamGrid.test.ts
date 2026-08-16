@@ -2520,6 +2520,13 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(html).toContain('Copy Watch URL');
     expect(html).toContain('id="story-preview-share"');
     expect(html).toContain('Share Watch Party');
+    expect(html).toContain('data-action="start-live-party"');
+    expect(html).toContain('Start Live Watch Party');
+    expect(html).toContain('data-action="copy-live-party"');
+    expect(html).toContain('Copy Live Party Link');
+    expect(html).toContain('data-action="end-live-party"');
+    expect(html).toContain('End Watch Party');
+    expect(html).toContain('id="watch-party-status"');
     expect(html).toContain('id="story-preview-backdrop"');
     expect(html).toContain('story-preview__backdrop');
     expect(html).toContain('class="story-preview__action-full"');
@@ -2616,6 +2623,9 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     );
     expect(html).toMatch(
       /<li class="site-intro__desktop-only">\s*Switch to <strong>Focus view<\/strong>/,
+    );
+    expect(withoutComments).toMatch(
+      /html\.watch-party-viewer \.toolbar__form,\s*html\.watch-party-viewer #clear-streams/,
     );
     expect(withoutComments).toMatch(
       /@media \(max-width:\s*640px\)[\s\S]*?\.story-preview__actions\s*\{[^}]*flex-wrap:\s*nowrap/,

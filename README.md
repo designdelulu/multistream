@@ -28,15 +28,16 @@ MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and ex
 - **Focus View** — toggle to a large-primary-plus-tray layout; click a tray stream's header to promote it to primary without remounting any player (see [Focus View](#focus-view) below)
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
 - **Username dropdown** — type a name (or `@name`) and pick **Twitch**, **Kick**, **YouTube**, or **TikTok LIVE (Experimental)**; Enter uses your last-chosen platform. Paste any supported URL to skip the dropdown.
-- **Share menu** — Copy Watch URL, preview or download a Story Card image of your lineup, or share a watch-party link; **Clear all** removes every stream
+- **Share menu** — Copy Watch URL (static lineup), Start / Copy / End a live watch party, preview or download a Story Card image of your lineup, or share a watch-party link; **Clear all** removes every stream
 - **Hide headers** — headers are shown by default (remembered in `localStorage` once toggled); in compact mode each card is video-only at rest, and hovering a card opens a toolbar **below** the embed (name, drag, focus, remove) so Twitch is never obscured
 - **Drag to reorder** stream cards (drag the card header, or the drag handle in the hover toolbar when headers are hidden); URL updates without remounting players
 - **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
 - **Shareable path URLs** like `/t:username/k:username/y:handle:username/tt:creator`
+- **Live watch parties** at `/w/ROOM_ID` — viewers follow the host’s lineup as it changes (polling, not video rebroadcast)
 - **× close** and **focus** controls per stream — focus fills the area below the toolbar, opens that stream’s Twitch or Kick chat, and remounts unmuted
 - **Twitch / Kick chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
 - **Streams always boot muted** — unmute on focus or from the platform's own player chrome
-- **Mostly static deploy** — Twitch and Kick embeds, direct YouTube video URLs, and the app shell itself need no backend. YouTube channel/handle → live lookup, optional Twitch/Kick status metadata, and experimental TikTok LIVE playback each use a small same-origin PHP script in `dist/api/` (see [YouTube setup](#youtube-setup), [Twitch setup](#twitch-setup), [Kick setup](#kick-setup), and [TikTok LIVE setup](#tiktok-live-setup-experimental) below). No database, no framework, no user accounts.
+- **Mostly static deploy** — Twitch and Kick embeds, direct YouTube video URLs, and the app shell itself need no backend. YouTube channel/handle → live lookup, optional Twitch/Kick status metadata, experimental TikTok LIVE playback, and **live watch-party session sync** each use a small same-origin PHP script in `dist/api/` (see [YouTube setup](#youtube-setup), [Twitch setup](#twitch-setup), [Kick setup](#kick-setup), [TikTok LIVE setup](#tiktok-live-setup-experimental), and [Live watch parties](#live-watch-parties) below). No database, no framework, no user accounts.
 
 Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) project, rebuilt for modern platforms and maintainability.
 
@@ -98,7 +99,8 @@ dist/
 │   ├── kick-webhook.php
 │   ├── kick-chat.php
 │   ├── tiktok-resolve.php
-│   └── tiktok-avatar.php
+│   ├── tiktok-avatar.php
+│   └── watch-party.php
 ├── og-image.png
 ├── robots.txt
 ├── sitemap.xml
@@ -109,7 +111,7 @@ Steps:
 
 1. Run `npm run build` locally whenever you change the app.
 2. In DreamHost File Manager or FTP, open the folder for **multistream.cc**.
-3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes all seven files under `api/` (`youtube-resolve.php`, `twitch-status.php`, `kick-status.php`, `kick-webhook.php`, `kick-chat.php`, `tiktok-resolve.php`, and `tiktok-avatar.php`).
+3. Upload the **contents** of `dist/` (not the `dist` folder itself) into that root — this now includes all eight files under `api/` (`youtube-resolve.php`, `twitch-status.php`, `kick-status.php`, `kick-webhook.php`, `kick-chat.php`, `tiktok-resolve.php`, `tiktok-avatar.php`, and `watch-party.php`).
 4. Confirm `index.html` sits directly in the domain root.
 5. Complete the one-time [YouTube setup](#youtube-setup), [Twitch setup](#twitch-setup), and [Kick setup](#kick-setup) below (config files outside the web root) — channel/handle resolution and live-status checks won't work until that's done, but direct video URLs, Twitch/Kick/YouTube embeds, and TikTok LIVE (via `tiktok-resolve.php`, no credentials) all work as soon as `dist/` is uploaded.
 6. Visit `https://multistream.cc/` — Twitch embeds will automatically use `multistream.cc` as the `parent` domain.
@@ -250,6 +252,14 @@ Twitch endpoints use — no separate directory to create.
 To disable TikTok LIVE without touching anything else, see
 [docs/TIKTOK.md § Rollback](./docs/TIKTOK.md#rollback).
 
+### Live watch parties
+
+A **static** share URL (`/t:username/k:username/…`) is a snapshot. A **live watch party** is a room at `/w/ROOM_ID` whose lineup can change while viewers stay on the same link.
+
+**Share → Start Live Watch Party** creates the room (host token stays in this browser’s `localStorage`). Viewers poll `public/api/watch-party.php` every 2 seconds for lineup changes only — MultiStream never rebroadcasts video. **End Watch Party** marks the room ended; it is then kept 24 hours. Idle active rooms expire 7 days after the last host update.
+
+Sessions are JSON files under `~/multistream-secrets/watch-party/` (created automatically, same parent as the resolver cache). No extra config file, no database. PHP must be able to write that directory, same as `~/multistream-secrets/cache/`.
+
 ---
 
 ## Usage
@@ -264,7 +274,7 @@ https://multistream.cc/t:username/k:username/y:handle:username/tt:creator
 
 Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:username`) still work.
 
-Open the toolbar **Share** menu to **Copy Watch URL**, **Preview Story Card**, **Download Story Card**, or **Share Watch Party**. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Refresh, Clear, Headers, Chat) are icons that expand their labels on hover.
+Open the toolbar **Share** menu to **Copy Watch URL** (static snapshot), **Start Live Watch Party** (live `/w/ROOM_ID` link), **Preview Story Card**, **Download Story Card**, or **Share Watch Party**. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Refresh, Clear, Headers, Chat) are icons that expand their labels on hover.
 
 **Hide headers** collapses each card’s top bar for a denser grid. At rest you see **video only**. Hover a card and the player shrinks slightly so a control strip opens **below** the iframe — channel name, **drag to reorder**, magnifying-glass **Focus**, and **×** remove. Controls never stack over the embed (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)).
 
@@ -322,7 +332,7 @@ src/
 └── styles/        # Layout and UI
 public/api/        # youtube-resolve.php, twitch-status.php, kick-status.php,
                    # kick-webhook.php, kick-chat.php, tiktok-resolve.php,
-                   # tiktok-avatar.php — the server-side pieces
+                   # tiktok-avatar.php, watch-party.php — the server-side pieces
 ```
 
 Each platform implements a small adapter:

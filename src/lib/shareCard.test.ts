@@ -14,7 +14,10 @@ import {
   STORY_HEADLINE_BASELINE_Y,
   STORY_PILL_W,
   STORY_PILL_X,
+  STORY_PILL_Y,
   STORY_ROOMY_ROW_EXTRA,
+  STORY_SAFE_TOP,
+  STORY_TAGLINE_BASELINE_Y,
   buildShareCardData,
   fitWatchUrl,
   shareCardUrlBox,
@@ -213,11 +216,18 @@ describe('story layout metrics', () => {
     expect(STORY_PILL_X).toBe((SHARE_CARD_WIDTH - STORY_PILL_W) / 2);
   });
 
-  it('keeps avatars at the same start Y and halves the count-to-grid gap', () => {
+  it('keeps avatars at the same start Y and drops the top block into the Story viewport', () => {
+    expect(STORY_SAFE_TOP).toBe(269);
     expect(STORY_GRID_START_Y).toBe(600);
-    expect(STORY_GRID_START_Y - STORY_COUNT_BASELINE_Y).toBe(45);
-    expect(STORY_COUNT_BASELINE_Y - STORY_HEADLINE_BASELINE_Y).toBe(110);
-    expect(STORY_BRAND_BASELINE_Y).toBeGreaterThan(108);
+    expect(STORY_BRAND_BASELINE_Y).toBe(320);
+    expect(STORY_TAGLINE_BASELINE_Y).toBe(354);
+    expect(STORY_PILL_Y).toBe(400);
+    expect(STORY_HEADLINE_BASELINE_Y).toBe(528);
+    expect(STORY_COUNT_BASELINE_Y).toBe(578);
+    expect(STORY_GRID_START_Y - STORY_COUNT_BASELINE_Y).toBe(22);
+    expect(STORY_COUNT_BASELINE_Y - STORY_HEADLINE_BASELINE_Y).toBe(50);
+    expect(STORY_HEADLINE_BASELINE_Y - STORY_GRID_START_Y).toBeLessThan(0);
+    expect(STORY_BRAND_BASELINE_Y - 44).toBeGreaterThanOrEqual(STORY_SAFE_TOP);
   });
 
   it('leaves at least 10px between a compact platform label and the next avatar', () => {

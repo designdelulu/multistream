@@ -262,6 +262,32 @@
                 <button type="button" class="toolbar__share-menu-item" data-action="share-party" role="menuitem">
                   Share Watch Party
                 </button>
+                <button
+                  type="button"
+                  class="toolbar__share-menu-item"
+                  data-action="start-live-party"
+                  role="menuitem"
+                >
+                  Start Live Watch Party
+                </button>
+                <button
+                  type="button"
+                  class="toolbar__share-menu-item"
+                  data-action="copy-live-party"
+                  role="menuitem"
+                  hidden
+                >
+                  Copy Live Party Link
+                </button>
+                <button
+                  type="button"
+                  class="toolbar__share-menu-item"
+                  data-action="end-live-party"
+                  role="menuitem"
+                  hidden
+                >
+                  End Watch Party
+                </button>
               </div>
             </div>
             <button
@@ -354,6 +380,10 @@
             </button>
           </div>
         </div>
+        <p id="watch-party-status" class="toolbar__party-status" hidden role="status" aria-live="polite">
+          <span class="toolbar__party-dot" aria-hidden="true"></span>
+          <span id="watch-party-status-text"></span>
+        </p>
         <p class="toolbar__mobile-note">
           Scroll between streams — about 3 fit on screen. Twitch may need a moment on-screen before
           video plays.

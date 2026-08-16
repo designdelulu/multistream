@@ -59,17 +59,18 @@ skipped just because there's no pipeline enforcing it.
 
 ## Before uploading to DreamHost specifically
 
-6. Confirm all seven API scripts are present in the build output:
+6. Confirm all eight API scripts are present in the build output:
    `dist/api/youtube-resolve.php`, `dist/api/twitch-status.php`,
    `dist/api/kick-status.php`, `dist/api/kick-webhook.php`,
-   `dist/api/kick-chat.php`, `dist/api/tiktok-resolve.php`, and
-   `dist/api/tiktok-avatar.php` — see
+   `dist/api/kick-chat.php`, `dist/api/tiktok-resolve.php`,
+   `dist/api/tiktok-avatar.php`, and `dist/api/watch-party.php` — see
    [README.md § YouTube setup](../README.md#youtube-setup),
-   [§ Twitch setup](../README.md#twitch-setup), and
-   [§ Kick setup](../README.md#kick-setup) for the one-time server
-   config the status/resolver endpoints depend on (already configured on
-   the live server; this is just confirming the build still includes the
-   files).
+   [§ Twitch setup](../README.md#twitch-setup),
+   [§ Kick setup](../README.md#kick-setup), and
+   [§ Live watch parties](../README.md#live-watch-parties) for the
+   server-side pieces (already configured on the live server except
+   `watch-party.php`, which only needs the existing writable
+   `~/multistream-secrets/` directory).
 7. Upload the **contents** of `dist/`, not the `dist` folder itself, per
    the README's DreamHost steps.
 8. After upload, load `https://multistream.cc/` in an incognito/private
