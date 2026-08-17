@@ -119,16 +119,15 @@
     <noscript>
       <p>
         MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and TikTok LIVE
-        (experimental) — add channels from the toolbar, copy a static watch URL, or start a Live Watch Party.
+        (experimental) — add channels from the toolbar and share a Live Watch Party link.
       </p>
     </noscript>
     <section class="seo-landing" aria-label="About MultiStream.cc">
       <h1>Watch Twitch, Kick, YouTube &amp; TikTok LIVE streams online</h1>
       <p>
         MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and TikTok LIVE
-        (experimental). Add channels from the toolbar, share a fixed lineup with <strong>Copy Watch URL</strong>,
-        or start a <strong>Live Watch Party</strong> — one link where viewers automatically follow what you're
-        watching as you change streams.
+        (experimental). Add channels from the toolbar and share a <strong>Live Watch Party</strong>
+        — one link where viewers automatically follow what you're watching as you change streams.
       </p>
       <p>
         Streams are arranged in a responsive grid — landscape players scale to the largest
@@ -160,7 +159,7 @@
           <p>
             Watch Twitch, Kick, YouTube, and TikTok LIVE <strong>(Experimental)</strong> side by
             side in one responsive grid — a modern multi-stream viewer with minimal friction. Add
-            channels, rearrange the grid, then share a fixed lineup or start a
+            channels, rearrange the grid, then share a
             <strong>Live Watch Party</strong> so friends follow what you're watching automatically.
           </p>
 
@@ -172,10 +171,9 @@
               suggestions — or paste a full stream URL and the provider is detected automatically.
             </li>
             <li>
-              Open <strong>Share → Start Live Watch Party</strong> to get a live link at
-              <code>/w/ROOM_ID</code>. When you add, remove, replace, or reorder streams, everyone
-              in the party follows along. Need a fixed snapshot instead? Use
-              <strong>Copy Watch URL</strong>.
+              Open <strong>Share</strong> to start a <strong>Live Watch Party</strong> and copy a
+              live link at <code>/w/ROOM_ID</code>. When you add, remove, replace, or reorder
+              streams, everyone in the party follows along.
             </li>
             <li>
               For <strong>TikTok LIVE</strong>, the suggestion accepts a username,
@@ -259,18 +257,6 @@
                 <span class="toolbar__icon-btn-label">Share</span>
               </button>
               <div id="share-menu" class="toolbar__share-menu" hidden role="menu" aria-label="Share options">
-                <button type="button" class="toolbar__share-menu-item" data-action="copy-url" role="menuitem">
-                  Copy Watch URL
-                </button>
-                <button type="button" class="toolbar__share-menu-item" data-action="preview-story-card" role="menuitem">
-                  Preview Story Card
-                </button>
-                <button type="button" class="toolbar__share-menu-item" data-action="story-card" role="menuitem">
-                  Download Story Card
-                </button>
-                <button type="button" class="toolbar__share-menu-item" data-action="share-party" role="menuitem">
-                  Share Watch Party
-                </button>
                 <button
                   type="button"
                   class="toolbar__share-menu-item"
@@ -286,7 +272,7 @@
                   role="menuitem"
                   hidden
                 >
-                  Copy Live Party Link
+                  Share Watch Party
                 </button>
                 <button
                   type="button"
@@ -296,6 +282,12 @@
                   hidden
                 >
                   End Watch Party
+                </button>
+                <button type="button" class="toolbar__share-menu-item" data-action="preview-story-card" role="menuitem">
+                  Preview Story Card
+                </button>
+                <button type="button" class="toolbar__share-menu-item" data-action="story-card" role="menuitem">
+                  Download Story Card
                 </button>
               </div>
             </div>
@@ -442,15 +434,6 @@
             <button
               type="button"
               id="story-preview-copy"
-              class="story-preview__action"
-              aria-label="Copy Watch URL"
-            >
-              <span class="story-preview__action-full">Copy Watch URL</span>
-              <span class="story-preview__action-short">Copy</span>
-            </button>
-            <button
-              type="button"
-              id="story-preview-share"
               class="story-preview__action"
               aria-label="Share Watch Party"
             >

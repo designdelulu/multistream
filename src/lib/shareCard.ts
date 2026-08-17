@@ -311,7 +311,7 @@ export function fitWatchUrl(
     lines: kept,
     truncated: true,
     fallbackReason:
-      'URL exceeded the footer bounding box at the minimum legible font; last line ellipsized. Copy Watch URL still has the full link.',
+      'URL exceeded the footer bounding box at the minimum legible font; last line ellipsized. Share Watch Party still has the full link.',
   };
 }
 

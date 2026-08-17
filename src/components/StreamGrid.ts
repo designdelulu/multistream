@@ -43,7 +43,6 @@ import { checkYouTubeStats, type YouTubeStatsResult } from '../platforms/youtube
 import {
   computeFocusViewLayout,
   computeWeightedGridLayout,
-  targetVisibleTrayCount,
   GRID_GAP,
   GRID_PADDING,
   CARD_HEADER_HEIGHT,
@@ -199,13 +198,6 @@ function isActivelyWatchedStream(streamId: string): boolean {
   return focusedStreamId === streamId || focusViewPrimaryId === streamId;
 }
 
-/**
- * Set whenever syncViewMode transitions INTO Focus View (grid -> focus, or
- * solo-focus -> focus), consumed the next time updateFocusViewLayout runs —
- * gates the one-time tray auto-nudge (see maybeNudgeFocusTray) so it fires
- * once per entry, not on every resize/promote while already in Focus View.
- */
-let pendingTrayNudge = false;
 /**
  * Api-mode Twitch players confirmed playing right before the current focus
  * session started, captured before freezeFocusHiddenPlayers pauses anything —
@@ -2541,10 +2533,6 @@ function syncFocusViewDom(container: HTMLElement): void {
  * stream forward as the primary, is the one clean transition.
  */
 export function syncViewMode(container: HTMLElement, mode: ViewMode, streams: StreamRef[]): void {
-  if (mode === 'focus' && container.dataset.viewMode !== 'focus') {
-    pendingTrayNudge = true;
-  }
-
   if (mode !== 'grid' && focusedStreamId) {
     const soloFocusedId = focusedStreamId;
     setFocusedStream(container, null);
@@ -2608,16 +2596,6 @@ export function bindFocusViewPromotion(container: HTMLElement): void {
     event.preventDefault();
     setFocusViewPrimary(container, streamId);
   });
-  // Keeps data-tray-overflow (the edge-fade mask, see main.css) in sync as
-  // the viewer scrolls the tray by hand, not just right after a layout pass.
-  container.addEventListener(
-    'scroll',
-    () => {
-      if (container.dataset.viewMode !== 'focus') return;
-      updateFocusTrayOverflowIndicator(container);
-    },
-    { passive: true },
-  );
 }
 
 function handleFocusEscape(event: KeyboardEvent): void {
@@ -3390,6 +3368,117 @@ export function isStreamFocused(): boolean {
 }
 
 /**
+ * Theater hides non-primary cards with `display: none` (0×0). Those tiles
+ * must not be play()'d or remounted — Twitch/Kick/YouTube will not autoplay
+ * at zero size, and a remount while hidden leaves them dead after Theater
+ * exit. Focus tray cards stay in layout, so they count as visible.
+ */
+export function isStreamCardLayoutVisible(card: HTMLElement): boolean {
+  const grid = card.closest<HTMLElement>('[data-view-mode]');
+  if (grid?.dataset.viewMode === 'theater' && !card.classList.contains('is-focus-primary')) {
+    return false;
+  }
+  return true;
+}
+
+export function filterLayoutVisibleStreamIds(
+  container: HTMLElement,
+  ids: readonly string[],
+): string[] {
+  return ids.filter((id) => {
+    const card = container.querySelector<HTMLElement>(
+      `.stream-card[data-stream-id="${CSS.escape(id)}"]`,
+    );
+    return Boolean(card && isStreamCardLayoutVisible(card));
+  });
+}
+
+/**
+ * Twitch muted autoplay needs a box of at least 400×300. Automatic remount
+ * skips smaller visible boxes (Focus under-grid cells are 160–220px and
+ * rely on the first embed, not a remount). A 0×0 reading (jsdom, or not
+ * yet laid out) is treated as unknown — not a reason to skip.
+ */
+const TWITCH_MIN_AUTOPLAY_WIDTH = 400;
+const TWITCH_MIN_AUTOPLAY_HEIGHT = 300;
+
+function isTwitchEmbedBoxLargeEnoughForRemount(card: HTMLElement): boolean {
+  const box = streamIframe(card) ?? card.querySelector<HTMLElement>('.stream-card__player');
+  const rect = box?.getBoundingClientRect();
+  if (!rect) return true;
+  if (rect.width <= 0 && rect.height <= 0) return true;
+  return rect.width >= TWITCH_MIN_AUTOPLAY_WIDTH && rect.height >= TWITCH_MIN_AUTOPLAY_HEIGHT;
+}
+
+/**
+ * Theater `display: none` secondaries still decode if left playing. Pause
+ * the live API players (do not destroy) so they are cheap to resume on exit.
+ */
+export function pauseTheaterHiddenTwitchPlayers(container: HTMLElement): void {
+  if (container.dataset.viewMode !== 'theater') return;
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (isStreamCardLayoutVisible(card)) continue;
+    if (card.dataset.platform !== 'twitch') continue;
+    const streamId = card.dataset.streamId ?? '';
+    const player = twitchPlayers.get(streamId);
+    if (!player) continue;
+    if (checkPaused(player, streamId) === false) {
+      try {
+        player.pause();
+      } catch {
+        // Player not ready — leave it; 0×0 CSS will pause it anyway.
+      }
+    }
+  }
+}
+
+/**
+ * Resume players that are on-screen after Theater collapse or a fullscreen
+ * exit. Twitch uses play() (including the Theater primary, which the hover
+ * nudge skips). YouTube/TikTok use their pause APIs. Kick has no pause API
+ * — remount only ids that were hidden in Theater, and only now that they
+ * have a real box.
+ */
+export function resumeVisibleStreamPlayers(
+  container: HTMLElement,
+  options?: { remountKickIds?: readonly string[]; skipTwitch?: boolean },
+): void {
+  const remountKick = new Set(options?.remountKickIds ?? []);
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (!isStreamCardLayoutVisible(card)) continue;
+    const streamId = card.dataset.streamId ?? '';
+    const platform = card.dataset.platform;
+
+    if (platform === 'twitch') {
+      if (options?.skipTwitch) continue;
+      if (card.dataset.twitchMode !== 'api') continue;
+      if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+      const player = twitchPlayers.get(streamId);
+      if (!player) continue;
+      if (checkPaused(player, streamId) === true) {
+        replayTwitchPlayback(player, card);
+      }
+      continue;
+    }
+
+    if (platform === 'youtube') {
+      youtubePlayers.get(streamId)?.playVideo();
+      continue;
+    }
+
+    if (platform === 'tiktok') {
+      const entry = tiktokPlayers.get(streamId);
+      if (entry) safeCall(() => void entry.video.play());
+      continue;
+    }
+
+    if (platform === 'kick' && remountKick.has(streamId)) {
+      reloadKickPlayer(card);
+    }
+  }
+}
+
+/**
  * Fallback-mode Twitch (bare iframe) can pause after headers-hidden layout
  * thrash with nothing to detect it — force-remount as before. 'api'-mode
  * cards are trusted to survive the CSS resize without a remount (this is
@@ -3397,6 +3486,7 @@ export function isStreamFocused(): boolean {
  */
 export function recoverTwitchPlayersAfterLayout(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (!isStreamCardLayoutVisible(card)) continue;
     if (card.dataset.platform !== 'twitch') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     if (card.dataset.twitchMode !== 'fallback') continue;
@@ -3481,19 +3571,16 @@ function reloadKickPlayer(card: HTMLElement): void {
 
 /**
  * Explicit toolbar Refresh — more forceful than automatic recovery, still
- * not a page reload. Twitch: replay a live api player, or the proven
- * per-card reload if that player is missing/unreadable/fallback. Kick and
- * YouTube: existing manual remount. TikTok: remount only when the live
- * <video> is absent or already stopped (a healthy LIVE stays mounted).
+ * not a page reload. Twitch/Kick/YouTube: remount (Refresh is a user
+ * gesture, so unmuted autoplay is allowed). TikTok: remount only when the
+ * live <video> is absent or already stopped. Theater-hidden tiles are
+ * skipped — remounting at 0×0 leaves them dead.
  */
 export function refreshLoadedStreamPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (!isStreamCardLayoutVisible(card)) continue;
     const platform = card.dataset.platform;
-    if (platform === 'twitch') {
-      refreshTwitchPlayerForManual(card);
-      continue;
-    }
-    if (platform === 'kick' || platform === 'youtube') {
+    if (platform === 'twitch' || platform === 'kick' || platform === 'youtube') {
       reloadStreamCard(card);
       continue;
     }
@@ -3501,24 +3588,6 @@ export function refreshLoadedStreamPlayers(container: HTMLElement): void {
       refreshTikTokPlayerIfNeeded(card);
     }
   }
-}
-
-function refreshTwitchPlayerForManual(card: HTMLElement): void {
-  if (card.dataset.twitchMode === 'api') {
-    const streamId = card.dataset.streamId ?? '';
-    const player = twitchPlayers.get(streamId);
-    if (player) {
-      const paused = checkPaused(player, streamId);
-      if (paused === false) return;
-      if (paused === true) {
-        logEmbedEvent('player-recover', { platform: 'twitch', channel: card.dataset.channel, card });
-        reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'manual-replay' });
-        replayTwitchPlayback(player, card);
-        return;
-      }
-    }
-  }
-  reloadStreamCard(card);
 }
 
 function refreshTikTokPlayerIfNeeded(card: HTMLElement): void {
@@ -4263,7 +4332,12 @@ function cardForStream(streamId: string): HTMLElement | null {
  * `startedAt` is the moment the run was created, and exists only for the
  * user-engagement check below.
  */
-function createTwitchRecoveryTarget(streamId: string, startedAt: number): RecoveryTarget {
+function createTwitchRecoveryTarget(
+  streamId: string,
+  startedAt: number,
+  options?: { remountOnEscalate?: boolean },
+): RecoveryTarget {
+  const remountOnEscalate = options?.remountOnEscalate !== false;
   return {
     id: streamId,
 
@@ -4272,6 +4346,7 @@ function createTwitchRecoveryTarget(streamId: string, startedAt: number): Recove
       if (!card?.isConnected) return false;
       if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') return false;
       if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return false;
+      if (!isStreamCardLayoutVisible(card)) return false;
       if (!twitchPlayers.has(streamId)) return false;
       // Nothing to resume on a channel that is off the air.
       if (twitchPlayback.get(streamId) === 'offline') return false;
@@ -4304,10 +4379,13 @@ function createTwitchRecoveryTarget(streamId: string, startedAt: number): Recove
     },
 
     escalate() {
+      if (!remountOnEscalate) return;
       const card = cardForStream(streamId);
       if (!card?.isConnected) return;
       if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
+      if (!isStreamCardLayoutVisible(card)) return;
       if (Number(card.dataset.userEngagedAt ?? '0') >= startedAt) return;
+      if (!isTwitchEmbedBoxLargeEnoughForRemount(card)) return;
       reloadStreamCard(card);
     },
   };
@@ -4484,18 +4562,23 @@ export type LayoutRecoveryCause =
   | 'view-mode'
   | 'story-preview';
 
+function isPlayOnlyLayoutRecovery(cause: LayoutRecoveryCause): boolean {
+  return cause === 'view-mode' || cause === 'chat';
+}
+
 export function beginAddRemoveRecovery(
   container: HTMLElement,
   snapshotIds: readonly string[],
   cause: LayoutRecoveryCause = 'add-remove',
 ): void {
   const startedAt = Date.now();
+  const remountOnEscalate = cause !== 'story-preview' && !isPlayOnlyLayoutRecovery(cause);
   const targets = snapshotIds
     .filter((streamId) => {
       const card = cardForStream(streamId);
       return Boolean(card?.isConnected) && container.contains(card);
     })
-    .map((streamId) => createTwitchRecoveryTarget(streamId, startedAt));
+    .map((streamId) => createTwitchRecoveryTarget(streamId, startedAt, { remountOnEscalate }));
 
   logPlayerEvent('layout-settled', {
     cause,
@@ -4507,7 +4590,9 @@ export function beginAddRemoveRecovery(
   // Story Card preview must not remount players. play() recovery is the
   // safety fallback if an overlay still pauses a tile; a circuit-break
   // reload is the visible restart we are trying to eliminate.
-  if (cause !== 'story-preview') {
+  // Theater/Focus and chat toggles remount unmuted Twitch after the click
+  // gesture is gone — play() only, never the 250ms circuit-breaker remount.
+  if (cause !== 'story-preview' && !isPlayOnlyLayoutRecovery(cause)) {
     armLayoutCircuitBreaker(container, snapshotIds);
   }
 }
@@ -4590,18 +4675,25 @@ function runLayoutCircuitBreaker(container: HTMLElement, snapshotIds: readonly s
   // FakeTwitchPlayer the waiter is watching so the original instance stays paused.
   const pending = new Set(playbackRecovery.pendingIds());
 
+  const visibleSnapshot = snapshotIds.filter((streamId) => {
+    const card = cardForStream(streamId);
+    return Boolean(card?.isConnected && container.contains(card) && isStreamCardLayoutVisible(card));
+  });
+  if (visibleSnapshot.length < LAYOUT_CIRCUIT_MIN_SNAPSHOT) return;
+
   const stuck: HTMLElement[] = [];
-  for (const streamId of snapshotIds) {
+  for (const streamId of visibleSnapshot) {
     if (pending.has(streamId)) continue;
     const card = cardForStream(streamId);
-    if (!card?.isConnected || !container.contains(card)) continue;
+    if (!card) continue;
     if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
+    if (!isTwitchEmbedBoxLargeEnoughForRemount(card)) continue;
     const player = twitchPlayers.get(streamId);
     if (!player) continue;
     if (checkPaused(player, streamId) === true) stuck.push(card);
   }
 
-  if (stuck.length / snapshotIds.length < LAYOUT_CIRCUIT_RATIO) return;
+  if (stuck.length / visibleSnapshot.length < LAYOUT_CIRCUIT_RATIO) return;
 
   layoutCircuitCooldownUntil = Date.now() + LAYOUT_CIRCUIT_COOLDOWN_MS;
   logPlayerEvent('circuit-break', {
@@ -4646,6 +4738,7 @@ export function bindPlaybackRecovery(): void {
  */
 export function recoverStalledTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (!isStreamCardLayoutVisible(card)) continue;
     if (card.dataset.platform !== 'twitch') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     if (card.dataset.streamId && isActivelyWatchedStream(card.dataset.streamId)) continue;
@@ -4735,6 +4828,7 @@ export function startStatsProbe(container: HTMLElement): void {
  */
 export function nudgeStalledTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (!isStreamCardLayoutVisible(card)) continue;
     if (card.dataset.platform !== 'twitch') continue;
     if (card.dataset.twitchMode !== 'api') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
@@ -5056,7 +5150,7 @@ function scheduleFocusViewLayoutRetry(container: HTMLElement): void {
 /**
  * Focus View sizing: one primary box (its own orientation respected — a
  * portrait primary is never stretched to 16:9, see computeFocusViewLayout)
- * plus a horizontal tray strip of the rest. Every stream stays mounted and
+ * plus a wrapping under-grid of the rest. Every stream stays mounted and
  * in the same flat DOM parent throughout — only CSS vars change, so
  * promoting a different stream to primary or toggling modes never remounts
  * a player (see setFocusViewPrimary/syncViewMode).
@@ -5095,10 +5189,12 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
   const chromeHeight = headersHidden ? 0 : CARD_HEADER_HEIGHT;
 
   const includeTray = container.dataset.viewMode === 'focus';
+  const secondaryCount = Math.max(0, totalCount - 1);
   const result = computeFocusViewLayout(areaWidth, areaHeight, primaryOrientation, {
     gap: GRID_GAP,
     chromeHeightPerRow: chromeHeight,
     includeTray,
+    secondaryCount,
   });
 
   if (result.primaryWidth <= 0 || result.primaryHeight <= 0) {
@@ -5106,8 +5202,7 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
     return;
   }
 
-  const trayCount = Math.max(1, totalCount - 1);
-  const visibleTrayCount = Math.max(1, Math.min(trayCount, targetVisibleTrayCount(areaWidth)));
+  const trayColumns = Math.max(1, result.trayColumns);
 
   container.style.setProperty('--grid-columns', '1');
   container.style.removeProperty('--player-height');
@@ -5119,15 +5214,8 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
     '--focus-primary-row-height',
     `${Math.floor(result.primaryHeight + chromeHeight)}px`,
   );
-  // Focus mode's primary sits in a grid track that spans every tray column
-  // (including ones the tray overflows into) — centering it with justify-self
-  // against that track centers it against the full scrollable content width,
-  // not what's actually visible, which is exactly the "left-justified in
-  // production, centered in a unit test" bug this fixes. Pinning it with
-  // position:sticky + an explicit left offset computed from areaWidth (the
-  // real, chat-aware scrollport width — see streamArea.clientWidth above)
-  // instead keeps it centered in the VIEWPORT continuously through any
-  // amount of horizontal tray scroll. See main.css's .is-focus-primary rule.
+  // Theater still uses sticky + --focus-primary-offset-left. Focus no longer
+  // scrolls horizontally, so the primary is CSS-centered (justify-self: center).
   container.style.setProperty(
     '--focus-primary-offset-left',
     `${Math.max(0, Math.floor((areaWidth - result.primaryWidth) / 2))}px`,
@@ -5141,7 +5229,7 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
     '--focus-tray-column-width',
     `${Math.floor(result.trayColumnWidth)}px`,
   );
-  container.style.setProperty('--focus-tray-count', String(visibleTrayCount));
+  container.style.setProperty('--focus-tray-count', String(trayColumns));
 
   const hasKick = container.dataset.hasKick === '1';
   if (hasKick) {
@@ -5159,55 +5247,4 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
     container.style.removeProperty('--kick-render-width');
     container.style.removeProperty('--kick-scale');
   }
-
-  updateFocusTrayOverflowIndicator(container);
-  maybeNudgeFocusTray(container);
-}
-
-/**
- * The primary and tray share one scroll container (see .stream-grid's own
- * doc comment above the CSS rule) — data-tray-overflow drives the edge-fade
- * mask in main.css so it only ever appears on the side there's actually more
- * to scroll to, never as a static decoration.
- */
-function updateFocusTrayOverflowIndicator(container: HTMLElement): void {
-  const maxScroll = container.scrollWidth - container.clientWidth;
-  if (maxScroll <= 1) {
-    container.removeAttribute('data-tray-overflow');
-    return;
-  }
-  const atStart = container.scrollLeft <= 1;
-  const atEnd = container.scrollLeft >= maxScroll - 1;
-  if (atStart && atEnd) {
-    container.removeAttribute('data-tray-overflow');
-  } else if (atStart) {
-    container.dataset.trayOverflow = 'end';
-  } else if (atEnd) {
-    container.dataset.trayOverflow = 'start';
-  } else {
-    container.dataset.trayOverflow = 'both';
-  }
-}
-
-/**
- * One-time, subtle "there's more here" nudge the first time Focus View is
- * entered with an overflowing tray — never repeats while already in Focus
- * View (gated by pendingTrayNudge, consumed here regardless of outcome) and
- * never fires under prefers-reduced-motion, per the no-continuous-auto-scroll
- * / no-annoyance / respect-reduced-motion constraints this was written to.
- */
-function maybeNudgeFocusTray(container: HTMLElement): void {
-  if (!pendingTrayNudge) return;
-  pendingTrayNudge = false;
-
-  if (typeof container.scrollTo !== 'function') return;
-  const maxScroll = container.scrollWidth - container.clientWidth;
-  if (maxScroll <= 1) return;
-  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-
-  const nudgeDistance = Math.min(48, maxScroll);
-  container.scrollTo({ left: nudgeDistance, behavior: 'smooth' });
-  setTimeout(() => {
-    container.scrollTo({ left: 0, behavior: 'smooth' });
-  }, 450);
 }

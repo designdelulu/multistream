@@ -1,4 +1,4 @@
-import { parseStreamInput, buildPathFromStreams } from '../platforms';
+import { parseStreamInput } from '../platforms';
 import { isTikTokShortLink, resolveTikTokShareLink } from '../platforms/tiktok';
 import { buildShareCardData, canvasToBlob, renderShareCard } from '../lib/shareCard';
 import type { WatchPartyController } from './WatchParty';
@@ -35,6 +35,21 @@ export interface StoryPreviewHooks {
   onDidOpen?: () => void;
   onWillClose?: () => void;
   onDidClose?: () => void;
+}
+
+/**
+ * Share/copy always uses a live `/w/ROOM_ID` link: reuse the current party,
+ * or start one. Static lineup URLs stay parseable; they are no longer a
+ * share-menu action.
+ */
+export async function resolveLivePartyShareUrl(
+  watchParty: Pick<WatchPartyController, 'getViewerUrl' | 'start'>,
+): Promise<{ ok: true; url: string } | { ok: false; error?: string }> {
+  const existing = watchParty.getViewerUrl();
+  if (existing) return { ok: true, url: existing };
+  const result = await watchParty.start();
+  if (result.ok && result.url) return { ok: true, url: result.url };
+  return { ok: false, error: result.error };
 }
 
 const PLATFORM_STORAGE_KEY = 'multistream:add-platform';
@@ -188,7 +203,6 @@ export function bindStreamToolbar(
   const storyPreviewClose = document.querySelector<HTMLButtonElement>('#story-preview-close');
   const storyPreviewDownload = document.querySelector<HTMLButtonElement>('#story-preview-download');
   const storyPreviewCopy = document.querySelector<HTMLButtonElement>('#story-preview-copy');
-  const storyPreviewShare = document.querySelector<HTMLButtonElement>('#story-preview-share');
   const startLivePartyButton = document.querySelector<HTMLButtonElement>(
     '[data-action="start-live-party"]',
   );
@@ -526,35 +540,37 @@ export function bindStreamToolbar(
   }
 
   /**
-   * Copies the watch URL and flashes "Copied!" on the control itself
-   * (`feedbackEl`, when provided) before closing. The share-menu path closes
-   * the menu after the flash; preview Copy Watch URL stays open (`keepOpen`).
-   * The `window.prompt` fallback (clipboard API unavailable/denied) closes
-   * right away since there's nothing to flash.
+   * Copies the live watch-party URL (starting a party if needed) and flashes
+   * "Copied!" on the control itself (`feedbackEl`, when provided). The
+   * share-menu path closes the menu after the flash; preview Copy stays open
+   * (`keepOpen`). The `window.prompt` fallback (clipboard API
+   * unavailable/denied) closes right away since there's nothing to flash.
    */
-  function staticWatchUrl(): string {
-    // Outside a live party, the address bar *is* the static lineup URL
-    // (including any debug query). During a party the bar is `/w/ROOM`, so
-    // Copy Watch URL has to rebuild the encoded lineup path.
-    if ((watchParty?.getRole() ?? 'none') === 'none') {
-      return window.location.href;
-    }
-    return `${window.location.origin}${buildPathFromStreams(store.getStreams())}`;
+  async function ensureLivePartyUrl(): Promise<string | null> {
+    if (!watchParty) return null;
+    const result = await resolveLivePartyShareUrl(watchParty);
+    syncPartyMenu();
+    if (result.ok) return result.url;
+    if (result.error) window.alert(result.error);
+    return null;
   }
 
-  function liveOrStaticUrl(): string {
-    return watchParty?.getViewerUrl() || staticWatchUrl();
-  }
-
-  async function copyWatchUrl(
+  async function copyLivePartyUrl(
     feedbackEl?: HTMLButtonElement,
-    options?: { keepOpen?: boolean; live?: boolean },
+    options?: { keepOpen?: boolean },
   ): Promise<void> {
-    const url = options?.live ? liveOrStaticUrl() : staticWatchUrl();
+    const url = await ensureLivePartyUrl();
+    if (!url) {
+      if (!options?.keepOpen) {
+        closeShareMenu();
+        shareMenuToggle?.focus();
+      }
+      return;
+    }
     try {
       await navigator.clipboard.writeText(url);
     } catch {
-      window.prompt('Copy this link:', url);
+      window.prompt('Copy this live watch party link:', url);
       if (!options?.keepOpen) {
         closeShareMenu();
         shareMenuToggle?.focus();
@@ -565,7 +581,7 @@ export function bindStreamToolbar(
       if (!options?.keepOpen) closeShareMenu();
       return;
     }
-    const previous = feedbackEl.innerHTML || 'Copy Watch URL';
+    const previous = feedbackEl.innerHTML || 'Share Watch Party';
     feedbackEl.textContent = 'Copied!';
     window.clearTimeout(shareResetTimer);
     shareResetTimer = window.setTimeout(() => {
@@ -579,11 +595,12 @@ export function bindStreamToolbar(
 
   /*
    * Share menu (Section 18): a single "Share" button reveals a real in-app
-   * dropdown — Copy Watch URL, Preview Story Card, Download Story Card,
-   * Share Watch Party — desktop-first, not an immediate OS share sheet. The
-   * story card is drawn to an offscreen canvas created on demand (never
-   * appended to the DOM) — see lib/shareCard.ts for why it isn't unit
-   * tested (no real <canvas> 2D context in jsdom).
+   * dropdown — Start / Share / End a live watch party, Preview Story Card,
+   * Download Story Card — desktop-first, not an immediate OS share sheet.
+   * Share copies the live `/w/ROOM_ID` link and starts a party if none is
+   * running. The story card is drawn to an offscreen canvas created on
+   * demand (never appended to the DOM) — see lib/shareCard.ts for why it
+   * isn't unit tested (no real <canvas> 2D context in jsdom).
    */
   function closeShareMenu(): void {
     if (!shareMenu || !shareMenuToggle) return;
@@ -618,26 +635,6 @@ export function bindStreamToolbar(
       shareMenuToggle?.focus();
     }
   });
-
-  async function shareWatchParty(): Promise<void> {
-    const url = liveOrStaticUrl();
-    const shareData = {
-      title: 'MultiStream.cc Watch Party',
-      text: 'Join my live watch party on MultiStream.cc',
-      url,
-    };
-    if (navigator.share) {
-      try {
-        await navigator.share(shareData);
-        return;
-      } catch (error) {
-        // AbortError just means the user dismissed the native share sheet —
-        // not a failure worth falling back from.
-        if (error instanceof DOMException && error.name === 'AbortError') return;
-      }
-    }
-    await copyWatchUrl();
-  }
 
   /**
    * Real avatars where they cost nothing extra: Twitch (data-twitch-avatar-url,
@@ -762,14 +759,13 @@ export function bindStreamToolbar(
   }
 
   /**
-   * "Download Story Card" means download, full stop — the menu item below
-   * it (share-party) already covers native-share-sheet sharing of the
-   * watch URL. Routing this one through navigator.share too (when the
-   * platform happens to support file sharing) used to mean the button's
-   * actual behavior silently diverged from its label: on desktop browsers
-   * that expose the Web Share API for files, clicking "Download" opened an
-   * OS share sheet instead of saving anything, which is exactly what looks
-   * like "nothing happened, no file appeared" if that sheet gets dismissed.
+   * "Download Story Card" means download, full stop. Routing this through
+   * navigator.share (when the platform happens to support file sharing)
+   * used to mean the button's actual behavior silently diverged from its
+   * label: on desktop browsers that expose the Web Share API for files,
+   * clicking "Download" opened an OS share sheet instead of saving
+   * anything, which is exactly what looks like "nothing happened, no file
+   * appeared" if that sheet gets dismissed.
    */
   async function downloadOrShareStoryCard(): Promise<void> {
     const blob = await renderShareCardBlob();
@@ -811,10 +807,7 @@ export function bindStreamToolbar(
     void downloadOrShareStoryCard();
   });
   storyPreviewCopy?.addEventListener('click', () => {
-    void copyWatchUrl(storyPreviewCopy, { keepOpen: true });
-  });
-  storyPreviewShare?.addEventListener('click', () => {
-    void shareWatchParty();
+    void copyLivePartyUrl(storyPreviewCopy, { keepOpen: true });
   });
   document.addEventListener('click', (event) => {
     if (!storyPreview || storyPreview.hidden) return;
@@ -836,13 +829,8 @@ export function bindStreamToolbar(
     if (!actionButton) return;
     const action = actionButton.dataset.action;
 
-    if (action === 'copy-url') {
-      void copyWatchUrl(actionButton);
-      return;
-    }
-
     if (action === 'copy-live-party') {
-      void copyWatchUrl(actionButton, { live: true });
+      void copyLivePartyUrl(actionButton);
       return;
     }
 
@@ -883,9 +871,7 @@ export function bindStreamToolbar(
     closeShareMenu();
     shareMenuToggle?.focus();
 
-    if (action === 'share-party') {
-      void shareWatchParty();
-    } else if (action === 'preview-story-card') {
+    if (action === 'preview-story-card') {
       void openStoryCardPreview();
     } else if (action === 'story-card') {
       void downloadOrShareStoryCard();

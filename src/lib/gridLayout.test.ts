@@ -163,17 +163,17 @@ describe('computeWeightedGridLayout — portrait weighting (fixed 2-row span)', 
   });
 });
 
-describe('targetVisibleTrayCount — responsive breakpoints', () => {
-  it('narrow screens show 2', () => {
-    expect(targetVisibleTrayCount(375)).toBe(2);
+describe('targetVisibleTrayCount — how many ~306px under-grid columns fit', () => {
+  it('narrow screens still show at least 1', () => {
+    expect(targetVisibleTrayCount(375)).toBe(1);
   });
-  it('medium desktop shows 3', () => {
-    expect(targetVisibleTrayCount(900)).toBe(3);
+  it('900px fits 2', () => {
+    expect(targetVisibleTrayCount(900)).toBe(2);
   });
-  it('normal desktop shows 4', () => {
+  it('1280px fits 4', () => {
     expect(targetVisibleTrayCount(1280)).toBe(4);
   });
-  it('large desktop shows 6', () => {
+  it('1920px fits 6', () => {
     expect(targetVisibleTrayCount(1920)).toBe(6);
   });
 });
@@ -191,6 +191,8 @@ describe('computeFocusViewLayout', () => {
       primaryHeight: 0,
       trayHeight: 0,
       trayColumnWidth: 0,
+      trayColumns: 0,
+      trayRows: 0,
     });
   });
 
@@ -212,12 +214,25 @@ describe('computeFocusViewLayout', () => {
     expect(portraitResult.primaryWidth).toBeLessThan(landscapeResult.primaryWidth);
   });
 
-  it('tray height stays within sane min/max bounds across viewport sizes', () => {
+  it('under-grid cell height stays in the old chat-closed 160–220 band across viewport sizes', () => {
     for (const width of [320, 375, 430, 768, 900, 1024, 1280, 1440, 1920]) {
       const result = computeFocusViewLayout(width, 800, 'landscape');
-      expect(result.trayHeight).toBeGreaterThanOrEqual(88);
+      expect(result.trayHeight).toBeGreaterThanOrEqual(160);
       expect(result.trayHeight).toBeLessThanOrEqual(220);
     }
+  });
+
+  it('chat-open desktop cells stay in the 160–220 band, not the Twitch-doc 400×300 floor', () => {
+    const result = computeFocusViewLayout(1556, 1056, 'landscape');
+    expect(result.trayHeight).toBeGreaterThanOrEqual(160);
+    expect(result.trayHeight).toBeLessThanOrEqual(220);
+    expect(result.trayColumnWidth).toBeLessThan(400);
+  });
+
+  it('wraps every secondary onto multiple rows instead of clipping them to one strip', () => {
+    const result = computeFocusViewLayout(1600, 900, 'landscape', { secondaryCount: 8 });
+    expect(result.trayRows).toBeGreaterThan(1);
+    expect(result.trayColumns * result.trayRows).toBeGreaterThanOrEqual(8);
   });
 
   it('primary height leaves room for the tray (never overlaps it)', () => {

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { resolveAddInput, plainUsernameCandidate } from './StreamToolbar';
+import { describe, expect, it, vi } from 'vitest';
+import { resolveAddInput, plainUsernameCandidate, resolveLivePartyShareUrl } from './StreamToolbar';
 import { parseStreamInput } from '../platforms';
 import { isTikTokShortLink } from '../platforms/tiktok';
 
@@ -59,5 +59,36 @@ describe('resolveAddInput — TikTok LIVE explicit provider selection', () => {
 
   it('a bare username is still a Twitch/Kick/YouTube suggestion candidate when TikTok is not selected', () => {
     expect(plainUsernameCandidate('someuser')).toBe('someuser');
+  });
+});
+
+describe('resolveLivePartyShareUrl', () => {
+  it('reuses the current live party URL without starting a second room', async () => {
+    const start = vi.fn();
+    const result = await resolveLivePartyShareUrl({
+      getViewerUrl: () => 'https://multistream.cc/w/abcdefghij',
+      start,
+    });
+    expect(result).toEqual({ ok: true, url: 'https://multistream.cc/w/abcdefghij' });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('starts a live party when none is running and returns that URL', async () => {
+    const start = vi.fn().mockResolvedValue({ ok: true, url: 'https://multistream.cc/w/newroomid1' });
+    const result = await resolveLivePartyShareUrl({
+      getViewerUrl: () => null,
+      start,
+    });
+    expect(start).toHaveBeenCalledOnce();
+    expect(result).toEqual({ ok: true, url: 'https://multistream.cc/w/newroomid1' });
+  });
+
+  it('surfaces a start failure instead of falling back to a static lineup URL', async () => {
+    const start = vi.fn().mockResolvedValue({ ok: false, error: 'Add at least one stream first.' });
+    const result = await resolveLivePartyShareUrl({
+      getViewerUrl: () => null,
+      start,
+    });
+    expect(result).toEqual({ ok: false, error: 'Add at least one stream first.' });
   });
 });

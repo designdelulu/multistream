@@ -17,6 +17,8 @@ import {
   isKickStatusRefreshInFlight,
   isTwitchStatusRefreshInFlight,
   isYouTubeStatsRefreshInFlight,
+  filterLayoutVisibleStreamIds,
+  pauseTheaterHiddenTwitchPlayers,
   logTwitchPlayerIdentities,
   nudgeStalledTwitchPlayers,
   recoverStalledTwitchPlayers,
@@ -25,6 +27,7 @@ import {
   refreshAllTwitchStatuses,
   refreshAllYouTubeStats,
   refreshLoadedStreamPlayers,
+  resumeVisibleStreamPlayers,
   setFocusViewPrimary,
   snapshotPlayingTwitchPlayers,
   snapshotReorderRecoveryIds,
@@ -172,21 +175,14 @@ function afterHeadersToggle(): void {
  * Theater (unlike Focus) renders every non-primary card with `display: none`
  * (see main.css's `[data-view-mode='theater']` rule) — collapsing a live
  * Twitch embed to 0x0 makes the underlying player actually pause, not just
- * resize, and it never resumes itself once un-hidden. Nothing else recovers
- * that: recoverTwitchPlayersAfterLayout below only handles 'fallback'-mode
- * iframes, and the periodic stall watchdog (nudgeStalledTwitchPlayers) can
- * take up to ~90s to reach it, which reads as "stuck paused, needs a hard
- * refresh" (this was a real, reproducible regression — every non-primary
- * Twitch player staying paused after Theater→Grid). Snapshotting on the way
- * into Theater and replaying play() on the way out — the same pattern
- * beginFocusExitRecovery already uses for the older solo-focus feature —
- * closes that gap immediately instead of waiting on the watchdog. Entering
- * Theater (from Grid or from Focus) now also runs beginAddRemoveRecovery so
- * the still-visible primary is recovered after the resize; this snapshot is
- * only consumed on the way *out* of Theater, when hidden secondaries become
- * visible again.
+ * resize, and it never resumes itself once un-hidden. Remounting those
+ * hidden tiles (layout circuit breaker or toolbar Refresh) leaves them dead
+ * after Theater exit. Snapshot playing Twitch ids and hidden non-primary
+ * ids on the way in; on the way out, replay Twitch via beginFocusExitRecovery
+ * and resume Kick/YouTube/TikTok now that they have a real box. Entering
+ * Theater recovers only the still-visible primary.
  */
-let theaterEntrySnapshot: { ids: string[]; startedAt: number } | null = null;
+let theaterEntrySnapshot: { ids: string[]; hiddenIds: string[]; startedAt: number } | null = null;
 
 /** Switching Grid/Theater/Focus resizes every card at once, same as a headers toggle — same recovery is needed. */
 function afterViewModeToggle(): void {
@@ -195,13 +191,18 @@ function afterViewModeToggle(): void {
   const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
 
   if (previousMode !== 'theater' && nextMode === 'theater') {
+    const primaryId = getFocusViewPrimaryId();
     theaterEntrySnapshot = {
       ids: playingBefore,
+      hiddenIds: store.getStreams().map((stream) => stream.id).filter((id) => id !== primaryId),
       startedAt: Date.now(),
     };
   }
 
   syncViewMode(gridEl, nextMode, store.getStreams());
+  if (nextMode === 'theater') {
+    pauseTheaterHiddenTwitchPlayers(gridEl);
+  }
   // The SortableJS `disabled` option (StreamReorder.ts) is only re-applied
   // when sync() runs — it does not watch grid.dataset.viewMode itself — so
   // this must be called on every mode change, not just headers toggles.
@@ -236,11 +237,19 @@ function afterViewModeToggle(): void {
       if (snapshot.ids.length > 0) {
         beginFocusExitRecovery(gridEl, snapshot.ids, snapshot.startedAt);
       }
+      resumeVisibleStreamPlayers(gridEl, {
+        remountKickIds: snapshot.hiddenIds,
+        skipTwitch: true,
+      });
       return;
     }
 
     requestAnimationFrame(() => {
-      beginAddRemoveRecovery(gridEl, playingBefore, 'view-mode');
+      beginAddRemoveRecovery(
+        gridEl,
+        filterLayoutVisibleStreamIds(gridEl, playingBefore),
+        'view-mode',
+      );
     });
   });
 }
@@ -567,6 +576,7 @@ const reorder = bindStreamReorder(gridEl, store, headersStore, {
 reorder.sync();
 watchParty.subscribe(() => {
   reorder.sync();
+  toolbar.sync();
 });
 bindChatToggle(chatStore);
 bindChatPanel(chatPanelEl, chatStore);
@@ -704,14 +714,24 @@ store.subscribe(renderStreams);
 store.subscribe(syncTwitchStatusScheduler);
 store.subscribe(syncYouTubeStatusScheduler);
 store.subscribe(syncKickStatusScheduler);
+let lastChatVisible = chatStore.isVisible();
 chatStore.subscribe(() => {
   const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
+  const visibilityChanged = chatStore.isVisible() !== lastChatVisible;
+  lastChatVisible = chatStore.isVisible();
   quietLayout(1500);
   afterLayoutPaint(() => {
     measureAndLayout();
     recoverTwitchPlayersAfterLayout(gridEl);
     requestAnimationFrame(() => {
-      beginAddRemoveRecovery(gridEl, playingBefore, 'chat');
+      beginAddRemoveRecovery(
+        gridEl,
+        filterLayoutVisibleStreamIds(gridEl, playingBefore),
+        'chat',
+      );
+      if (visibilityChanged) {
+        resumeVisibleStreamPlayers(gridEl);
+      }
     });
   });
 });
@@ -839,7 +859,17 @@ window.addEventListener('online', () => {
 });
 // Exiting fullscreen has the same lost-gesture problem, and was previously
 // only ever fixed by incidental mouse movement — there was no listener for it.
-document.addEventListener('fullscreenchange', armInteractionNudge);
+// Resume visible players immediately (including the Theater primary, which
+// the armed mouse-nudge skips), then still arm the nudge for anything the
+// first play() call couldn't satisfy without a later gesture.
+document.addEventListener('fullscreenchange', () => {
+  armInteractionNudge();
+  if (!document.fullscreenElement) {
+    afterLayoutPaint(() => {
+      resumeVisibleStreamPlayers(gridEl);
+    });
+  }
+});
 window.addEventListener('mousemove', nudgeOnInteraction, { passive: true });
 window.addEventListener('pointerdown', nudgeOnInteraction, { passive: true });
 

@@ -25,6 +25,10 @@ import {
   refreshLoadedStreamPlayers,
   refreshTwitchStatus,
   refreshYouTubeStats,
+  resumeVisibleStreamPlayers,
+  filterLayoutVisibleStreamIds,
+  isStreamCardLayoutVisible,
+  pauseTheaterHiddenTwitchPlayers,
   setFocusedStream,
   setFocusViewPrimary,
   snapshotPlayingTwitchPlayers,
@@ -660,6 +664,7 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
     static readonly ONLINE = 'ONLINE';
 
     paused = false;
+    playFails = false;
     muted: boolean;
     setMutedCalls: boolean[] = [];
     pauseCallCount = 0;
@@ -674,8 +679,8 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
       this.muted = options.muted ?? true;
     }
     play(): void {
-      this.paused = false;
       this.playCallCount += 1;
+      if (!this.playFails) this.paused = false;
       // Real Twitch play() can unmute via embed storage — recovery must not.
       this.muted = false;
     }
@@ -716,6 +721,7 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
   }
 
   class FakeYouTubePlayer {
+    playCallCount = 0;
     constructor(
       public elementId: string,
       public options: { events?: { onReady?: () => void } },
@@ -725,6 +731,10 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
       // before this runs, exactly like the real API's timing.
       queueMicrotask(() => this.options.events?.onReady?.());
     }
+    playVideo(): void {
+      this.playCallCount += 1;
+    }
+    pauseVideo(): void {}
     isMuted(): boolean {
       return true;
     }
@@ -742,6 +752,7 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
 
   let container: HTMLElement;
   let createdTwitchPlayers: FakeTwitchPlayer[];
+  let createdYouTubePlayers: FakeYouTubePlayer[];
 
   function fakeStore(streams: StreamRef[]): StreamStore {
     return { getStreams: () => streams } as StreamStore;
@@ -749,6 +760,7 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
 
   beforeEach(() => {
     createdTwitchPlayers = [];
+    createdYouTubePlayers = [];
     container = document.createElement('div');
     container.id = 'stream-grid';
     document.body.append(container);
@@ -762,7 +774,15 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
         }
       },
     };
-    (globalThis as unknown as { YT: unknown }).YT = { Player: FakeYouTubePlayer };
+    const youtubeCreated = createdYouTubePlayers;
+    (globalThis as unknown as { YT: unknown }).YT = {
+      Player: class extends FakeYouTubePlayer {
+        constructor(elementId: string, options: { events?: { onReady?: () => void } }) {
+          super(elementId, options);
+          youtubeCreated.push(this);
+        }
+      },
+    };
 
     vi.stubGlobal(
       'fetch',
@@ -1262,7 +1282,7 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
     expect(container.querySelectorAll('[data-stream-id="tiktok:creator"]').length).toBe(1);
   });
 
-  it('refreshLoadedStreamPlayers replays paused Twitch players and leaves healthy ones untouched', async () => {
+  it('refreshLoadedStreamPlayers remounts every visible Twitch card, including ones that already read as playing', async () => {
     const twitchStreams: StreamRef[] = ['a', 'b'].map((channel) => ({
       id: `twitch:${channel}`,
       platform: 'twitch',
@@ -1274,17 +1294,139 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
     syncStreamGrid(container, fakeStore(twitchStreams));
     await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
     for (const player of createdTwitchPlayers) player.play();
-    const healthyPlays = createdTwitchPlayers[0].playCallCount;
-    createdTwitchPlayers[1].pause();
 
     refreshLoadedStreamPlayers(container);
 
-    expect(createdTwitchPlayers[0].playCallCount).toBe(healthyPlays);
+    expect(createdTwitchPlayers[0].destroyCallCount).toBeGreaterThan(0);
+    expect(createdTwitchPlayers[1].destroyCallCount).toBeGreaterThan(0);
+  });
+
+  it('refreshLoadedStreamPlayers skips Theater-hidden cards and remounts a visible primary', async () => {
+    const twitchStreams: StreamRef[] = ['a', 'b'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    for (const player of createdTwitchPlayers) player.play();
+
+    setFocusViewPrimary(container, 'twitch:a');
+    syncViewMode(container, 'theater', twitchStreams);
+    expect(isStreamCardLayoutVisible(container.querySelector('[data-stream-id="twitch:a"]')!)).toBe(
+      true,
+    );
+    expect(isStreamCardLayoutVisible(container.querySelector('[data-stream-id="twitch:b"]')!)).toBe(
+      false,
+    );
+    expect(filterLayoutVisibleStreamIds(container, ['twitch:a', 'twitch:b'])).toEqual(['twitch:a']);
+
+    createdTwitchPlayers[0].pause();
+    createdTwitchPlayers[1].pause();
+    const hiddenPlays = createdTwitchPlayers[1].playCallCount;
+    const hiddenDestroys = createdTwitchPlayers[1].destroyCallCount;
+
+    refreshLoadedStreamPlayers(container);
+
+    expect(createdTwitchPlayers[1].playCallCount).toBe(hiddenPlays);
+    expect(createdTwitchPlayers[1].destroyCallCount).toBe(hiddenDestroys);
+    expect(createdTwitchPlayers[1].isPaused()).toBe(true);
+    expect(createdTwitchPlayers[0].destroyCallCount).toBeGreaterThan(0);
+  });
+
+  it('pauseTheaterHiddenTwitchPlayers pauses non-primary Twitch players only', async () => {
+    const twitchStreams: StreamRef[] = ['a', 'b'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    for (const player of createdTwitchPlayers) player.play();
+
+    setFocusViewPrimary(container, 'twitch:a');
+    syncViewMode(container, 'theater', twitchStreams);
+    pauseTheaterHiddenTwitchPlayers(container);
+
     expect(createdTwitchPlayers[0].isPaused()).toBe(false);
-    expect(createdTwitchPlayers[1].isPaused()).toBe(false);
-    expect(createdTwitchPlayers[1].playCallCount).toBeGreaterThan(1);
+    expect(createdTwitchPlayers[0].pauseCallCount).toBe(0);
+    expect(createdTwitchPlayers[1].isPaused()).toBe(true);
+    expect(createdTwitchPlayers[1].pauseCallCount).toBeGreaterThan(0);
+    expect(createdTwitchPlayers[1].destroyCallCount).toBe(0);
+  });
+
+  it('beginAddRemoveRecovery view-mode and chat do not remount via the layout circuit breaker', async () => {
+    const twitchStreams: StreamRef[] = ['a', 'b'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    for (const player of createdTwitchPlayers) player.play();
+
+    setFocusViewPrimary(container, 'twitch:a');
+    syncViewMode(container, 'focus', twitchStreams);
+
+    const snapshotIds = snapshotPlayingTwitchPlayers(container);
+    for (const player of createdTwitchPlayers) player.pause();
+    beginAddRemoveRecovery(container, snapshotIds, 'view-mode');
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
     expect(createdTwitchPlayers[0].destroyCallCount).toBe(0);
     expect(createdTwitchPlayers[1].destroyCallCount).toBe(0);
+    expect(createdTwitchPlayers[0].playCallCount).toBeGreaterThan(1);
+
+    for (const player of createdTwitchPlayers) player.pause();
+    beginAddRemoveRecovery(container, snapshotIds, 'chat');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(createdTwitchPlayers[0].destroyCallCount).toBe(0);
+    expect(createdTwitchPlayers[1].destroyCallCount).toBe(0);
+  });
+
+  it('resumeVisibleStreamPlayers replays YouTube and remounts Kick that were Theater-hidden', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+      {
+        id: 'youtube:video:dQw4w9WgXcQ',
+        platform: 'youtube',
+        channel: 'video:dQw4w9WgXcQ',
+        muted: true,
+        orientation: 'landscape',
+      },
+      { id: 'kick:kicker', platform: 'kick', channel: 'kicker', muted: true, orientation: 'landscape' },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(1));
+    await vi.waitFor(() => expect(createdYouTubePlayers).toHaveLength(1));
+
+    const kickIframe = container.querySelector<HTMLIFrameElement>(
+      '[data-stream-id="kick:kicker"] iframe.stream-card__iframe',
+    );
+    expect(kickIframe).toBeTruthy();
+    kickIframe!.src = 'https://example.com/stale-kick';
+
+    createdTwitchPlayers[0].play();
+    createdTwitchPlayers[0].pause();
+    const twitchPlays = createdTwitchPlayers[0].playCallCount;
+
+    resumeVisibleStreamPlayers(container, {
+      remountKickIds: ['kick:kicker'],
+      skipTwitch: true,
+    });
+
+    expect(createdTwitchPlayers[0].playCallCount).toBe(twitchPlays);
+    expect(createdTwitchPlayers[0].isPaused()).toBe(true);
+    expect(createdYouTubePlayers[0].playCallCount).toBeGreaterThan(0);
+    expect(kickIframe!.src).not.toContain('example.com/stale-kick');
+    expect(kickIframe!.src).not.toBe('about:blank');
   });
 });
 
@@ -1497,8 +1639,8 @@ describe('syncViewMode / setFocusViewPrimary — DOM identity across Grid <-> Fo
     document.body.append(container);
   });
 
-  it('data-tray-overflow tracks scroll position while the tray overflows, and clears once nothing is left to scroll to', async () => {
-    const streams: StreamRef[] = ['a', 'b', 'c'].map((channel) => ({
+  it('Focus View writes a wrapping column count and never sets a tray-overflow scroll indicator', async () => {
+    const streams: StreamRef[] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'].map((channel) => ({
       id: `twitch:${channel}`,
       platform: 'twitch',
       channel,
@@ -1511,50 +1653,21 @@ describe('syncViewMode / setFocusViewPrimary — DOM identity across Grid <-> Fo
     container.remove();
     streamArea.append(container);
     document.body.append(streamArea);
-    Object.defineProperty(streamArea, 'clientWidth', { configurable: true, get: () => 900 });
-    Object.defineProperty(streamArea, 'clientHeight', { configurable: true, get: () => 600 });
+    Object.defineProperty(streamArea, 'clientWidth', { configurable: true, get: () => 1600 });
+    Object.defineProperty(streamArea, 'clientHeight', { configurable: true, get: () => 900 });
 
-    // The overflow indicator reads container.scrollWidth/clientWidth/scrollLeft
-    // directly (the grid itself is the scroll container — see main.css) —
-    // jsdom never computes real layout, so these are stubbed the same way
-    // streamArea's dimensions are above.
-    let scrollWidth = 1400;
-    let clientWidth = 900;
-    let scrollLeft = 0;
-    Object.defineProperty(container, 'scrollWidth', { configurable: true, get: () => scrollWidth });
-    Object.defineProperty(container, 'clientWidth', { configurable: true, get: () => clientWidth });
-    Object.defineProperty(container, 'scrollLeft', {
-      configurable: true,
-      get: () => scrollLeft,
-      set: (value: number) => {
-        scrollLeft = value;
-      },
-    });
-
-    bindFocusViewPromotion(container);
     syncStreamGrid(container, fakeStore(streams));
     await vi.waitFor(() =>
-      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(3),
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(9),
     );
     syncViewMode(container, 'focus', streams);
     updateGridLayout(container);
 
-    // At the start of an overflowing tray: only the "more to the right" fade.
-    expect(container.dataset.trayOverflow).toBe('end');
-
-    scrollLeft = 250;
-    container.dispatchEvent(new Event('scroll'));
-    expect(container.dataset.trayOverflow).toBe('both');
-
-    scrollLeft = scrollWidth - clientWidth;
-    container.dispatchEvent(new Event('scroll'));
-    expect(container.dataset.trayOverflow).toBe('start');
-
-    // Nothing left to scroll: no indicator at all, not a stale one.
-    scrollWidth = clientWidth;
-    scrollLeft = 0;
-    updateGridLayout(container);
     expect(container.dataset.trayOverflow).toBeUndefined();
+    const trayColumns = Number.parseInt(container.style.getPropertyValue('--focus-tray-count'), 10);
+    expect(trayColumns).toBeGreaterThan(1);
+    expect(trayColumns).toBeLessThan(8);
+    expect(container.style.getPropertyValue('--focus-tray-height')).not.toBe('');
 
     streamArea.remove();
     document.body.append(container);
@@ -2440,7 +2553,9 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(rulesWithAutoRows.length).toBeGreaterThan(0);
     for (const rule of rulesWithAutoRows) {
       const selector = rule.slice(0, rule.indexOf('{'));
-      expect(selector).toContain("[data-has-portrait='1']");
+      const allowedPortrait = selector.includes("[data-has-portrait='1']");
+      const allowedFocus = selector.includes("[data-view-mode='focus']");
+      expect(allowedPortrait || allowedFocus).toBe(true);
     }
   });
 
@@ -2512,18 +2627,20 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(backdropBlock).toMatch(/rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\.6[0-9]*\s*\)/);
   });
 
-  it('Story Card preview markup includes Copy Watch URL, Share Watch Party, and a dimmer sibling', async () => {
+  it('Story Card preview markup includes Share Watch Party copy and a dimmer sibling', async () => {
     // @ts-expect-error no @types/node in this project — see comment above.
     const fs = await import('node:fs');
     const html: string = fs.readFileSync('index.html', 'utf-8');
     expect(html).toContain('id="story-preview-copy"');
-    expect(html).toContain('Copy Watch URL');
-    expect(html).toContain('id="story-preview-share"');
     expect(html).toContain('Share Watch Party');
+    expect(html).not.toContain('Copy Watch URL');
+    expect(html).not.toContain('Copy Live Party Link');
+    expect(html).not.toContain('data-action="copy-url"');
+    expect(html).not.toContain('data-action="share-party"');
+    expect(html).not.toContain('id="story-preview-share"');
     expect(html).toContain('data-action="start-live-party"');
     expect(html).toContain('Start Live Watch Party');
     expect(html).toContain('data-action="copy-live-party"');
-    expect(html).toContain('Copy Live Party Link');
     expect(html).toContain('data-action="end-live-party"');
     expect(html).toContain('End Watch Party');
     expect(html).toContain('id="watch-party-status"');
@@ -2533,7 +2650,7 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(html).toContain('class="story-preview__action-short"');
     expect(html).toMatch(/story-preview-download[\s\S]*?aria-label="Download Story Card"/);
     expect(html).toMatch(/<span class="story-preview__action-short">Download<\/span>/);
-    expect(html).toMatch(/<span class="story-preview__action-short">Copy<\/span>/);
+    expect(html).toMatch(/story-preview-copy[\s\S]*?aria-label="Share Watch Party"/);
     expect(html).toMatch(/<span class="story-preview__action-short">Share<\/span>/);
   });
 
@@ -2563,6 +2680,15 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     );
     expect(withoutComments).toMatch(
       /\.stream-grid\[data-view-mode='focus'\] \.stream-card\.is-focus-primary \{[^}]*align-self:\s*center/,
+    );
+    expect(withoutComments).toMatch(
+      /\.stream-grid\[data-view-mode='focus'\][^{]*\{[^}]*justify-content:\s*start/,
+    );
+    expect(withoutComments).toMatch(
+      /\.stream-grid\[data-view-mode='focus'\][^{]*\{[^}]*grid-auto-flow:\s*row/,
+    );
+    expect(withoutComments).toMatch(
+      /\.stream-grid\[data-view-mode='focus'\][^{]*\{[^}]*overflow:\s*hidden/,
     );
     expect(withoutComments).toMatch(
       /html\.headers-hidden[\s\S]*?\[data-view-mode='theater'\][\s\S]*?--focus-primary-height/,

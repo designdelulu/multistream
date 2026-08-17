@@ -49,4 +49,22 @@ describe('createChatStore', () => {
     expect(isChatPlatform('kick')).toBe(true);
     expect(isChatPlatform('twitch')).toBe(true);
   });
+
+  it('setVisible does not notify when visibility is already that value', () => {
+    localStorage.removeItem('multistream:chat-visible');
+    const store = createChatStore(fakeStore([twitch('luhliv1')]));
+    let calls = 0;
+    store.subscribe(() => {
+      calls += 1;
+    });
+    store.setVisible(true);
+    const afterOpen = calls;
+    expect(afterOpen).toBeGreaterThan(0);
+    store.setVisible(true);
+    expect(calls).toBe(afterOpen);
+    store.setVisible(false);
+    expect(calls).toBe(afterOpen + 1);
+    store.setVisible(false);
+    expect(calls).toBe(afterOpen + 1);
+  });
 });

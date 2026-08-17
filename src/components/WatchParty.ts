@@ -204,6 +204,9 @@ export function bindWatchParty(store: StreamStore): WatchPartyController {
       return statusText;
     },
     async start() {
+      if ((role === 'host' || role === 'viewer') && roomId) {
+        return { ok: true, url: watchPartyUrl(window.location.origin, roomId) };
+      }
       const streams = store.getStreams();
       if (streams.length === 0) {
         return { ok: false, error: 'Add at least one stream first.' };

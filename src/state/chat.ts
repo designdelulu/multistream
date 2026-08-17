@@ -72,6 +72,7 @@ export function createChatStore(streamStore: StreamStore) {
   }
 
   function setVisible(next: boolean, options?: { persist?: boolean }): void {
+    if (visible === next) return;
     visible = next;
     if (options?.persist !== false) {
       persistVisiblePreference(next);

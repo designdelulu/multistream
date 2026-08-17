@@ -479,7 +479,7 @@ html.watch-party-viewer .stream-card__overlay-drag {
   flex: 1;
   display: grid;
   grid-template-columns: repeat(var(--grid-columns, 1), minmax(0, var(--player-width, 1fr)));
-  /* dense: backfill any hole a spanning portrait card leaves behind (see its own rule below — Focus View overrides this to grid-auto-flow: column). */
+  /* dense: backfill any hole a spanning portrait card leaves behind (see its own rule below — Focus View overrides this to grid-auto-flow: row). */
   grid-auto-flow: row dense;
   gap: 12px;
   padding: 12px;
@@ -1502,79 +1502,37 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
 }
 
 /*
- * Focus View: one large primary + a horizontal, scrollable tray of the rest.
- * Every .stream-card stays in this single flat parent in both modes — only
- * grid placement and CSS vars change below, so no player is ever remounted
- * by entering/exiting Focus View or promoting a different tray stream to
- * primary (see StreamGrid.ts's syncViewMode/setFocusViewPrimary). The
- * primary is placed on an explicit row/column span; every other card is
- * left unplaced on grid-row 2 and the browser auto-flows them across
- * implicit columns in DOM order — no per-card column bookkeeping needed.
+ * Focus View: one large primary + a wrapping grid of every other stream
+ * underneath. Every .stream-card stays in this single flat parent — only
+ * grid placement and CSS vars change, so no player is remounted by
+ * entering/exiting Focus or promoting a secondary to primary (see
+ * StreamGrid.ts's syncViewMode/setFocusViewPrimary). The primary occupies
+ * row 1 spanning every column; secondaries auto-flow onto later rows in
+ * DOM order. No horizontal strip and no overflow-x scroll.
  */
 .stream-grid[data-view-mode='focus'],
 .stream-grid[data-view-mode='focus'][data-has-kick='1'] {
-  grid-template-columns: repeat(var(--focus-tray-count, 1), var(--focus-tray-column-width, 1fr));
-  grid-template-rows: minmax(0, 1fr) var(--focus-tray-row-height, auto);
-  grid-auto-columns: var(--focus-tray-column-width, 1fr);
-  grid-auto-flow: column;
-  align-content: stretch;
-  justify-content: center;
-  overflow-x: auto;
-  overflow-y: hidden;
+  grid-template-columns: repeat(var(--focus-tray-count, 1), minmax(0, 1fr));
+  grid-template-rows: auto;
+  grid-auto-rows: var(--focus-tray-row-height, auto);
+  grid-auto-flow: row;
+  align-content: start;
+  justify-content: start;
+  overflow: hidden;
 }
 
-.stream-grid[data-view-mode='focus'] .stream-card {
-  grid-row: 2;
-  width: var(--focus-tray-column-width, 100%);
-  align-self: center;
-}
-
-/*
- * Soft edge-fade on whichever side still has more tray content to scroll to
- * (data-tray-overflow, set by StreamGrid.ts's updateFocusTrayOverflowIndicator
- * — 'start'/'end'/'both'). mask-image is a stencil over the element's final
- * rendered box, so it stays put as the content underneath scrolls — no extra
- * wrapper element needed. The primary sits in row 1, centered with its own
- * whitespace on either side, so a mask this shallow essentially never reaches
- * it in practice.
- */
-.stream-grid[data-view-mode='focus'][data-tray-overflow='end'] {
-  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
-}
-
-.stream-grid[data-view-mode='focus'][data-tray-overflow='start'] {
-  mask-image: linear-gradient(to left, black calc(100% - 32px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to left, black calc(100% - 32px), transparent 100%);
-}
-
-.stream-grid[data-view-mode='focus'][data-tray-overflow='both'] {
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    black 32px,
-    black calc(100% - 32px),
-    transparent 100%
-  );
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    black 32px,
-    black calc(100% - 32px),
-    transparent 100%
-  );
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) {
+  width: 100%;
+  align-self: start;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 /*
  * Stronger visual promote-affordance beyond the header's cursor/title
  * tooltip alone (Section 12): a small upward arrow fades in on hover/focus
- * of a promotable tray header, and the whole card lifts slightly — signaling
- * "click to bring this forward" without relying on hidden knowledge.
+ * of a promotable secondary header, and the whole card lifts slightly —
+ * signaling "click to bring this forward" without relying on hidden knowledge.
  */
-.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) {
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-
 .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):hover,
 .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):has(
     .stream-card__header:focus-visible
@@ -1675,28 +1633,12 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
   margin: 0 auto;
 }
 
-/*
- * grid-column: 1/-1 spans the FULL scrollable tray track width, not the
- * visible scrollport — justify-self: center would center within that full
- * span and drift left of the actual viewport once tray content overflows.
- * Instead the flow position is pinned to the area's start (justify-self:
- * start) so the natural/static position is always content-x 0, and the
- * real visible centering is driven entirely by StreamGrid.ts's JS-computed
- * --focus-primary-offset-left, applied here as a sticky left offset. Since
- * a sticky left constraint only ever prevents the element's static
- * position from scrolling below that offset (it never pulls a
- * rightward-natural-position element leftward), pinning the natural
- * position at 0 guarantees the offset binds immediately at scrollLeft=0
- * and holds through the entire scroll range.
- */
 .stream-grid[data-view-mode='focus'] .stream-card.is-focus-primary {
   grid-row: 1;
   grid-column: 1 / -1;
   width: var(--focus-primary-width, 100%);
-  justify-self: start;
+  justify-self: center;
   align-self: center;
-  position: sticky;
-  left: var(--focus-primary-offset-left, 0px);
   cursor: default;
 }
 
@@ -1708,13 +1650,10 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
 /*
  * Theater mode: same single-primary concept as Focus (same
  * focusViewPrimaryId, same computeFocusViewLayout/updateFocusViewLayout
- * math, same --focus-primary-offset-left centering var) but with no tray —
- * every non-primary card is a hidden grid item (display: none removes it
- * from the grid entirely, so it consumes no track/space), and there is
- * nothing to horizontally scroll, so overflow stays hidden here instead of
- * auto. Kept as its own selector rather than folded into the Focus rules
- * above so Focus's tray-only concerns (overflow-x, mask fades, tray
- * hover/promote affordances) never leak into Theater.
+ * math) but with no under-grid — every non-primary card is a hidden grid
+ * item (display: none removes it from the grid entirely). Overflow stays
+ * hidden. Kept as its own selector rather than folded into the Focus rules
+ * above so Focus's wrapping-grid concerns never leak into Theater.
  */
 .stream-grid[data-view-mode='theater'] {
   grid-template-columns: 1fr;

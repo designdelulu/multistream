@@ -21,14 +21,14 @@ Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](http
 
 - **Watch together** — Twitch, Kick, YouTube, and TikTok LIVE in one responsive grid (official embeds plus experimental TikTok LIVE resolver).
 - **Live Watch Parties** — Share one short link at `/w/ROOM_ID`. Viewers see your current lineup and automatically follow along when you change streams. MultiStream synchronizes the watching configuration, not the video — each viewer still loads streams directly from the platforms.
-- **Static sharing** — Need a fixed lineup instead? **Copy Watch URL** encodes the current streams into a permanent path URL that does not change.
+- **Static sharing** — Existing `/t:username/k:username/…` path URLs still open a fixed lineup. New shares start a **Live Watch Party** instead.
 - **Your streams stay direct** — MultiStream coordinates the interface; playback always comes from Twitch, Kick, YouTube, or TikTok.
 
 ---
 
 ## What it does
 
-MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and experimental TikTok LIVE — co-stream monitoring, tournament weekends, and live watch parties. Add channels from the toolbar, share a fixed lineup URL, or start a Live Watch Party so viewers follow what you're watching.
+MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and experimental TikTok LIVE — co-stream monitoring, tournament weekends, and live watch parties. Add channels from the toolbar, then share a Live Watch Party so viewers follow what you're watching.
 
 - **Twitch + Kick + YouTube + experimental TikTok LIVE** on the same page — official embeds for the first three; TikTok uses a resolver + `<video>` player (see [TikTok LIVE setup](#tiktok-live-setup-experimental))
 - **YouTube channels resolve to whatever's live right now** — a handle, username, channel ID, or channel URL is checked server-side on each load; a direct video/Shorts/live URL loads exactly that video, no lookup needed
@@ -37,7 +37,7 @@ MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and ex
 - **Focus View** — toggle to a large-primary-plus-tray layout; click a tray stream's header to promote it to primary without remounting any player (see [Focus View](#focus-view) below)
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
 - **Username dropdown** — type a name (or `@name`) and pick **Twitch**, **Kick**, **YouTube**, or **TikTok LIVE (Experimental)**; Enter uses your last-chosen platform. Paste any supported URL to skip the dropdown.
-- **Share menu** — Copy Watch URL (static lineup), Start / Copy / End a live watch party, preview or download a Story Card image of your lineup, or share a watch-party link; **Clear all** removes every stream
+- **Share menu** — Start / Copy / End a live watch party (Share and Copy start a party if none is running), preview or download a Story Card image of your lineup; **Clear all** removes every stream
 - **Hide headers** — headers are shown by default (remembered in `localStorage` once toggled); in compact mode each card is video-only at rest, and hovering a card opens a toolbar **below** the embed (name, drag, focus, remove) so Twitch is never obscured
 - **Drag to reorder** stream cards (drag the card header, or the drag handle in the hover toolbar when headers are hidden); URL updates without remounting players
 - **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
@@ -265,7 +265,7 @@ To disable TikTok LIVE without touching anything else, see
 
 A **static** share URL (`/t:username/k:username/…`) is a snapshot. A **live watch party** is a room at `/w/ROOM_ID` whose lineup can change while viewers stay on the same link.
 
-**Share → Start Live Watch Party** creates the room (host token stays in this browser’s `localStorage`). Viewers poll `public/api/watch-party.php` every 2 seconds for lineup changes only — MultiStream never rebroadcasts video. **End Watch Party** marks the room ended; it is then kept 24 hours. Idle active rooms expire 7 days after the last host update.
+**Share → Start Live Watch Party** (or **Share Watch Party**, which starts a party if none is running and copies the `/w/ROOM_ID` link) creates the room (host token stays in this browser’s `localStorage`). Viewers poll `public/api/watch-party.php` every 2 seconds for lineup changes only — MultiStream never rebroadcasts video. **End Watch Party** marks the room ended; it is then kept 24 hours. Idle active rooms expire 7 days after the last host update.
 
 Sessions are JSON files under `~/multistream-secrets/watch-party/` (created automatically, same parent as the resolver cache). No extra config file, no database. PHP must be able to write that directory, same as `~/multistream-secrets/cache/`.
 
@@ -283,7 +283,7 @@ https://multistream.cc/t:username/k:username/y:handle:username/tt:creator
 
 Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:username`) still work.
 
-Open the toolbar **Share** menu to **Copy Watch URL** (static snapshot), **Start Live Watch Party** (live `/w/ROOM_ID` link), **Preview Story Card**, **Download Story Card**, or **Share Watch Party**. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Refresh, Clear, Headers, Chat) are icons that expand their labels on hover.
+Open the toolbar **Share** menu to **Start Live Watch Party** (or **Share Watch Party**, which starts a live `/w/ROOM_ID` party if none is running and copies the link), **Preview Story Card**, or **Download Story Card**. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Refresh, Clear, Headers, Chat) are icons that expand their labels on hover.
 
 **Hide headers** collapses each card’s top bar for a denser grid. At rest you see **video only**. Hover a card and the player shrinks slightly so a control strip opens **below** the iframe — channel name, **drag to reorder**, magnifying-glass **Focus**, and **×** remove. Controls never stack over the embed (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)).
 

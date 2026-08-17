@@ -152,86 +152,108 @@ export interface FocusViewLayoutResult {
   readonly primaryWidth: number;
   readonly primaryHeight: number;
   readonly trayHeight: number;
-  /** Width of one landscape tray tile at trayHeight (9:16 secondaries use trayHeight * 9/16 instead). */
+  /** Width of one landscape under-grid tile at trayHeight (9:16 secondaries use trayHeight * 9/16 instead). */
   readonly trayColumnWidth: number;
+  readonly trayColumns: number;
+  readonly trayRows: number;
 }
 
-const MIN_TRAY_HEIGHT = 88;
+const EMPTY_FOCUS: FocusViewLayoutResult = {
+  primaryWidth: 0,
+  primaryHeight: 0,
+  trayHeight: 0,
+  trayColumnWidth: 0,
+  trayColumns: 0,
+  trayRows: 0,
+};
+
+/** Old chat-closed film-strip band — empirically large enough for Twitch to start. */
+const MIN_TRAY_HEIGHT = 160;
 const MAX_TRAY_HEIGHT = 220;
+/** 16:9 width at ~172px, the chat-closed 1920 size that used to work. */
+const TRAY_FIT_COLUMN_WIDTH = Math.round((172 * 16) / 9);
+/** Primary keeps the majority of the viewport; under-grid shrinks if needed. */
+const UNDER_GRID_MAX_FRACTION = 0.4;
 
 /**
- * Responsive secondary-stream capacity before the tray scrolls, per the
- * product spec's breakpoint guidance. Only used to *size* tray tiles (so
- * roughly this many fit before `overflow-x: auto` kicks in) — it never caps
- * how many secondary streams can exist, only how large each tile starts.
+ * How many ~306px-wide under-grid columns fit in the area. Never caps how
+ * many secondary streams exist — wrapping uses this as the column count.
  */
 export function targetVisibleTrayCount(areaWidth: number): number {
-  if (areaWidth < 640) return 2;
-  if (areaWidth < 1024) return 3;
-  if (areaWidth < 1440) return 4;
-  return 6;
+  return Math.max(1, Math.floor((areaWidth + GRID_GAP) / (TRAY_FIT_COLUMN_WIDTH + GRID_GAP)));
 }
 
 /**
  * Sizes the Focus View primary box (respecting its own orientation — a
- * portrait primary is never stretched to 16:9) and, when a tray is present,
- * the horizontal tray strip below it. Both regions share one grid container
- * in the DOM (see StreamGrid.ts's syncFocusViewDom) — this function only
- * produces pixel sizes; it never decides which stream is primary.
+ * portrait primary is never stretched to 16:9) and, when an under-grid is
+ * present, a wrapping grid of every other stream below it. Both regions
+ * share one grid container in the DOM (see StreamGrid.ts's syncFocusViewDom)
+ * — this function only produces pixel sizes; it never decides which stream
+ * is primary.
  *
  * `includeTray: false` (Theater — see StreamGrid.ts's updateFocusViewLayout)
- * gives the primary the entire area height instead of reserving a tray row
- * that CSS never renders (main.css's `[data-view-mode='theater']` hides
- * every non-primary card) — the previous version always reserved tray space
- * regardless of mode, which is why Theater used to render a primary far
- * smaller than the viewport with a large unused gap below it.
+ * gives the primary the entire area height instead of reserving under-grid
+ * space that CSS never renders (main.css's `[data-view-mode='theater']` hides
+ * every non-primary card).
  *
- * Both dimensions are now a true "contain" fit — width and height are each
- * clamped against their own area budget, then the other dimension is
- * re-derived from whichever one was the tighter constraint — so the primary
- * never overflows the area in the dimension that wasn't the binding one
- * (the previous version derived primaryWidth from primaryHeight and then
- * clamped it against areaWidth without re-deriving primaryHeight, so a
- * narrow-but-tall area could still overflow horizontally... only for the
- * width clamp to silently produce a non-16:9 box).
+ * `secondaryCount` is how many streams sit in the under-grid. When omitted,
+ * the layout uses one row of `targetVisibleTrayCount` tiles (the old strip
+ * density) so callers that only care about primary sizing stay valid.
+ *
+ * Both primary dimensions are a true "contain" fit — width and height are
+ * each clamped against their own area budget, then the other dimension is
+ * re-derived from whichever one was the tighter constraint.
  */
 export function computeFocusViewLayout(
   areaWidth: number,
   areaHeight: number,
   primaryOrientation: StreamOrientation,
-  options: { gap?: number; chromeHeightPerRow?: number; includeTray?: boolean } = {},
+  options: {
+    gap?: number;
+    chromeHeightPerRow?: number;
+    includeTray?: boolean;
+    secondaryCount?: number;
+  } = {},
 ): FocusViewLayoutResult {
   const gap = options.gap ?? GRID_GAP;
-  // Header height reserved once for the primary's own row and once for the
-  // tray's row (every tray tile shares one row, so its header only costs the
-  // row once regardless of tray size) — see StreamGrid.ts's
-  // updateFocusViewLayout, the only caller that ever passes this. The
-  // returned primaryHeight/trayHeight are pure PLAYER heights either way
-  // (matching --player-height's existing meaning elsewhere): callers that
-  // also render a header must add chromeHeightPerRow back on top themselves
-  // when sizing the row/card, not just the player.
   const chromeHeightPerRow = options.chromeHeightPerRow ?? 0;
   const includeTray = options.includeTray ?? true;
   if (areaWidth <= 0 || areaHeight <= 0) {
-    return { primaryWidth: 0, primaryHeight: 0, trayHeight: 0, trayColumnWidth: 0 };
+    return EMPTY_FOCUS;
   }
 
   let trayHeight = 0;
   let trayColumnWidth = 0;
+  let trayColumns = 0;
+  let trayRows = 0;
   let primaryAreaHeight = areaHeight - chromeHeightPerRow;
 
   if (includeTray) {
-    const targetVisible = targetVisibleTrayCount(areaWidth);
-    const provisionalColumnWidth = Math.max(
-      64,
-      Math.floor((areaWidth - gap * (targetVisible - 1)) / targetVisible),
-    );
-    trayHeight = Math.min(
-      MAX_TRAY_HEIGHT,
-      Math.max(MIN_TRAY_HEIGHT, Math.round((provisionalColumnWidth * 9) / 16)),
-    );
-    trayColumnWidth = Math.round((trayHeight * 16) / 9);
-    primaryAreaHeight = areaHeight - (trayHeight + chromeHeightPerRow) - gap - chromeHeightPerRow;
+    const fitColumns = targetVisibleTrayCount(areaWidth);
+    const secondaries = options.secondaryCount ?? fitColumns;
+    if (secondaries > 0) {
+      trayColumns = Math.max(1, Math.min(secondaries, fitColumns));
+      trayRows = Math.ceil(secondaries / trayColumns);
+      const provisionalColumnWidth = Math.max(
+        64,
+        Math.floor((areaWidth - gap * (trayColumns - 1)) / trayColumns),
+      );
+      let cellHeight = Math.min(
+        MAX_TRAY_HEIGHT,
+        Math.max(MIN_TRAY_HEIGHT, Math.round((provisionalColumnWidth * 9) / 16)),
+      );
+      const underHeightFor = (height: number): number =>
+        trayRows * (height + chromeHeightPerRow) + gap * Math.max(0, trayRows - 1);
+      const maxUnder = Math.floor(areaHeight * UNDER_GRID_MAX_FRACTION);
+      if (maxUnder > 0 && underHeightFor(cellHeight) > maxUnder) {
+        const heightBudget = maxUnder - gap * Math.max(0, trayRows - 1);
+        const perRow = Math.floor(heightBudget / trayRows) - chromeHeightPerRow;
+        cellHeight = Math.max(1, Math.min(cellHeight, perRow));
+      }
+      trayHeight = cellHeight;
+      trayColumnWidth = Math.round((trayHeight * 16) / 9);
+      primaryAreaHeight = areaHeight - underHeightFor(trayHeight) - gap - chromeHeightPerRow;
+    }
   }
   primaryAreaHeight = Math.max(0, primaryAreaHeight);
 
@@ -245,5 +267,12 @@ export function computeFocusViewLayout(
     primaryHeight = (primaryWidth * 9) / 16;
   }
 
-  return { primaryWidth, primaryHeight, trayHeight, trayColumnWidth };
+  return {
+    primaryWidth,
+    primaryHeight,
+    trayHeight,
+    trayColumnWidth,
+    trayColumns,
+    trayRows,
+  };
 }
