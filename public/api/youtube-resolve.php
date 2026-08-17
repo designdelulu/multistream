@@ -51,15 +51,33 @@ header('Cache-Control: no-store');
 // This file lives at <web-root>/api/youtube-resolve.php. Two levels up
 // from __DIR__ (api/) is the DreamHost home directory in the common
 // "~/<domain>/api/" layout — adjust if your account differs.
-define('YOUTUBE_CONFIG_PATH', dirname(__DIR__, 2) . '/multistream-secrets/youtube-config.php');
-define('YOUTUBE_CACHE_DIR', dirname(__DIR__, 2) . '/multistream-secrets/cache');
+// Guarded with defined() so a test harness can point these at a temp
+// fixture directory before requiring this file.
+if (!defined('YOUTUBE_CONFIG_PATH')) {
+    define('YOUTUBE_CONFIG_PATH', dirname(__DIR__, 2) . '/multistream-secrets/youtube-config.php');
+}
+if (!defined('YOUTUBE_CACHE_DIR')) {
+    define('YOUTUBE_CACHE_DIR', dirname(__DIR__, 2) . '/multistream-secrets/cache');
+}
 
 define('HANDLE_CACHE_TTL', 24 * 60 * 60); // handle/username -> channelId rarely changes
 define('LIVE_CACHE_TTL', 60); // currently-live result
 define('OFFLINE_CACHE_TTL', 180); // currently-offline (negative cache)
+// Whole-response cache for mode=stats: the frontend polls stats on a timer
+// and every tab polls the same id set, so identical polls within a minute
+// collapse into one videos.list call. Guarded for test injection.
+if (!defined('YOUTUBE_STATS_CACHE_TTL')) {
+    define('YOUTUBE_STATS_CACHE_TTL', 60);
+}
 define('LOCK_WAIT_MS', 150);
 define('LOCK_WAIT_MAX_MS', 2000);
 define('UPSTREAM_TIMEOUT_SECONDS', 5);
+if (!defined('YOUTUBE_RESOLVE_RATE_MAX')) {
+    define('YOUTUBE_RESOLVE_RATE_MAX', 30);
+}
+if (!defined('YOUTUBE_RESOLVE_RATE_WINDOW')) {
+    define('YOUTUBE_RESOLVE_RATE_WINDOW', 60);
+}
 
 // --- Response helpers --------------------------------------------------
 
@@ -144,6 +162,21 @@ function cache_set(string $key, mixed $value, int $ttlSeconds): void
     @file_put_contents($path, $payload, LOCK_EX);
 }
 
+/**
+ * Sliding-window per-IP throttle (30/min; a batched mode=stats request is
+ * one hit regardless of id count). Fails open when the cache dir is
+ * unavailable — a storage hiccup must not take resolution down.
+ */
+function youtube_resolve_rate_limited(string $ip): bool
+{
+    if (!cache_dir_ready()) return false;
+    $key = 'youtube:resolve-rate:' . hash('sha256', $ip);
+    $state = cache_get($key);
+    $count = is_array($state) && isset($state['count']) && is_int($state['count']) ? $state['count'] : 0;
+    cache_set($key, ['count' => $count + 1], YOUTUBE_RESOLVE_RATE_WINDOW);
+    return $count + 1 > YOUTUBE_RESOLVE_RATE_MAX;
+}
+
 // --- Best-effort concurrent de-dupe --------------------------------------
 
 /**
@@ -205,25 +238,39 @@ function youtube_api_get(string $path, array $params, string $apiKey): array
     $params['key'] = $apiKey;
     $url = 'https://www.googleapis.com/youtube/v3/' . $path . '?' . http_build_query($params);
 
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => UPSTREAM_TIMEOUT_SECONDS,
-        CURLOPT_CONNECTTIMEOUT => UPSTREAM_TIMEOUT_SECONDS,
-        CURLOPT_FAILONERROR => false,
-    ]);
-    $body = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlError = curl_error($ch);
-    // No curl_close() — a no-op since PHP 8.0 (handles are GC'd automatically);
-    // calling it is deprecated as of PHP 8.5.
+    // Test seam: a harness can inject $GLOBALS['youtube_http_transport']
+    // (callable(string $url): array{httpCode:int, body:?array}) to run the
+    // endpoint against canned responses instead of the live Data API.
+    $transport = $GLOBALS['youtube_http_transport'] ?? null;
+    if (is_callable($transport)) {
+        $result = $transport($url);
+        $httpCode = is_array($result) && isset($result['httpCode']) ? (int) $result['httpCode'] : 0;
+        $decoded = is_array($result) && is_array($result['body'] ?? null) ? $result['body'] : null;
+        if ($httpCode === 0) {
+            error_log('youtube-resolve: http transport returned a malformed response for ' . $path);
+            return ['ok' => false, 'code' => 'api_error'];
+        }
+    } else {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => UPSTREAM_TIMEOUT_SECONDS,
+            CURLOPT_CONNECTTIMEOUT => UPSTREAM_TIMEOUT_SECONDS,
+            CURLOPT_FAILONERROR => false,
+        ]);
+        $body = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        // No curl_close() — a no-op since PHP 8.0 (handles are GC'd automatically);
+        // calling it is deprecated as of PHP 8.5.
 
-    if ($body === false) {
-        error_log('youtube-resolve: curl error calling ' . $path . ': ' . $curlError);
-        return ['ok' => false, 'code' => 'api_error'];
+        if ($body === false) {
+            error_log('youtube-resolve: curl error calling ' . $path . ': ' . $curlError);
+            return ['ok' => false, 'code' => 'api_error'];
+        }
+
+        $decoded = json_decode($body, true);
     }
-
-    $decoded = json_decode($body, true);
 
     if ($httpCode === 403 && is_array($decoded)) {
         $reasons = array_column($decoded['error']['errors'] ?? [], 'reason');
@@ -431,100 +478,152 @@ function api_error_message(string $code): string
 
 // --- Request handling -----------------------------------------------------
 
-if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
-    http_response_code(405);
-    respond_error('invalid_input', 'Only GET is supported.');
-}
-
-$mode = $_GET['mode'] ?? '';
-
-// Batched periodic stats refresh (viewer count + duration) for videoIds
-// already known to the frontend — see checkYouTubeStats. Separate branch,
-// distinct params (`ids`, not `value`): never touches channel resolution.
-if ($mode === 'stats') {
-    $idsParam = $_GET['ids'] ?? '';
-    if (!is_string($idsParam) || $idsParam === '') {
-        respond_error('invalid_input', 'Missing ids.');
+/**
+ * Pure handler for the GET contract: returns the response body (the HTTP
+ * status is always 200 for GETs — callers branch on the body's `status`
+ * field, per the file-header contract). Extracted from the request block so
+ * tests/youtube-resolve-unit.test.php can drive it without exit().
+ *
+ * @param array<string, mixed> $get
+ * @return array<string, mixed>
+ */
+function youtube_resolve_handle_get(array $get): array
+{
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    if (youtube_resolve_rate_limited($ip)) {
+        // The stats client maps any non-ok body to "keep last-known state",
+        // and the resolve client renders it like any other soft error.
+        return ['status' => 'error', 'code' => 'rate_limited', 'message' => 'Too many requests — try again shortly.'];
     }
 
-    $videoIds = array_values(array_unique(array_filter(
-        array_map('trim', explode(',', $idsParam)),
-        static fn(string $id): bool => (bool) preg_match('/^[A-Za-z0-9_-]{11}$/', $id),
-    )));
+    $mode = $get['mode'] ?? '';
 
-    if (empty($videoIds) || count($videoIds) > 50) {
-        respond_error('invalid_input', 'ids must be 1-50 valid YouTube video ids.');
+    // Batched periodic stats refresh (viewer count + duration) for videoIds
+    // already known to the frontend — see checkYouTubeStats. Separate branch,
+    // distinct params (`ids`, not `value`): never touches channel resolution.
+    if ($mode === 'stats') {
+        $idsParam = $get['ids'] ?? '';
+        if (!is_string($idsParam) || $idsParam === '') {
+            return ['status' => 'error', 'code' => 'invalid_input', 'message' => 'Missing ids.'];
+        }
+
+        $videoIds = array_values(array_unique(array_filter(
+            array_map('trim', explode(',', $idsParam)),
+            static fn(string $id): bool => (bool) preg_match('/^[A-Za-z0-9_-]{11}$/', $id),
+        )));
+
+        if (empty($videoIds) || count($videoIds) > 50) {
+            return ['status' => 'error', 'code' => 'invalid_input', 'message' => 'ids must be 1-50 valid YouTube video ids.'];
+        }
+
+        // Whole-response cache keyed by the sorted id set: every tab polling
+        // the same lineup (and the same ids in any order) reuses one
+        // upstream call per TTL window. Only successful responses are
+        // cached — a transient upstream failure must not poison the next
+        // poll, same rule as resolve_live_video's cache.
+        $sortedIds = $videoIds;
+        sort($sortedIds);
+        $statsCacheKey = 'stats:' . md5(implode(',', $sortedIds));
+        $cached = cache_get($statsCacheKey);
+        if (is_array($cached) && ($cached['status'] ?? null) === 'ok') {
+            return $cached;
+        }
+
+        $lock = acquire_or_wait_lock($statsCacheKey);
+        try {
+            if ($lock === null) {
+                $cached = cache_get($statsCacheKey);
+                if (is_array($cached) && ($cached['status'] ?? null) === 'ok') {
+                    return $cached;
+                }
+            }
+
+            $apiKey = load_api_key();
+            if ($apiKey === null) {
+                return ['status' => 'error', 'code' => 'config_missing', 'message' => "YouTube isn't configured on this server yet."];
+            }
+
+            $statsResult = fetch_video_stats($videoIds, $apiKey);
+            if (!$statsResult['ok']) {
+                return ['status' => 'error', 'code' => $statsResult['code'], 'message' => api_error_message($statsResult['code'])];
+            }
+
+            $results = [];
+            foreach ($videoIds as $id) {
+                $entry = $statsResult['data'][$id] ?? null;
+                $results[] = $entry === null
+                    ? ['videoId' => $id, 'status' => 'not_found']
+                    : [
+                        'videoId' => $id,
+                        'status' => $entry['status'],
+                        'viewerCount' => $entry['viewerCount'],
+                        'startedAt' => $entry['startedAt'],
+                        'title' => $entry['title'],
+                    ];
+            }
+
+            $body = ['status' => 'ok', 'results' => $results];
+            cache_set($statsCacheKey, $body, YOUTUBE_STATS_CACHE_TTL);
+            return $body;
+        } finally {
+            release_lock($lock);
+        }
+    }
+
+    $value = $get['value'] ?? '';
+
+    if (!in_array($mode, ['handle', 'username', 'channelId'], true) || !is_string($value)) {
+        return ['status' => 'error', 'code' => 'invalid_input', 'message' => 'Missing or invalid mode/value.'];
+    }
+
+    $value = trim($value);
+
+    $valid = match ($mode) {
+        'handle' => (bool) preg_match('/^[A-Za-z0-9._-]{1,100}$/', ltrim($value, '@')),
+        'username' => (bool) preg_match('/^[A-Za-z0-9_-]{1,100}$/', $value),
+        'channelId' => (bool) preg_match('/^UC[A-Za-z0-9_-]{10,40}$/', $value),
+        default => false,
+    };
+
+    if (!$valid || $value === '') {
+        return ['status' => 'error', 'code' => 'invalid_input', 'message' => 'That value is not a valid YouTube ' . $mode . '.'];
+    }
+
+    if ($mode === 'handle') {
+        $value = ltrim($value, '@');
     }
 
     $apiKey = load_api_key();
     if ($apiKey === null) {
-        respond_error('config_missing', "YouTube isn't configured on this server yet.");
+        return ['status' => 'error', 'code' => 'config_missing', 'message' => "YouTube isn't configured on this server yet."];
     }
 
-    $statsResult = fetch_video_stats($videoIds, $apiKey);
-    if (!$statsResult['ok']) {
-        respond_error($statsResult['code'], api_error_message($statsResult['code']));
+    $channelResult = resolve_channel_id($mode, $value, $apiKey);
+    if (!$channelResult['ok']) {
+        if ($channelResult['code'] === 'channel_not_found') {
+            return ['status' => 'error', 'code' => 'channel_not_found', 'message' => "We couldn't find that YouTube channel."];
+        }
+        return ['status' => 'error', 'code' => $channelResult['code'], 'message' => api_error_message($channelResult['code'])];
     }
 
-    $results = [];
-    foreach ($videoIds as $id) {
-        $entry = $statsResult['data'][$id] ?? null;
-        $results[] = $entry === null
-            ? ['videoId' => $id, 'status' => 'not_found']
-            : [
-                'videoId' => $id,
-                'status' => $entry['status'],
-                'viewerCount' => $entry['viewerCount'],
-                'startedAt' => $entry['startedAt'],
-                'title' => $entry['title'],
-            ];
+    $liveResult = resolve_live_video($channelResult['channelId'], $apiKey);
+    // resolve_live_video's own response is cached by channelId alone, so
+    // avatarUrl (from the separate handle/username lookup above) is merged in
+    // here rather than baked into that cache — it's a property of the
+    // channel/handle lookup, not the live-video one.
+    if (($liveResult['status'] ?? null) !== 'error' && $channelResult['avatarUrl'] !== null) {
+        $liveResult['avatarUrl'] = $channelResult['avatarUrl'];
     }
-
-    respond(['status' => 'ok', 'results' => $results]);
+    return $liveResult;
 }
 
-$value = $_GET['value'] ?? '';
-
-if (!in_array($mode, ['handle', 'username', 'channelId'], true) || !is_string($value)) {
-    respond_error('invalid_input', 'Missing or invalid mode/value.');
-}
-
-$value = trim($value);
-
-$valid = match ($mode) {
-    'handle' => (bool) preg_match('/^[A-Za-z0-9._-]{1,100}$/', ltrim($value, '@')),
-    'username' => (bool) preg_match('/^[A-Za-z0-9_-]{1,100}$/', $value),
-    'channelId' => (bool) preg_match('/^UC[A-Za-z0-9_-]{10,40}$/', $value),
-    default => false,
-};
-
-if (!$valid || $value === '') {
-    respond_error('invalid_input', 'That value is not a valid YouTube ' . $mode . '.');
-}
-
-if ($mode === 'handle') {
-    $value = ltrim($value, '@');
-}
-
-$apiKey = load_api_key();
-if ($apiKey === null) {
-    respond_error('config_missing', "YouTube isn't configured on this server yet.");
-}
-
-$channelResult = resolve_channel_id($mode, $value, $apiKey);
-if (!$channelResult['ok']) {
-    if ($channelResult['code'] === 'channel_not_found') {
-        respond_error('channel_not_found', "We couldn't find that YouTube channel.");
+// Guarded so a test harness can `define('YOUTUBE_RESOLVE_TESTING', true)`
+// and `require` this file to get all the functions above without triggering
+// a live HTTP request/response cycle.
+if (!defined('YOUTUBE_RESOLVE_TESTING')) {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
+        http_response_code(405);
+        respond_error('invalid_input', 'Only GET is supported.');
     }
-    respond_error($channelResult['code'], api_error_message($channelResult['code']));
+    respond(youtube_resolve_handle_get($_GET));
 }
-
-$liveResult = resolve_live_video($channelResult['channelId'], $apiKey);
-// resolve_live_video's own response is cached by channelId alone, so
-// avatarUrl (from the separate handle/username lookup above) is merged in
-// here rather than baked into that cache — it's a property of the
-// channel/handle lookup, not the live-video one.
-if (($liveResult['status'] ?? null) !== 'error' && $channelResult['avatarUrl'] !== null) {
-    $liveResult['avatarUrl'] = $channelResult['avatarUrl'];
-}
-respond($liveResult);

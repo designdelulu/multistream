@@ -44,7 +44,6 @@ file_put_contents(
 define('TWITCH_CACHE_DIR', $cacheDir);
 define('TWITCH_CONFIG_PATH', $validConfigPath);
 define('TWITCH_STATUS_TESTING', true);
-
 $endpointFile = realpath(__DIR__ . '/../public/api/twitch-status.php');
 if ($endpointFile === false) {
     fwrite(STDERR, "FAIL: could not locate public/api/twitch-status.php\n");

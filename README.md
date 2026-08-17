@@ -14,6 +14,7 @@ Built by [Eric Barker](https://ericbarker.co). A product of [Design Delulu](http
 **Release checklist:** [docs/RELEASE-CHECKLIST.md](./docs/RELEASE-CHECKLIST.md) — what to run through before every DreamHost upload.
 **TikTok LIVE support:** [docs/TIKTOK.md](./docs/TIKTOK.md) — experimental, unofficial, and how it actually works.
 **Audit report:** [docs/AUDIT-REPORT.md](./docs/AUDIT-REPORT.md) — full record of the Focus View / portrait-grid upgrade pass: bugs found and fixed, tests added, and what's still open.
+**Improvement audit:** [docs/IMPROVEMENT-AUDIT.md](./docs/IMPROVEMENT-AUDIT.md) — the follow-up audit by audience (viewers / host / admin): what shipped in response and what's deliberately unscheduled.
 
 ---
 
@@ -34,15 +35,17 @@ MultiStream.cc is a modern multi-stream viewer for Twitch, Kick, YouTube, and ex
 - **YouTube channels resolve to whatever's live right now** — a handle, username, channel ID, or channel URL is checked server-side on each load; a direct video/Shorts/live URL loads exactly that video, no lookup needed
 - **Responsive grid** that packs landscape streams at the largest 16:9 size and portrait streams at true 9:16 (MultiTwitch-style packing for 16:9; a dedicated 2-row portrait rule for 9:16)
 - **Portrait streams (YouTube Shorts, Experimental TikTok LIVE) get their own grid rule** — a portrait tile always spans exactly 2 landscape rows in Grid View, letterboxed to its true 9:16 shape rather than stretched; Focus View sizes a portrait primary by its own aspect ratio instead
-- **Focus View** — toggle to a large-primary-plus-tray layout; click a tray stream's header to promote it to primary without remounting any player (see [Focus View](#focus-view) below)
+- **Theater / Focus View** — use any card's Theater button for a large primary, then show the Focus tray and click a tray header to promote it without remounting any player
 - **On-card identity** — platform badge + username on every player header (who’s broadcasting stays visible in the viewing plane)
-- **Username dropdown** — type a name (or `@name`) and pick **Twitch**, **Kick**, **YouTube**, or **TikTok LIVE (Experimental)**; Enter uses your last-chosen platform. Paste any supported URL to skip the dropdown.
+- **Username dropdown** — type a name (or `@name`) and pick a compatible provider; dotted handles such as `yonna.jay` are offered for YouTube and TikTok. Paste any supported URL to skip the dropdown.
 - **Share menu** — Start / Copy / End a live watch party (Share and Copy start a party if none is running), preview or download a Story Card image of your lineup; **Clear all** removes every stream
-- **Hide headers** — headers are shown by default (remembered in `localStorage` once toggled); in compact mode each card is video-only at rest, and hovering a card opens a toolbar **below** the embed (name, drag, focus, remove) so Twitch is never obscured
+- **Hide headers** — desktop compact mode uses a fixed footer below each embed; iPad instead hides both bars and keeps only a circular close X over the top-right corner
 - **Drag to reorder** stream cards (drag the card header, or the drag handle in the hover toolbar when headers are hidden); URL updates without remounting players
-- **Session restore** — your lineup is saved in `localStorage` and restored when you return without a share URL (URL path always wins when present)
+- **Session restore** — your lineup, view mode, and selected Theater/Focus primary are restored from `localStorage` (URL path still wins for a shared lineup)
 - **Shareable path URLs** like `/t:username/k:username/y:handle:username/tt:creator`
-- **Live watch parties** at `/w/ROOM_ID` — viewers follow the host’s lineup as it changes (polling, not video rebroadcast)
+- **Live watch parties** at `/w/ROOM_ID` — viewers follow the host’s lineup, Theater/Focus primary, and chat-sidebar visibility; the host sees a live viewer count and idle rooms auto-end after 30 minutes
+- **Keyboard shortcuts** (desktop) — **1–9** make a stream primary / enter Theater, **F** toggles the tray, **M** mutes the primary, **Esc** returns to the grid; shortcuts never fire while typing or with a dialog open (see [docs/USER-GUIDE.md](./docs/USER-GUIDE.md#keyboard-shortcuts))
+- **"Back live" toast** — when a Twitch/Kick channel in your lineup flips offline → live on a status poll, a toast offers one-click reload of that card, and the tab title flashes until you look at it
 - **× close** and **focus** controls per stream — focus fills the area below the toolbar, opens that stream’s Twitch or Kick chat, and remounts unmuted
 - **Twitch / Kick chat sidebar** (desktop and tablet) that resizes the grid instead of covering players
 - **Streams always boot muted** — unmute on focus or from the platform's own player chrome
@@ -61,7 +64,7 @@ Inspired by the classic [MultiTwitch](https://github.com/bhamrick/multitwitch) p
 | Device | Layout | Chat | Notes |
 |---|---|---|---|
 | **Desktop** (>1024px) | Multi-column grid sized to fit all players in the viewport | Show / hide toggle | Chat docks beside streams; grid reflows (does not overlay video) |
-| **Tablet / iPad** (641px–1024px) | Same packing grid | Show / hide toggle | Touch-friendly controls; chat panel slightly narrower |
+| **Tablet / iPad** (641px–1024px) | Same packing grid; iPad maps Theater to Focus-with-tray | iPad hides both bars and shows a circular close X | Touch-friendly controls; iPad requests screen wake lock while streams are present |
 | **Phone** (≤640px) | Single-column scroll | Hidden | Streams stack vertically; toolbar stacks for easy tapping |
 
 Works in modern desktop and mobile browsers (Chrome, Firefox, Safari, Edge). Performance depends on how many live embeds are open — each stream is a full platform player (Twitch/Kick/YouTube iframe, or a TikTok `<video>` feed). Fewer streams = smoother playback, especially on laptops and phones.
@@ -265,7 +268,14 @@ To disable TikTok LIVE without touching anything else, see
 
 A **static** share URL (`/t:username/k:username/…`) is a snapshot. A **live watch party** is a room at `/w/ROOM_ID` whose lineup can change while viewers stay on the same link.
 
-**Share → Start Live Watch Party** (or **Share Watch Party**, which starts a party if none is running and copies the `/w/ROOM_ID` link) creates the room (host token stays in this browser’s `localStorage`). Viewers poll `public/api/watch-party.php` every 2 seconds for lineup changes only — MultiStream never rebroadcasts video. **End Watch Party** marks the room ended; it is then kept 24 hours. Idle active rooms expire 7 days after the last host update.
+**Share → Start Live Watch Party** (or **Share Watch Party**, which starts a party if none is running and copies the `/w/ROOM_ID` link) creates the room (host token stays in this browser’s `localStorage`). Viewers poll `public/api/watch-party.php` every 2 seconds for lineup changes only — MultiStream never rebroadcasts video. **End Watch Party** marks the room ended; it is then kept 24 hours.
+
+While the party runs:
+
+- **Spotlight sync** — the host's view, primary stream, and chat-sidebar visibility are room state. Desktop viewers follow those changes; iPad represents Theater as Focus-with-tray, while phones stay in the single-column grid.
+- **Host presence** — the host client heartbeats every 30s while its tab is visible; viewers see a "Host is live" / "Host away" status line. If the host goes silent for 30 minutes the room auto-ends, and viewers land on the same graceful "party has ended — keep watching this lineup" flow as a manual end.
+- **Viewer count (host only)** — viewers ping presence at most every 30s; the host's status chip shows "Live watch party · N watching". The count is never exposed on viewer-facing responses.
+- **Abuse limits** — per-IP rate limits on create/update/GET plus a hard cap on total active rooms keep the unauthenticated endpoint safe to leave open.
 
 Sessions are JSON files under `~/multistream-secrets/watch-party/` (created automatically, same parent as the resolver cache). No extra config file, no database. PHP must be able to write that directory, same as `~/multistream-secrets/cache/`.
 
@@ -285,7 +295,7 @@ Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:use
 
 Open the toolbar **Share** menu to **Start Live Watch Party** (or **Share Watch Party**, which starts a live `/w/ROOM_ID` party if none is running and copies the link), **Preview Story Card**, or **Download Story Card**. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Refresh, Clear, Headers, Chat) are icons that expand their labels on hover.
 
-**Hide headers** collapses each card’s top bar for a denser grid. At rest you see **video only**. Hover a card and the player shrinks slightly so a control strip opens **below** the iframe — channel name, **drag to reorder**, magnifying-glass **Focus**, and **×** remove. Controls never stack over the embed (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)).
+**Hide headers** replaces each desktop card’s top bar with a fixed compact footer below the iframe — channel name, **drag to reorder**, **Theater**, **Focus**, and **×** remove. The footer stays visible and never resizes or stacks over the player (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)). On iPad, both bars stay hidden and a circular **×** in the video’s top-right corner remains available.
 
 ### Add streams from the toolbar
 
@@ -316,9 +326,11 @@ keeps its own 9:16 shape instead of the fixed 2-row rule Grid View uses
 (see below) — it's sized purely by aspect ratio, the same way a landscape
 primary is sized by 16:9.
 
-This is a different control from each card's own **Focus** (magnifying
-glass) button, which fills the streams pane with just that one stream and
-opens its Twitch or Kick chat — see the `×` close and focus controls bullet above.
+Each card also has its own **Theater** (large primary plus tray) and **Focus**
+(solo primary) buttons. **Theater** shows the other streams below; **Focus**
+fills the pane with just that one stream. From solo Focus, use **Theater** on
+the primary to reveal the tray; from Theater-with-tray, use **Focus** on the
+primary to hide it again.
 
 ---
 

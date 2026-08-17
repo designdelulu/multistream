@@ -304,6 +304,61 @@ check(count($withHls['qualities']) === 2, 'both an flv and an hls candidate are 
 check($withHls['qualities'][0]['id'] === 'hd' && $withHls['qualities'][0]['protocol'] === 'flv', 'the flv entry keeps the plain quality-name id — existing client id lookup is unaffected');
 check($withHls['qualities'][1]['id'] === 'hd-hls' && $withHls['qualities'][1]['protocol'] === 'hls', 'the hls entry is appended after, with a -hls suffixed id so it never collides');
 
+// --- resolve_tiktok_live: HEVC fallback and standard precedence ----------------
+
+set_transport(fixed_transport(200, [
+    'statusCode' => 0,
+    'data' => [
+        'liveRoom' => [
+            'status' => 2,
+            'hevcStreamData' => [
+                'pull_data' => [
+                    'stream_data' => json_encode([
+                        'data' => [
+                            'origin' => ['main' => ['flv' => 'https://cdn.example/hevc.flv?expire=1999999999']],
+                        ],
+                    ]),
+                ],
+            ],
+        ],
+    ],
+]));
+$hevcOnly = resolve_tiktok_live('creator');
+check($hevcOnly['state'] === 'live', 'an HEVC-only live room resolves as playable');
+check(($hevcOnly['qualities'][0]['url'] ?? '') === 'https://cdn.example/hevc.flv?expire=1999999999', 'HEVC FLV is exposed when standard stream data is absent');
+
+set_transport(fixed_transport(200, [
+    'statusCode' => 0,
+    'data' => [
+        'liveRoom' => [
+            'status' => 2,
+            'streamData' => ['pull_data' => ['stream_data' => json_encode([
+                'data' => ['hd' => ['main' => ['flv' => 'https://cdn.example/h264.flv']]],
+            ])]],
+            'hevcStreamData' => ['pull_data' => ['stream_data' => json_encode([
+                'data' => ['origin' => ['main' => ['flv' => 'https://cdn.example/hevc.flv']]],
+            ])]],
+        ],
+    ],
+]));
+$standardWins = resolve_tiktok_live('creator');
+check(count($standardWins['qualities']) === 1, 'HEVC candidates are not mixed into a playable standard response');
+check(($standardWins['qualities'][0]['url'] ?? '') === 'https://cdn.example/h264.flv', 'standard H.264 stream data takes precedence over HEVC');
+
+set_transport(fixed_transport(200, [
+    'statusCode' => 0,
+    'data' => [
+        'liveRoom' => [
+            'status' => 2,
+            'hevcStreamData' => ['pull_data' => ['stream_data' => json_encode([
+                'data' => ['origin' => ['main' => []]],
+            ])]],
+        ],
+    ],
+]));
+$emptyHevc = resolve_tiktok_live('creator');
+check($emptyHevc['state'] === 'no_stream_data', 'empty HEVC data preserves the missing-stream fallback state');
+
 // --- resolve_tiktok_live: bounded fallback rescues an empty primary response ---
 
 set_transport(routed_upstream_transport([

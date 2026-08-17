@@ -209,6 +209,62 @@ describe('createStreamStore — orientation detection is synchronous (no post-mo
   });
 });
 
+describe('createStreamStore — orientation persists through localStorage and party snapshots', () => {
+  it('a YouTube Shorts link stays portrait across a reload', () => {
+    const first = createStreamStore();
+    first.addStream('https://www.youtube.com/shorts/dQw4w9WgXcQ');
+
+    // Same stubbed localStorage, new store instance = a page reload.
+    const reloaded = createStreamStore();
+    expect(reloaded.getStreams()).toEqual([
+      {
+        id: 'youtube:video:dQw4w9WgXcQ',
+        platform: 'youtube',
+        channel: 'video:dQw4w9WgXcQ',
+        muted: true,
+        orientation: 'portrait',
+      },
+    ]);
+  });
+
+  it('restores a pre-orientation storage payload with the platform-derived default (backward compat)', () => {
+    localStorage.setItem(
+      'multistream:streams',
+      JSON.stringify([{ platform: 'youtube', channel: 'video:dQw4w9WgXcQ' }]),
+    );
+    const store = createStreamStore();
+    expect(store.getStreams()[0].orientation).toBe('landscape');
+  });
+
+  it('drops an unknown stored orientation to the platform-derived default', () => {
+    localStorage.setItem(
+      'multistream:streams',
+      JSON.stringify([{ platform: 'youtube', channel: 'video:dQw4w9WgXcQ', orientation: 'square' }]),
+    );
+    const store = createStreamStore();
+    expect(store.getStreams()[0].orientation).toBe('landscape');
+  });
+
+  it('TikTok stays portrait even if storage somehow says otherwise', () => {
+    localStorage.setItem(
+      'multistream:streams',
+      JSON.stringify([{ platform: 'tiktok', channel: 'creator', orientation: 'landscape' }]),
+    );
+    const store = createStreamStore();
+    expect(store.getStreams()[0].orientation).toBe('portrait');
+  });
+
+  it('replaceLineup honors a party payload orientation (host Shorts stay portrait for viewers)', () => {
+    const store = createStreamStore();
+    store.replaceLineup([
+      { platform: 'youtube', channel: 'video:jNQXAC9IVRw', orientation: 'portrait' },
+      { platform: 'twitch', channel: 'shroud' },
+    ]);
+    expect(store.getStreams()[0].orientation).toBe('portrait');
+    expect(store.getStreams()[1].orientation).toBe('landscape');
+  });
+});
+
 describe('createStreamStore — new portrait streams insert at index 0 only', () => {
   it('inserts a newly added TikTok LIVE at the front, then keeps a later reorder', () => {
     const store = createStreamStore();

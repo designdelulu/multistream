@@ -1,8 +1,10 @@
 import { bindChatPanel, bindChatToggle } from './components/ChatPanel';
 import {
+  activateCardTheaterById,
   beginAddRemoveRecovery,
   beginFocusExitRecovery,
   bindFocusViewEntry,
+  bindTheaterViewEntry,
   bindFocusViewExit,
   bindFocusViewPrimaryChanged,
   bindFocusViewPromotion,
@@ -10,10 +12,12 @@ import {
   bindPlaybackRecovery,
   bindStreamFocus,
   bindStreamRemoved,
+  bindStreamWentLive,
   bindTabVisibilityPlayers,
   bindPhoneVisiblePlayback,
   syncPhoneVisiblePlayback,
   getFocusViewPrimaryId,
+  toggleMuteForStream,
   isKickStatusRefreshInFlight,
   isTwitchStatusRefreshInFlight,
   isYouTubeStatsRefreshInFlight,
@@ -23,10 +27,12 @@ import {
   nudgeStalledTwitchPlayers,
   recoverStalledTwitchPlayers,
   recoverTwitchPlayersAfterLayout,
+  replayBlockedVisibleTwitchPlayers,
   refreshAllKickStatuses,
   refreshAllTwitchStatuses,
   refreshAllYouTubeStats,
   refreshLoadedStreamPlayers,
+  reloadStreamCardById,
   resumeVisibleStreamPlayers,
   setFocusViewPrimary,
   snapshotPlayingTwitchPlayers,
@@ -42,6 +48,7 @@ import { bindStreamReorder } from './components/StreamReorder';
 import { bindStreamToolbar, updateEmptyState } from './components/StreamToolbar';
 import { bindWatchParty } from './components/WatchParty';
 import { bindWelcomeModal } from './components/WelcomeModal';
+import type { WatchPartyView } from './lib/watchParty';
 import { announceEmbedDebug, logPlayerEvent, twitchStatusFastPollEnabled } from './lib/embedDebug';
 import {
   createTwitchStatusScheduler,
@@ -51,7 +58,10 @@ import {
   createYouTubeStatusScheduler,
   YOUTUBE_STATS_POLL_INTERVAL_MS,
 } from './lib/youtubeStatusScheduler';
-import { isPhoneViewport, phoneMediaQuery } from './lib/viewport';
+import { isIPadDevice, isPhoneViewport, phoneMediaQuery, resolveDisplayViewMode } from './lib/viewport';
+import { bindShortcuts } from './lib/shortcuts';
+import { createLiveToast } from './lib/liveToast';
+import { bindScreenWakeLock } from './lib/wakeLock';
 import { createChatStore, isChatPlatform } from './state/chat';
 import { createHeadersStore } from './state/headers';
 import { createStreamStore, detectStreamListChange } from './state/streams';
@@ -67,21 +77,26 @@ const store = createStreamStore();
 const chatStore = createChatStore(store);
 const headersStore = createHeadersStore();
 const viewModeStore = createViewModeStore();
+const screenWakeLock = bindScreenWakeLock(
+  () => isIPadDevice() && store.getStreams().length > 0,
+);
+store.subscribe(() => screenWakeLock.sync());
 
 /**
- * Phones have no Hide Headers control. Strip the class without calling
- * setHidden(false), which would persist '0' and wipe a desktop preference.
- * Restores from the store when leaving the phone breakpoint.
+ * Phones have no Hide Headers control; iPad has its own headerless CSS with
+ * a single circular close action. Strip the compact-footer class without
+ * persisting over the desktop preference, and restore it on desktop.
  */
-function applyPhoneHeadersOverride(): void {
-  if (typeof window.matchMedia === 'function' && isPhoneViewport()) {
+function applyDeviceHeadersOverride(): void {
+  if ((typeof window.matchMedia === 'function' && isPhoneViewport()) || isIPadDevice()) {
     document.documentElement.classList.remove('headers-hidden');
     return;
   }
   document.documentElement.classList.toggle('headers-hidden', headersStore.isHidden());
 }
 
-applyPhoneHeadersOverride();
+document.documentElement.classList.toggle('ipad-device', isIPadDevice());
+applyDeviceHeadersOverride();
 const grid = document.querySelector<HTMLElement>('#stream-grid');
 const chatPanel = document.querySelector<HTMLElement>('#chat-panel');
 const streamArea = document.querySelector<HTMLElement>('.stream-area');
@@ -157,7 +172,7 @@ function afterLayoutPaint(fn: () => void): void {
 }
 
 function afterHeadersToggle(): void {
-  applyPhoneHeadersOverride();
+  applyDeviceHeadersOverride();
   const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
   quietLayout(2500);
   reorder.sync();
@@ -188,9 +203,10 @@ let theaterEntrySnapshot: { ids: string[]; hiddenIds: string[]; startedAt: numbe
 function afterViewModeToggle(): void {
   const previousMode = gridEl.dataset.viewMode;
   const nextMode = viewModeStore.getMode();
+  const displayMode = resolveDisplayViewMode(nextMode);
   const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
 
-  if (previousMode !== 'theater' && nextMode === 'theater') {
+  if (previousMode !== 'theater' && displayMode === 'theater') {
     const primaryId = getFocusViewPrimaryId();
     theaterEntrySnapshot = {
       ids: playingBefore,
@@ -200,14 +216,16 @@ function afterViewModeToggle(): void {
   }
 
   syncViewMode(gridEl, nextMode, store.getStreams());
-  if (nextMode === 'theater') {
+  if (displayMode === 'theater') {
     pauseTheaterHiddenTwitchPlayers(gridEl);
   }
   // The SortableJS `disabled` option (StreamReorder.ts) is only re-applied
   // when sync() runs — it does not watch grid.dataset.viewMode itself — so
   // this must be called on every mode change, not just headers toggles.
   reorder.sync();
-  syncPrimaryChat();
+  syncPrimaryChat({
+    openSupportedChat: previousMode === 'grid' && nextMode !== 'grid',
+  });
   // syncViewMode only flips data-view-mode + .is-focus-primary — the actual
   // --focus-primary-width/--focus-tray-* pixel vars that size the primary
   // and tray are computed exclusively inside updateGridLayout, which used to
@@ -231,7 +249,7 @@ function afterViewModeToggle(): void {
     recoverTwitchPlayersAfterLayout(gridEl);
     quietLayout(2500);
 
-    if (previousMode === 'theater' && nextMode !== 'theater' && theaterEntrySnapshot) {
+    if (previousMode === 'theater' && displayMode !== 'theater' && theaterEntrySnapshot) {
       const snapshot = theaterEntrySnapshot;
       theaterEntrySnapshot = null;
       if (snapshot.ids.length > 0) {
@@ -239,7 +257,7 @@ function afterViewModeToggle(): void {
       }
       resumeVisibleStreamPlayers(gridEl, {
         remountKickIds: snapshot.hiddenIds,
-        skipTwitch: true,
+        skipTwitch: snapshot.ids.length > 0,
       });
       return;
     }
@@ -264,7 +282,7 @@ function afterViewModeToggle(): void {
  * YouTube/TikTok primary the toggle is locked out rather than left open on
  * an unrelated chat stream that merely happens to share the grid.
  */
-function syncPrimaryChat(): void {
+function syncPrimaryChat(options: { openSupportedChat?: boolean } = {}): void {
   const primaryId = viewModeStore.getMode() !== 'grid' ? getFocusViewPrimaryId() : null;
 
   if (primaryId) {
@@ -280,7 +298,9 @@ function syncPrimaryChat(): void {
     chatStore.setToggleAllowed(isChatPlatform(platform));
     if (isChatPlatform(platform)) {
       chatStore.setSelectedId(primaryId);
-      chatStore.setVisible(true, { persist: false });
+      if (options.openSupportedChat) {
+        chatStore.setVisible(true, { persist: false });
+      }
     } else {
       chatStore.setVisible(false, { persist: false });
     }
@@ -329,7 +349,18 @@ function renderStreams(): void {
 
   quietLayout(2000);
   syncStreamGrid(gridEl, store);
+  const restoredPrimary = viewModeStore.getPrimary();
+  if (
+    restoredPrimary &&
+    store.getStreams().some((stream) => stream.id === restoredPrimary) &&
+    getFocusViewPrimaryId() !== restoredPrimary
+  ) {
+    setFocusViewPrimary(gridEl, restoredPrimary);
+  }
   syncViewMode(gridEl, viewModeStore.getMode(), store.getStreams());
+  if (viewModeStore.getMode() !== 'grid') {
+    viewModeStore.setPrimary(getFocusViewPrimaryId());
+  }
   updateEmptyState(store);
   afterLayoutPaint(() => {
     measureAndLayout();
@@ -375,7 +406,15 @@ const twitchStatusScheduler = createTwitchStatusScheduler({
 function syncTwitchStatusScheduler(): void {
   const hasTwitchCards = store.getStreams().some((stream) => stream.platform === 'twitch');
   if (hasTwitchCards) {
+    const justStarted = !twitchStatusScheduler.isRunning();
     twitchStatusScheduler.start();
+    // Twitch cards that appear after boot (e.g. a watch-party lineup that
+    // hydrates from the API, where the store is empty at load) would otherwise
+    // wait a full poll interval for their first status — fetch immediately so
+    // viewer count/duration paint right after the lineup renders. The status
+    // coordinator single-flights, so this never double-fetches with the
+    // boot-time initial-restore call below.
+    if (justStarted) void refreshAllTwitchStatuses(store, 'initial-restore');
   } else {
     twitchStatusScheduler.stop();
   }
@@ -430,7 +469,11 @@ const kickStatusScheduler = createTwitchStatusScheduler({
 function syncKickStatusScheduler(): void {
   const hasKickCards = store.getStreams().some((stream) => stream.platform === 'kick');
   if (hasKickCards) {
+    const justStarted = !kickStatusScheduler.isRunning();
     kickStatusScheduler.start();
+    // Same rationale as syncTwitchStatusScheduler: a watch-party lineup that
+    // hydrates after boot must not wait a full poll interval for Kick metadata.
+    if (justStarted) void refreshAllKickStatuses(store, 'initial-restore');
   } else {
     kickStatusScheduler.stop();
   }
@@ -516,7 +559,52 @@ function recoverAfterStoryPreview(): void {
   });
 }
 
-const watchParty = bindWatchParty(store);
+/*
+ * Host spotlight sync: the watch-party controller needs to read the current
+ * view (host pushes), apply a host view (viewer follows), and hear about
+ * local view changes (host's 400ms-debounced push). View changes come from
+ * two sources — viewModeStore (mode flips) and the focus-view primary
+ * (promotions) — so both feed one listener set; the combined handler bound
+ * next to bindFocusViewPrimaryChanged below calls notifyWatchPartyView.
+ * The phone guard lives inside WatchParty.ts's applyHostView, where the
+ * "phone viewers stay in grid" rule is unit-tested.
+ */
+const watchPartyViewListeners = new Set<() => void>();
+const notifyWatchPartyView = (): void => {
+  for (const listener of watchPartyViewListeners) listener();
+};
+viewModeStore.subscribe(notifyWatchPartyView);
+
+const watchParty = bindWatchParty(store, {
+  getView: (): WatchPartyView => {
+    const mode = viewModeStore.getMode();
+    return {
+      mode,
+      primary: mode === 'grid' ? null : getFocusViewPrimaryId(),
+      chatVisible: chatStore.isVisible(),
+    };
+  },
+  applyView: (view) => {
+    const applyChatVisibility = (): void => {
+      if (typeof view.chatVisible === 'boolean') {
+        chatStore.setVisible(view.chatVisible, { persist: false });
+      }
+    };
+    if (view.mode === 'grid' || !view.primary) {
+      viewModeStore.setMode('grid');
+      applyChatVisibility();
+      return;
+    }
+    // Same order as bindFocusViewEntry above: primary first, then the mode
+    // flip, so no intermediate frame shows the wrong primary.
+    setFocusViewPrimary(gridEl, view.primary);
+    viewModeStore.setMode(view.mode);
+    applyChatVisibility();
+  },
+  subscribeView: (listener) => {
+    watchPartyViewListeners.add(listener);
+  },
+});
 
 const toolbar = bindStreamToolbar(
   store,
@@ -585,17 +673,15 @@ bindPhoneVisiblePlayback(gridEl);
 bindPlaybackRecovery();
 bindFocusViewPromotion(gridEl);
 /*
- * Theater's only entry point: a card's own Focus control (see
- * bindFocusViewEntry's own doc comment in StreamGrid.ts). setFocusViewPrimary
- * runs first and synchronously — it only touches module state, a CSS class,
- * and (harmlessly, since the grid is still in 'grid' mode at this instant) a
- * layout recompute — so by the time viewModeStore.setMode('theater') fires
- * afterViewModeToggle -> syncViewMode, focusViewPrimaryId already matches
- * this exact stream and its own streams[0] fallback never engages. No
- * intermediate frame ever shows the wrong primary. Focus (the tray) is never
- * a restart point — it's only reached from within Theater via the toggle
- * below, per viewMode.ts's own toggle() doc comment.
+ * Theater entry (primary + tray): a card's own Theater control.
+ * Focus entry (solo primary): a card's own Focus control.
+ * setFocusViewPrimary runs first so focusViewPrimaryId is never ambiguous.
  */
+bindTheaterViewEntry((streamId) => {
+  setFocusViewPrimary(gridEl, streamId);
+  viewModeStore.setMode('focus');
+});
+
 bindFocusViewEntry((streamId) => {
   setFocusViewPrimary(gridEl, streamId);
   viewModeStore.setMode('theater');
@@ -603,20 +689,46 @@ bindFocusViewEntry((streamId) => {
 
 // Primary's own X: exit Theater/Focus back to Grid, same primary preserved
 // in module state (setFocusViewPrimary is untouched) in case of re-entry.
-bindFocusViewExit(() => {
+const exitPrimaryModes = (): void => {
   viewModeStore.setMode('grid');
-});
+};
+bindFocusViewExit(exitPrimaryModes);
 
-// The primary card's own Focus control, repurposed in Theater/Focus as the
-// tray on/off toggle (see syncFocusButtonLabel in StreamGrid.ts) — same
-// primary throughout, only the tray's visibility (CSS) changes.
-bindFocusViewToggle(() => {
+// The primary card's Theater and Focus controls toggle the tray on/off
+// (see syncTheaterButtonLabel / syncFocusButtonLabel in StreamGrid.ts).
+const toggleFocusTray = (): void => {
+  if (isIPadDevice()) {
+    if (viewModeStore.getMode() === 'theater') viewModeStore.setMode('focus');
+    return;
+  }
   viewModeStore.setMode(viewModeStore.getMode() === 'theater' ? 'focus' : 'theater');
+};
+bindFocusViewToggle(toggleFocusTray);
+
+// Global keyboard shortcuts (1–9 primary, f tray, m mute, Escape exit) —
+// see src/lib/shortcuts.ts. The actions are exactly the ones the on-screen
+// controls above already use, so mouse and keyboard can never drift apart:
+// activateCardTheaterById / activateCardFocusById are the same functions
+// the card Theater / Focus buttons call.
+bindShortcuts({
+  getStreams: () => store.getStreams(),
+  getViewMode: () => viewModeStore.getMode(),
+  getPrimaryId: getFocusViewPrimaryId,
+  activateCardTheater: (streamId) => activateCardTheaterById(gridEl, streamId),
+  promotePrimary: (streamId) => setFocusViewPrimary(gridEl, streamId),
+  toggleTray: toggleFocusTray,
+  exitToGrid: exitPrimaryModes,
+  toggleMute: toggleMuteForStream,
 });
 
 // Promoting a different tray stream to primary follows the same chat-lock
-// rule as first entering Theater.
-bindFocusViewPrimaryChanged(syncPrimaryChat);
+// rule as first entering Theater, and is also a host-spotlight change the
+// watch-party controller needs to push.
+bindFocusViewPrimaryChanged(() => {
+  viewModeStore.setPrimary(getFocusViewPrimaryId());
+  syncPrimaryChat();
+  notifyWatchPartyView();
+});
 
 // Dead: only ever fired for the old solo-focus mechanism, which nothing
 // sets anymore (see setFocusedStream's callers) — chat-lock for the live
@@ -710,12 +822,35 @@ bindStreamRemoved((removed, index) => {
   showUndoToast(removed, index);
 });
 
+/*
+ * "Back live" nudge: the periodic status check already notices an offline
+ * Twitch/Kick channel returning (detectWentLive inside the apply functions),
+ * but a dead embed never reconnects on its own — the toast's Reload action
+ * runs the exact per-card reload path that card's own reload button uses.
+ * createLiveToast also flashes the tab title until the toast hides, so a
+ * backgrounded tab is visible on the tab strip. YouTube is excluded: channel
+ * cards resolve their live video once at mount, so its stats polling has no
+ * offline → live transition to detect (see bindStreamWentLive's doc comment).
+ */
+const liveToast = createLiveToast(document.querySelector<HTMLElement>('#live-toast'));
+bindStreamWentLive((card) => {
+  const name =
+    card.querySelector<HTMLElement>('.stream-card__name-badge-channel')?.textContent?.trim() ||
+    card.dataset.channel ||
+    'A stream';
+  liveToast.show(name, () => {
+    const streamId = card.dataset.streamId;
+    if (streamId) reloadStreamCardById(streamId);
+  });
+});
+
 store.subscribe(renderStreams);
 store.subscribe(syncTwitchStatusScheduler);
 store.subscribe(syncYouTubeStatusScheduler);
 store.subscribe(syncKickStatusScheduler);
 let lastChatVisible = chatStore.isVisible();
 chatStore.subscribe(() => {
+  notifyWatchPartyView();
   const playingBefore = snapshotPlayingTwitchPlayers(gridEl);
   const visibilityChanged = chatStore.isVisible() !== lastChatVisible;
   lastChatVisible = chatStore.isVisible();
@@ -741,7 +876,8 @@ viewModeStore.subscribe(afterViewModeToggle);
 const phoneQuery = phoneMediaQuery();
 
 function handleViewportChange(): void {
-  applyPhoneHeadersOverride();
+  document.documentElement.classList.toggle('ipad-device', isIPadDevice());
+  applyDeviceHeadersOverride();
   if (typeof window.matchMedia === 'function' && isPhoneViewport() && viewModeStore.getMode() !== 'grid') {
     viewModeStore.setMode('grid');
   }
@@ -872,8 +1008,29 @@ document.addEventListener('fullscreenchange', () => {
 });
 window.addEventListener('mousemove', nudgeOnInteraction, { passive: true });
 window.addEventListener('pointerdown', nudgeOnInteraction, { passive: true });
+if (isIPadDevice()) {
+  window.addEventListener(
+    'pointerdown',
+    () => replayBlockedVisibleTwitchPlayers(gridEl),
+    { passive: true },
+  );
+}
 
 renderStreams();
+if (viewModeStore.getMode() !== 'grid') {
+  syncPrimaryChat();
+  updateGridLayout(gridEl);
+  const bootDisplayMode = resolveDisplayViewMode(viewModeStore.getMode());
+  if (bootDisplayMode === 'theater') {
+    const primaryId = getFocusViewPrimaryId();
+    theaterEntrySnapshot = {
+      ids: snapshotPlayingTwitchPlayers(gridEl),
+      hiddenIds: store.getStreams().map((stream) => stream.id).filter((id) => id !== primaryId),
+      startedAt: Date.now(),
+    };
+    pauseTheaterHiddenTwitchPlayers(gridEl);
+  }
+}
 // renderStreams -> syncViewMode is what sets gridEl.dataset.viewMode for the
 // very first time (it's still undefined at the reorder.sync() call above,
 // since bindStreamReorder runs before the first renderStreams). Without this,

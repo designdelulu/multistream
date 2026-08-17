@@ -11,7 +11,7 @@ import {
   refreshKickStatus,
   refreshTwitchStatus,
 } from './StreamGrid';
-import { isPhoneViewport } from '../lib/viewport';
+import { isIPadDevice, isPhoneViewport } from '../lib/viewport';
 import type { Platform } from '../types';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
@@ -90,13 +90,20 @@ function isExplicitStreamInput(value: string): boolean {
   );
 }
 
-/** Plain username candidates for the Twitch/Kick suggestion dropdown. */
+export function usernameCandidatePlatforms(value: string): Platform[] {
+  const platforms: Platform[] = [];
+  if (/^[a-zA-Z0-9_]{1,25}$/.test(value)) platforms.push('twitch');
+  if (/^[a-zA-Z0-9_-]{1,25}$/.test(value)) platforms.push('kick');
+  if (/^[a-zA-Z0-9._-]{1,100}$/.test(value)) platforms.push('youtube');
+  if (/^[a-zA-Z0-9_.]{1,64}$/.test(value)) platforms.push('tiktok');
+  return platforms;
+}
+
+/** Plain username candidates for the provider suggestion dropdown. */
 export function plainUsernameCandidate(raw: string): string | null {
   const value = stripAtPrefix(raw);
   if (!value || isExplicitStreamInput(value)) return null;
-  if (!/^[a-zA-Z0-9_]{1,25}$/.test(value) && !/^[a-zA-Z0-9_-]{1,25}$/.test(value)) {
-    return null;
-  }
+  if (usernameCandidatePlatforms(value).length === 0) return null;
   return value.toLowerCase();
 }
 
@@ -120,6 +127,47 @@ export function resolveAddInput(raw: string, platform: Platform): string {
   // parseTikTokLiveUrl (tiktok.ts) applies the same handle validation either way.
   if (platform === 'tiktok') return `https://www.tiktok.com/@${value}/live`;
   return value;
+}
+
+/**
+ * Real imagery for the Story Card where it costs nothing extra: Twitch
+ * (data-twitch-avatar-url, set by StreamGrid.ts's applyTwitchStatus from the
+ * existing status API's own profile_image_url) and YouTube
+ * (data-youtube-avatar-url, set by resolveAndMountYouTubeChannel from the
+ * same channels.list call that already resolves a handle/username — never
+ * present for a direct channelId add) and Kick (data-kick-avatar-url, set by
+ * applyKickStatus from the same official metadata response that carries the
+ * viewer count — no second request, no scraper, and absent until Kick
+ * credentials are installed server-side). TikTok uses the same-origin
+ * avatar proxy (`data-tiktok-avatar-url` → `/api/tiktok-avatar.php`) so the
+ * canvas never loads a raw cross-origin CDN URL.
+ *
+ * A live Twitch thumbnail (data-twitch-thumbnail-url — the status API's
+ * 320×180 preview, retained on the card only while live, so it can never
+ * be a stale capture) is the fallback when no avatar resolved, so those
+ * cards still get real imagery instead of initials.
+ *
+ * Read straight off the live cards rather than the store, since avatar URL
+ * isn't part of StreamRef. Shared by both the preview and the real download
+ * so they always render identically. Module-level + exported (with an
+ * injectable root) so the preference order is unit-testable — see
+ * StreamToolbar.test.ts.
+ */
+export function collectShareCardAvatarUrls(root: ParentNode = document): Map<string, string> {
+  const avatarUrls = new Map<string, string>();
+  for (const card of root.querySelectorAll<HTMLElement>(
+    '.stream-card[data-platform="twitch"][data-twitch-avatar-url], .stream-card[data-platform="youtube"][data-youtube-avatar-url], .stream-card[data-platform="kick"][data-kick-avatar-url], .stream-card[data-platform="tiktok"][data-tiktok-avatar-url], .stream-card[data-platform="twitch"][data-twitch-thumbnail-url]',
+  )) {
+    const streamId = card.dataset.streamId;
+    const avatarUrl =
+      card.dataset.twitchAvatarUrl ??
+      card.dataset.youtubeAvatarUrl ??
+      card.dataset.kickAvatarUrl ??
+      card.dataset.tiktokAvatarUrl ??
+      card.dataset.twitchThumbnailUrl;
+    if (streamId && avatarUrl) avatarUrls.set(streamId, avatarUrl);
+  }
+  return avatarUrls;
 }
 
 function iconButtonLabel(button: HTMLButtonElement): HTMLElement | null {
@@ -222,10 +270,8 @@ export function bindStreamToolbar(
   const formEl = form;
   const inputEl = input;
   const suggestionsEl = suggestions;
-  // The one, existing provider-selection UI: typing a bare username shows
-  // all four as suggestions and the user picks one — there is no separate
-  // permanent provider control before the input.
-  const suggestionPlatforms: Platform[] = ['twitch', 'kick', 'youtube', 'tiktok'];
+  // The one existing provider-selection UI filters to providers whose
+  // username grammar accepts the typed value.
   let selectedPlatform = loadPreferredPlatform();
   let activeSuggestionIndex = -1;
   let shareResetTimer = 0;
@@ -323,7 +369,7 @@ export function bindStreamToolbar(
     activeSuggestionIndex = -1;
     inputEl.removeAttribute('aria-activedescendant');
 
-    for (const platform of suggestionPlatforms) {
+    for (const platform of usernameCandidatePlatforms(username)) {
       const option = document.createElement('button');
       option.type = 'button';
       option.className = 'toolbar__suggestion';
@@ -451,7 +497,10 @@ export function bindStreamToolbar(
 
     if (event.key === 'Enter' && activeSuggestionIndex >= 0) {
       event.preventDefault();
-      const platform = suggestionPlatforms[activeSuggestionIndex];
+      const option = suggestionsEl.querySelectorAll<HTMLButtonElement>('.toolbar__suggestion')[
+        activeSuggestionIndex
+      ];
+      const platform = option?.dataset.platform as Platform | undefined;
       if (platform) {
         selectSuggestion(candidate, platform);
       }
@@ -501,7 +550,7 @@ export function bindStreamToolbar(
 
   function syncHeadersButton(): void {
     if (!headersButton) return;
-    if (phoneViewport()) {
+    if (phoneViewport() || isIPadDevice()) {
       headersButton.hidden = true;
       return;
     }
@@ -635,38 +684,6 @@ export function bindStreamToolbar(
       shareMenuToggle?.focus();
     }
   });
-
-  /**
-   * Real avatars where they cost nothing extra: Twitch (data-twitch-avatar-url,
-   * set by StreamGrid.ts's applyTwitchStatus from the existing status API's
-   * own profile_image_url) and YouTube (data-youtube-avatar-url, set by
-   * resolveAndMountYouTubeChannel from the same channels.list call that
-   * already resolves a handle/username — never present for a direct
-   * channelId add) and Kick (data-kick-avatar-url, set by applyKickStatus
-   * from the same official metadata response that carries the viewer count —
-   * no second request, no scraper, and absent until Kick credentials are
-   * installed server-side). TikTok uses the same-origin avatar proxy
-   * (`data-tiktok-avatar-url` → `/api/tiktok-avatar.php`) so the canvas
-   * never loads a raw cross-origin CDN URL. Read straight
-   * off the live cards rather than the store, since avatar URL isn't part
-   * of StreamRef. Shared by both the preview and the real download so
-   * they always render identically.
-   */
-  function collectShareCardAvatarUrls(): Map<string, string> {
-    const avatarUrls = new Map<string, string>();
-    for (const card of document.querySelectorAll<HTMLElement>(
-      '.stream-card[data-platform="twitch"][data-twitch-avatar-url], .stream-card[data-platform="youtube"][data-youtube-avatar-url], .stream-card[data-platform="kick"][data-kick-avatar-url], .stream-card[data-platform="tiktok"][data-tiktok-avatar-url]',
-    )) {
-      const streamId = card.dataset.streamId;
-      const avatarUrl =
-        card.dataset.twitchAvatarUrl ??
-        card.dataset.youtubeAvatarUrl ??
-        card.dataset.kickAvatarUrl ??
-        card.dataset.tiktokAvatarUrl;
-      if (streamId && avatarUrl) avatarUrls.set(streamId, avatarUrl);
-    }
-    return avatarUrls;
-  }
 
   /** Bounded wait so a stuck lookup can never hang the Share flow. */
   const AVATAR_METADATA_WAIT_MS = 3000;
@@ -888,7 +905,7 @@ export function bindStreamToolbar(
 
   headersButton?.addEventListener('click', () => {
     if (isStreamFocused()) return;
-    if (phoneViewport()) return;
+    if (phoneViewport() || isIPadDevice()) return;
     headersStore.toggle();
   });
 

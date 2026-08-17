@@ -9,6 +9,7 @@ import {
   parseWatchPartySession,
   saveHostRecord,
   streamsToWatchPartyPayload,
+  viewFingerprint,
   watchPartyIdFromPath,
   watchPartyPath,
   watchPartyUrl,
@@ -113,5 +114,117 @@ describe('watch party helpers', () => {
 
   it('uses a 2 second viewer poll interval', () => {
     expect(WATCH_PARTY_POLL_INTERVAL_MS).toBe(2000);
+  });
+
+  it('carries per-stream orientation in the payload (host Shorts stay portrait for viewers)', () => {
+    const streams: StreamRef[] = [
+      { id: 'youtube:video:abc', platform: 'youtube', channel: 'video:abc', muted: true, orientation: 'portrait' },
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+    ];
+    expect(streamsToWatchPartyPayload(streams)).toEqual([
+      { platform: 'youtube', channel: 'video:abc', orientation: 'portrait' },
+      { platform: 'twitch', channel: 'a', orientation: 'landscape' },
+    ]);
+  });
+
+  it('an orientation-only change still changes the lineup fingerprint (so it gets pushed)', () => {
+    const landscape = [
+      { platform: 'youtube' as const, channel: 'video:abc', orientation: 'landscape' as const },
+    ];
+    const portrait = [
+      { platform: 'youtube' as const, channel: 'video:abc', orientation: 'portrait' as const },
+    ];
+    expect(lineupFingerprint(landscape)).not.toBe(lineupFingerprint(portrait));
+  });
+
+  it('round-trips orientation through session parsing and rejects invalid values', () => {
+    const session = parseWatchPartySession({
+      id: 'abcdefghij',
+      status: 'active',
+      streams: [{ platform: 'youtube', channel: 'video:abc', orientation: 'portrait' }],
+      updatedAt: 100,
+      createdAt: 90,
+    });
+    expect(session?.streams[0].orientation).toBe('portrait');
+
+    expect(
+      parseWatchPartySession({
+        id: 'abcdefghij',
+        status: 'active',
+        streams: [{ platform: 'youtube', channel: 'video:abc', orientation: 'square' }],
+        updatedAt: 100,
+        createdAt: 90,
+      }),
+    ).toBeNull();
+
+    // Pre-orientation room files (no orientation key at all) still parse.
+    expect(
+      parseWatchPartySession({
+        id: 'abcdefghij',
+        status: 'active',
+        streams: [{ platform: 'twitch', channel: 'shroud' }],
+        updatedAt: 100,
+        createdAt: 90,
+      }),
+    ).not.toBeNull();
+  });
+
+  it('fingerprints the host view so a view-only change is a real change', () => {
+    expect(viewFingerprint(null)).toBe('');
+    expect(viewFingerprint(undefined)).toBe('');
+    expect(viewFingerprint({ mode: 'grid', primary: null })).toBe('grid::');
+    expect(viewFingerprint({ mode: 'theater', primary: 'twitch:a' })).not.toBe(
+      viewFingerprint({ mode: 'focus', primary: 'twitch:a' }),
+    );
+    expect(viewFingerprint({ mode: 'theater', primary: 'twitch:a' })).not.toBe(
+      viewFingerprint({ mode: 'theater', primary: 'twitch:b' }),
+    );
+    expect(viewFingerprint({ mode: 'theater', primary: 'twitch:a' })).not.toBe(
+      viewFingerprint({ mode: 'grid', primary: null }),
+    );
+    expect(viewFingerprint({ mode: 'theater', primary: 'twitch:a', chatVisible: true })).not.toBe(
+      viewFingerprint({ mode: 'theater', primary: 'twitch:a', chatVisible: false }),
+    );
+  });
+
+  it('round-trips the host view through session parsing', () => {
+    const session = parseWatchPartySession({
+      id: 'abcdefghij',
+      status: 'active',
+      streams: [{ platform: 'twitch', channel: 'shroud' }],
+      updatedAt: 100,
+      createdAt: 90,
+      view: { mode: 'theater', primary: 'twitch:shroud', chatVisible: false },
+    });
+    expect(session?.view).toEqual({
+      mode: 'theater',
+      primary: 'twitch:shroud',
+      chatVisible: false,
+    });
+  });
+
+  it('rejects a session whose view is malformed, but parses pre-view room files', () => {
+    const base = {
+      id: 'abcdefghij',
+      status: 'active',
+      streams: [{ platform: 'twitch', channel: 'shroud' }],
+      updatedAt: 100,
+      createdAt: 90,
+    };
+    expect(
+      parseWatchPartySession({ ...base, view: { mode: 'spotlight', primary: null } }),
+    ).toBeNull();
+    expect(parseWatchPartySession({ ...base, view: { mode: 'grid', primary: 42 } })).toBeNull();
+    expect(
+      parseWatchPartySession({
+        ...base,
+        view: { mode: 'grid', primary: null, chatVisible: 'yes' },
+      }),
+    ).toBeNull();
+    expect(parseWatchPartySession({ ...base, view: 'theater' })).toBeNull();
+    // No view key at all (older room files): viewers keep their local view.
+    const legacy = parseWatchPartySession(base);
+    expect(legacy).not.toBeNull();
+    expect(legacy?.view).toBeUndefined();
   });
 });

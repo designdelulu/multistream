@@ -35,6 +35,10 @@ define('KICK_CONFIG_PATH', $validConfigPath);
 define('KICK_STATUS_TESTING', true);
 define('KICK_CHAT_TESTING', true);
 define('KICK_CHAT_MAX_MESSAGES', 3);
+define('KICK_CHAT_SUB_DAILY_CAP', 50);
+define('KICK_CHAT_SUB_FAIL_TTL', 30 * 60);
+define('KICK_CHAT_RATE_GET_MAX', 3);
+define('KICK_CHAT_RATE_GET_WINDOW', 60);
 
 $endpointFile = realpath(__DIR__ . '/../public/api/kick-chat.php');
 if ($endpointFile === false) {
@@ -170,6 +174,79 @@ $created = kick_ensure_chat_subscription(99);
 check($created['ok'] === true, 'create subscription succeeds when none exists');
 check($created['reused'] === false, 'newly created subscription is not marked reused');
 check($created['subscriptionId'] === 'sub-new', 'new subscription id is returned');
+
+// --- Subscription-attempt guards (Kick Events quota protection) ---
+
+// Failure backoff: a failed attempt is recorded, and the next ensure for
+// the same broadcaster backs off WITHOUT calling the API again.
+unset($GLOBALS['kick_http_transport']);
+$failTracker = make_dispatch_transport([
+    'id.kick.com/oauth/token' => ok_token_response(),
+    'events/subscriptions' => function (string $method) {
+        if ($method === 'GET') {
+            return ['httpCode' => 200, 'body' => ['data' => []], 'error' => null];
+        }
+        return ['httpCode' => 500, 'body' => null, 'error' => 'http_500'];
+    },
+]);
+$GLOBALS['kick_http_transport'] = $failTracker->transport;
+kick_cache_delete('kick:app-token');
+
+$failed = kick_ensure_chat_subscription(7);
+check($failed['ok'] === false, 'a failing broadcaster fails the ensure');
+$callsAfterFail = count($failTracker->calls);
+$backoff = kick_ensure_chat_subscription(7);
+check($backoff['ok'] === false && ($backoff['error'] ?? '') === 'subscription_backoff', 'the retry is served from failure backoff');
+check(count($failTracker->calls) === $callsAfterFail, 'backoff makes no further API calls (no retry-storm)');
+
+// A later success (e.g. the upstream hiccup cleared) clears the marker.
+kick_cache_delete('kick:chat-sub-fail:7');
+unset($GLOBALS['kick_http_transport']);
+$recoverTracker = make_dispatch_transport([
+    'id.kick.com/oauth/token' => ok_token_response(),
+    'events/subscriptions' => function (string $method) {
+        if ($method === 'GET') {
+            return ['httpCode' => 200, 'body' => ['data' => []], 'error' => null];
+        }
+        return ['httpCode' => 200, 'body' => ['data' => [['id' => 'sub-7']]], 'error' => null];
+    },
+]);
+$GLOBALS['kick_http_transport'] = $recoverTracker->transport;
+kick_cache_delete('kick:app-token');
+$recovered = kick_ensure_chat_subscription(7);
+check($recovered['ok'] === true, 'ensure works again once the backoff marker expires/is cleared');
+
+// Daily cap: at the cap, ensure refuses BEFORE any upstream call, and the
+// caller still gets a non-error signal (the chat buffer is served anyway).
+$dailyKey = 'kick:chat-sub-daily:' . gmdate('Y-m-d');
+kick_cache_set($dailyKey, ['count' => KICK_CHAT_SUB_DAILY_CAP], 3600);
+unset($GLOBALS['kick_http_transport']);
+$capTracker = make_dispatch_transport([]);
+$GLOBALS['kick_http_transport'] = $capTracker->transport;
+$cappedSub = kick_ensure_chat_subscription(1234);
+check($cappedSub['ok'] === false && ($cappedSub['error'] ?? '') === 'quota_exceeded', 'at the daily cap, attempts stop');
+check(count($capTracker->calls) === 0, 'the daily cap blocks even the token request');
+kick_cache_delete($dailyKey);
+
+// Success under the cap still counts as an attempt (attempts, not just
+// successes, are what the quota feels).
+kick_cache_set($dailyKey, ['count' => KICK_CHAT_SUB_DAILY_CAP - 1], 3600);
+unset($GLOBALS['kick_http_transport']);
+$GLOBALS['kick_http_transport'] = $recoverTracker->transport;
+kick_cache_delete('kick:app-token');
+$lastAllowed = kick_ensure_chat_subscription(8);
+check($lastAllowed['ok'] === true, 'the final attempt under the cap still goes through');
+$nowCapped = kick_ensure_chat_subscription(9);
+check($nowCapped['ok'] === false && ($nowCapped['error'] ?? '') === 'quota_exceeded', 'attempt N+1 is refused');
+kick_cache_delete($dailyKey);
+unset($GLOBALS['kick_http_transport']);
+
+// Per-IP GET throttle (sliding window over the shared cache dir).
+check(kick_chat_rate_limited('9.9.9.9') === false, 'chat GET 1 within budget');
+check(kick_chat_rate_limited('9.9.9.9') === false, 'chat GET 2 within budget');
+check(kick_chat_rate_limited('9.9.9.9') === false, 'chat GET 3 within budget');
+check(kick_chat_rate_limited('9.9.9.9') === true, 'chat GET 4 is throttled');
+check(kick_chat_rate_limited('8.8.8.8') === false, 'a different IP keeps its own budget');
 
 $reply = kick_chat_normalize_message([
     'message_id' => 'reply-1',

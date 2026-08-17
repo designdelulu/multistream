@@ -19,7 +19,7 @@ import {
   type YouTubeStatsRefreshReason,
   type YouTubeStatsRefreshResult,
 } from '../lib/youtubeStatusCoordinator';
-import { isPhoneViewport, isStackedStreamLayout } from '../lib/viewport';
+import { isPhoneViewport, isStackedStreamLayout, resolveDisplayViewMode } from '../lib/viewport';
 import mpegts from 'mpegts.js';
 import { getAdapter, buildEmbedUrl } from '../platforms';
 import { checkKickStatus, type KickStatusResult } from '../platforms/kickStatus';
@@ -46,6 +46,7 @@ import {
   GRID_GAP,
   GRID_PADDING,
   CARD_HEADER_HEIGHT,
+  COMPACT_TOOLBAR_HEIGHT,
   MAX_GRID_COLUMNS,
   type WeightedGridItem,
 } from '../lib/gridLayout';
@@ -155,17 +156,14 @@ let focusSessionActive = false;
 let focusChangeHandler: FocusChangeHandler | null = null;
 let streamRemovedHandler: StreamRemovedHandler | null = null;
 /**
- * Fired when a card's own Focus control is clicked from Grid View — this is
- * Focus View's ONLY entry point (see bindFocusViewEntry's own doc comment):
- * main.ts's handler sets focusViewPrimaryId to this exact stream and flips
- * viewModeStore to 'focus' in one synchronous pair of calls, so the primary
- * is never ambiguous and there's no intermediate frame where it's anyone
- * else. Deliberately independent of focusedStreamId/setFocusedStream (the
- * older solo "expand" mechanism, now unused — see toggleStreamFocus's own
- * doc comment) so entering Focus View can never re-trigger that mechanism's
- * own side effects (chat-lock snapshot/restore in main.ts) mid-transition.
+ * Fired when a card's own Focus control is clicked from Grid View — solo
+ * primary, no tray (see bindFocusViewEntry's own doc comment): main.ts's
+ * handler sets focusViewPrimaryId to this exact stream and flips
+ * viewModeStore to 'theater' in one synchronous pair of calls.
  */
 let focusViewEntryHandler: ((streamId: string) => void) | null = null;
+/** Fired when a card's own Theater control is clicked from Grid View — primary plus tray (see bindTheaterViewEntry's own doc comment). */
+let theaterViewEntryHandler: ((streamId: string) => void) | null = null;
 /** Fired when the primary's own X is clicked while in Theater/Focus — main.ts wires this to viewModeStore.setMode('grid'). It never removes the stream or touches the lineup, purely a mode change. */
 let focusViewExitHandler: (() => void) | null = null;
 /** Fired when the primary's repurposed Focus control is clicked while in Theater/Focus — main.ts wires this to toggling between 'theater' and 'focus', keeping the same primary. */
@@ -520,6 +518,14 @@ function clearFocusViewVars(container: HTMLElement): void {
   container.style.removeProperty('--focus-tray-column-width');
   container.style.removeProperty('--focus-tray-count');
   container.removeAttribute('data-tray-overflow');
+  // A partial last row can leave an inline grid-column offset (see
+  // updateFocusViewLayout's last-row centering) on whichever card happened
+  // to start that row — clear it here too so exiting Focus, promoting a new
+  // primary, or a resize that lands on a full row never strands the offset
+  // on a card that no longer starts a partial row.
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    card.style.removeProperty('grid-column');
+  }
 }
 
 /*
@@ -1785,16 +1791,29 @@ function retainOnlyTikTokVideo(streamId: string, keep: HTMLVideoElement): void {
   }
 }
 
+const TIKTOK_MISSING_STREAM_RETRY_DELAY_MS = 1200;
+
+export async function resolveTikTokWithMissingStreamRetry(
+  resolve: () => Promise<TikTokResolveResult>,
+  wait: (milliseconds: number) => Promise<void> = (milliseconds) =>
+    new Promise((done) => window.setTimeout(done, milliseconds)),
+): Promise<TikTokResolveResult> {
+  const first = await resolve();
+  if (first.state !== 'no_stream_data' && first.state !== 'no_playable_streams') {
+    return first;
+  }
+  await wait(TIKTOK_MISSING_STREAM_RETRY_DELAY_MS);
+  return resolve();
+}
+
 /**
  * First-and-only construction of a TikTok card's player, mirroring
  * mountYouTubeMedia's shape: 'mount' resolves once and attaches; every
  * later call for an already-mounted card is either a no-op resume
  * ('tab-resume'/'focus-resume' — never re-resolves, so backgrounding and
  * returning cannot accumulate resolver requests) or a real user gesture
- * ('focus-unmute'). A failed resolve shows a distinct error state and does
- * NOT retry on its own — matching the "no retry loops" requirement; only a
- * manual reload (reloadTikTokPlayer) or reason 'mount' after that (e.g. a
- * remove+re-add, which creates a fresh card) tries again.
+ * ('focus-unmute'). A transient live-without-URLs response gets one bounded
+ * retry; every other failure remains a distinct error state with no loop.
  */
 function mountTikTokMedia(
   card: HTMLElement,
@@ -1840,7 +1859,7 @@ function mountTikTokMedia(
     const controller = new AbortController();
     tiktokResolveControllers.set(streamId, controller);
 
-    void resolveTikTokLive(username, controller.signal)
+    void resolveTikTokWithMissingStreamRetry(() => resolveTikTokLive(username, controller.signal))
       .then((result) => {
         tiktokResolveControllers.delete(streamId);
         if (!card.isConnected) return;
@@ -2290,6 +2309,16 @@ function syncFocusDom(container: HTMLElement): void {
         closeButton.setAttribute('aria-label', 'Remove stream');
       }
     }
+    const ipadCloseButton = card.querySelector<HTMLButtonElement>('.stream-card__ipad-close');
+    if (ipadCloseButton) {
+      if (isFocused) {
+        ipadCloseButton.title = 'Minimize';
+        ipadCloseButton.setAttribute('aria-label', 'Minimize focused stream');
+      } else {
+        ipadCloseButton.title = 'Remove stream';
+        ipadCloseButton.setAttribute('aria-label', 'Remove stream');
+      }
+    }
 
     const overlayFocus = card.querySelector<HTMLElement>('.stream-card__overlay-focus');
     if (overlayFocus) {
@@ -2449,35 +2478,29 @@ function syncCloseButtonLabel(button: HTMLButtonElement | null, isExitControl: b
   }
 }
 
-/**
- * The per-card Focus control is also two different things depending on
- * context: on any card in Grid View (or a tray card) it's the ONE entry
- * point into Theater (see focusViewEntryHandler's doc comment). On the
- * current primary, once already in Theater/Focus, it's repurposed as the
- * Focus toggle — the same "Focus toggle remains available" control the
- * directive requires, reusing one button/icon instead of adding a second.
- */
-function syncFocusButtonLabel(button: HTMLButtonElement | null, isToggleControl: boolean, trayVisible: boolean): void {
+/** Grid entry and primary toggle for Theater (tray visible). */
+function syncTheaterButtonLabel(button: HTMLButtonElement | null, isPrimary: boolean, trayVisible: boolean): void {
+  if (!button) return;
+  if (isPrimary && trayVisible) {
+    button.title = 'Exit Theater Mode';
+    button.setAttribute('aria-label', 'Exit Theater Mode');
+    button.setAttribute('aria-pressed', 'true');
+  } else {
+    button.title = 'Enter Theater Mode';
+    button.setAttribute('aria-label', 'Enter Theater Mode');
+    button.setAttribute('aria-pressed', 'false');
+  }
+  button.innerHTML = ICON_THEATER;
+}
+
+/** Grid entry to solo Focus and primary toggle to hide the tray. */
+function syncFocusButtonLabel(button: HTMLButtonElement | null, isPrimary: boolean, trayVisible: boolean): void {
   if (!button) return;
   const isOverlay = button.classList.contains('stream-card__overlay-focus');
-  if (isToggleControl) {
-    if (trayVisible) {
-      button.title = 'Exit Theater Mode';
-      button.setAttribute('aria-label', 'Exit Theater Mode');
-      button.setAttribute('aria-pressed', 'true');
-      button.innerHTML = isOverlay ? ICON_MAGNIFIER : ICON_FULL_WINDOW;
-    } else {
-      button.title = 'Enter Theater Mode';
-      button.setAttribute('aria-label', 'Enter Theater Mode');
-      button.setAttribute('aria-pressed', 'false');
-      button.innerHTML = ICON_THEATER;
-    }
-  } else {
-    button.title = 'Focus stream';
-    button.setAttribute('aria-label', 'Focus stream in browser window');
-    button.setAttribute('aria-pressed', 'false');
-    button.innerHTML = isOverlay ? ICON_MAGNIFIER : ICON_FULL_WINDOW;
-  }
+  button.title = 'Focus stream';
+  button.setAttribute('aria-label', 'Focus stream');
+  button.setAttribute('aria-pressed', isPrimary && !trayVisible ? 'true' : 'false');
+  button.innerHTML = isOverlay ? ICON_MAGNIFIER : ICON_FULL_WINDOW;
 }
 
 function syncFocusViewDom(container: HTMLElement): void {
@@ -2505,6 +2528,9 @@ function syncFocusViewDom(container: HTMLElement): void {
 
     syncCloseButtonLabel(card.querySelector<HTMLButtonElement>('.stream-card__close'), isPrimary);
     syncCloseButtonLabel(card.querySelector<HTMLButtonElement>('.stream-card__overlay-remove'), isPrimary);
+    syncCloseButtonLabel(card.querySelector<HTMLButtonElement>('.stream-card__ipad-close'), isPrimary);
+    syncTheaterButtonLabel(card.querySelector<HTMLButtonElement>('.stream-card__theater'), isPrimary, trayVisible);
+    syncTheaterButtonLabel(card.querySelector<HTMLButtonElement>('.stream-card__overlay-theater'), isPrimary, trayVisible);
     syncFocusButtonLabel(card.querySelector<HTMLButtonElement>('.stream-card__focus'), isPrimary, trayVisible);
     syncFocusButtonLabel(card.querySelector<HTMLButtonElement>('.stream-card__overlay-focus'), isPrimary, trayVisible);
   }
@@ -2541,7 +2567,10 @@ export function syncViewMode(container: HTMLElement, mode: ViewMode, streams: St
     }
   }
 
-  container.dataset.viewMode = mode;
+  if (mode === 'grid') {
+    clearFocusViewVars(container);
+  }
+  container.dataset.viewMode = resolveDisplayViewMode(mode);
   if (mode !== 'grid' && (!focusViewPrimaryId || !streams.some((s) => s.id === focusViewPrimaryId))) {
     focusViewPrimaryId = streams[0]?.id ?? null;
   }
@@ -2551,10 +2580,21 @@ export function syncViewMode(container: HTMLElement, mode: ViewMode, streams: St
 /** Promote a tray stream to primary — resize only, no remount (same CSS-var mechanism as any other layout change). */
 export function setFocusViewPrimary(container: HTMLElement, streamId: string): void {
   if (focusViewPrimaryId === streamId) return;
+  const previousPrimaryId = focusViewPrimaryId;
+  const swapTheaterTrayAudio = container.dataset.viewMode === 'focus' && previousPrimaryId;
+
   focusViewPrimaryId = streamId;
+  container
+    .querySelector<HTMLElement>(`.stream-card[data-stream-id="${CSS.escape(streamId)}"]`)
+    ?.style.removeProperty('grid-column');
   syncFocusViewDom(container);
   scheduleGridLayout(container);
   focusViewPrimaryChangedHandler?.();
+
+  if (swapTheaterTrayAudio) {
+    mutePrimaryViewStream(previousPrimaryId);
+    unmuteTheaterEntryPrimary(streamId);
+  }
 }
 
 export function getFocusViewPrimaryId(): string | null {
@@ -2725,72 +2765,179 @@ function handleCardCloseClick(container: HTMLElement, store: StreamStore, stream
   streamRemovedHandler?.(stream, previousIndex);
 }
 
-/** On the current primary, repurposed as the Focus toggle; on anything else, Theater's one entry point (see syncFocusButtonLabel's doc comment). */
-function handleCardFocusClick(container: HTMLElement, stream: StreamRef): void {
+/** On the current primary in tray mode, hides the tray back to solo; on anything else, solo Focus entry. */
+function handleCardFocusClick(container: HTMLElement, streamId: string): void {
   if (typeof window.matchMedia === 'function' && isPhoneViewport()) return;
-  if (isCurrentPrimaryInPrimaryMode(container, stream.id)) {
-    focusViewToggleHandler?.();
+  if (isCurrentPrimaryInPrimaryMode(container, streamId)) {
+    if (container.dataset.viewMode === 'focus') {
+      focusViewToggleHandler?.();
+    }
     return;
   }
-  focusViewEntryHandler?.(stream.id);
-  unmuteTheaterEntryPrimary(stream.id);
+  unmuteTheaterEntryPrimary(streamId);
+  focusViewEntryHandler?.(streamId);
+}
+
+/** On the current primary in solo mode, reveals the tray; on anything else, Theater entry with tray. */
+function handleCardTheaterClick(container: HTMLElement, streamId: string): void {
+  if (typeof window.matchMedia === 'function' && isPhoneViewport()) return;
+  if (isCurrentPrimaryInPrimaryMode(container, streamId)) {
+    if (container.dataset.viewMode === 'theater') {
+      focusViewToggleHandler?.();
+    }
+    return;
+  }
+  unmuteTheaterEntryPrimary(streamId);
+  theaterViewEntryHandler?.(streamId);
+}
+
+/** Keyboard-shortcut entry point (src/lib/shortcuts.ts): same path as clicking this card's Focus button. */
+export function activateCardFocusById(container: HTMLElement, streamId: string): void {
+  handleCardFocusClick(container, streamId);
+}
+
+/** Keyboard-shortcut entry point (src/lib/shortcuts.ts): same path as clicking this card's Theater button. */
+export function activateCardTheaterById(container: HTMLElement, streamId: string): void {
+  handleCardTheaterClick(container, streamId);
 }
 
 /**
- * Turns audio on for the stream a viewer just deliberately picked as Theater
- * primary — restores the pre-regression behavior where entering Theater was
- * itself the unmute gesture, instead of leaving the viewer muted in a bigger
- * player. Runs synchronously inside the same click handler as the Theater
- * entry itself (handleCardFocusClick, a real user gesture), so browser
+ * The keyboard shortcut's (src/lib/shortcuts.ts) per-platform mute dispatch,
+ * reusing each provider's own existing toggle. Kick is deliberately absent:
+ * its embed has no postMessage/JS mute API — only a muted URL param, i.e. a
+ * full iframe reload per toggle — so there is intentionally no header mute
+ * control for it either (see the comment block above toggleTwitchMute and
+ * docs/PLAYBACK_STABILITY.md). A Kick primary therefore no-ops.
+ */
+export function toggleMuteForStream(streamId: string): void {
+  const card = cardForStream(streamId);
+  if (!card) return;
+  switch (card.dataset.platform) {
+    case 'twitch':
+      toggleTwitchMute(card);
+      return;
+    case 'youtube':
+      toggleYouTubeMute(streamId);
+      return;
+    case 'tiktok':
+      toggleTikTokMute(card);
+      return;
+  }
+}
+
+/**
+ * Turns audio on for the stream a viewer just deliberately picked as primary
+ * from Grid View — Theater or Focus entry share this path so both land at
+ * DEFAULT_UNMUTE_VOLUME (25%). Runs synchronously inside the card's click
+ * handler (a real user gesture), before the view-mode flip, so browser
  * autoplay-audio policy allows it.
  *
- * Deliberately narrow: only ever calls each provider's own mute()/unMute()/
- * setVolume() (or, for TikTok, the real <video> element's .muted/.volume) —
- * never destroy/reload/reconstruct a player, never touch an iframe's src.
- * That's what keeps this from reintroducing the Theater-exit Twitch-pause
- * regression (beginFocusExitRecovery/snapshotPlayingTwitchPlayers), which
- * was caused by a layout-driven remount, not by anything audio-related.
- *
- * Twitch fallback-mode and Kick are skipped outright: neither exposes a
- * live audio API, only a reload-with-different-params path, and reloading
- * on every Theater entry would re-buffer the stream — worse than staying
- * muted. Kick's native player controls remain the only way to unmute it,
- * same as everywhere else in the app (see the no-header-control comment on
- * Kick's audio model above).
+ * Uses each provider's live mute API where one exists; Twitch/YouTube
+ * fallback iframes take the same one-time focus-unmute remount path the old
+ * solo-focus control used. Kick has no live audio API — native controls only.
  */
 function unmuteTheaterEntryPrimary(streamId: string): void {
   const card = cardForStream(streamId);
   if (!card) return;
 
+  card.dataset.userEngagedAt = String(Date.now());
+
   switch (card.dataset.platform) {
     case 'twitch': {
-      if (card.dataset.twitchMode !== 'api') return; // fallback iframe: no API, don't reload
+      const mode = card.dataset.twitchMode;
+      if (mode === 'fallback') {
+        card.dataset.embedMuted = '0';
+        mountTwitchIframe(card, false, 'focus-unmute');
+        syncTwitchMuteUi(card);
+        return;
+      }
+      if (mode !== 'api') return; // pending mount reads embedMuted when it lands
       const player = twitchPlayers.get(streamId);
       if (!player) return;
-      player.setMuted(false);
-      player.setVolume(DEFAULT_UNMUTE_VOLUME / 100);
       card.dataset.embedMuted = '0';
+      safeCall(() => player.setMuted(false));
+      safeCall(() => player.setVolume(DEFAULT_UNMUTE_VOLUME / 100));
+      twitchVolume.set(streamId, DEFAULT_UNMUTE_VOLUME);
+      safeCall(() => player.play());
+      syncTwitchMuteUi(card);
+      for (const close of twitchVolumePanelClosers.get(streamId) ?? []) close();
+      return;
+    }
+    case 'youtube': {
+      if (card.dataset.youtubeMode === 'fallback') {
+        card.dataset.embedMuted = '0';
+        mountYouTubeMedia(card, 'focus-unmute');
+      } else {
+        const player = youtubePlayers.get(streamId);
+        if (!player) return;
+        card.dataset.embedMuted = '0';
+        player.unMute();
+        player.setVolume(DEFAULT_UNMUTE_VOLUME);
+        youtubeVolumeState.set(streamId, { muted: false, volume: DEFAULT_UNMUTE_VOLUME });
+        syncYouTubeVolumeUi(card);
+      }
+      for (const close of youtubeVolumePanelClosers.get(streamId) ?? []) close();
+      return;
+    }
+    case 'tiktok': {
+      card.dataset.embedMuted = '0';
+      mountTikTokMedia(card, 'focus-unmute');
+      const entry = tiktokPlayers.get(streamId);
+      if (entry) {
+        entry.video.volume = DEFAULT_UNMUTE_VOLUME / 100;
+        tiktokVolume.set(streamId, DEFAULT_UNMUTE_VOLUME);
+        syncTikTokMuteUi(card);
+      }
+      for (const close of tiktokVolumePanelClosers.get(streamId) ?? []) close();
+      return;
+    }
+    default:
+      return; // kick: no live audio API, native controls only
+  }
+}
+
+/**
+ * Mutes a stream demoted from Theater primary back into the tray — the
+ * complement of unmuteTheaterEntryPrimary. Only invoked from
+ * setFocusViewPrimary while the tray is visible (Theater mode).
+ */
+function mutePrimaryViewStream(streamId: string): void {
+  const card = cardForStream(streamId);
+  if (!card) return;
+
+  switch (card.dataset.platform) {
+    case 'twitch': {
+      card.dataset.embedMuted = '1';
+      const mode = card.dataset.twitchMode;
+      if (mode === 'fallback') {
+        mountTwitchIframe(card, true, 'mount');
+        syncTwitchMuteUi(card);
+        return;
+      }
+      if (mode !== 'api') return;
+      const player = twitchPlayers.get(streamId);
+      safeCall(() => player?.setMuted(true));
       syncTwitchMuteUi(card);
       return;
     }
     case 'youtube': {
+      card.dataset.embedMuted = '1';
       const player = youtubePlayers.get(streamId);
-      if (!player) return;
-      player.unMute();
-      player.setVolume(DEFAULT_UNMUTE_VOLUME);
-      youtubeVolumeState.set(streamId, { muted: false, volume: DEFAULT_UNMUTE_VOLUME });
-      syncYouTubeVolumeUi(card);
+      if (player) {
+        player.mute();
+        const state = youtubeVolumeState.get(streamId) ?? { muted: true, volume: DEFAULT_UNMUTE_VOLUME };
+        youtubeVolumeState.set(streamId, { muted: true, volume: state.volume });
+        syncYouTubeVolumeUi(card);
+      }
       return;
     }
     case 'tiktok': {
+      card.dataset.embedMuted = '1';
       const entry = tiktokPlayers.get(streamId);
-      if (!entry) return;
-      applyTikTokVideoMute(entry.video, false);
-      entry.video.volume = DEFAULT_UNMUTE_VOLUME / 100;
-      tiktokVolume.set(streamId, DEFAULT_UNMUTE_VOLUME);
-      safeCall(() => void entry.video.play());
-      card.dataset.embedMuted = '0';
-      syncTikTokMuteUi(card);
+      if (entry) {
+        applyTikTokVideoMute(entry.video, true);
+        syncTikTokMuteUi(card);
+      }
       return;
     }
     default:
@@ -2838,14 +2985,23 @@ function createPlayerElement(
   const controls = document.createElement('div');
   controls.className = 'stream-card__controls';
 
+  const theaterButton = document.createElement('button');
+  theaterButton.type = 'button';
+  theaterButton.className = 'stream-card__theater';
+  theaterButton.title = 'Enter Theater Mode';
+  theaterButton.setAttribute('aria-label', 'Enter Theater Mode');
+  theaterButton.setAttribute('aria-pressed', 'false');
+  theaterButton.innerHTML = ICON_THEATER;
+  theaterButton.addEventListener('click', () => handleCardTheaterClick(container, stream.id));
+
   const focusButton = document.createElement('button');
   focusButton.type = 'button';
   focusButton.className = 'stream-card__focus';
   focusButton.title = 'Focus stream';
-  focusButton.setAttribute('aria-label', 'Focus stream in browser window');
+  focusButton.setAttribute('aria-label', 'Focus stream');
   focusButton.setAttribute('aria-pressed', 'false');
   focusButton.innerHTML = ICON_FULL_WINDOW;
-  focusButton.addEventListener('click', () => handleCardFocusClick(container, stream));
+  focusButton.addEventListener('click', () => handleCardFocusClick(container, stream.id));
 
   const removeButton = document.createElement('button');
   removeButton.type = 'button';
@@ -2887,7 +3043,7 @@ function createPlayerElement(
     tiktokVolumeSyncers.get(stream.id)!.push(sync);
     card.dataset.tiktokAvatarUrl = tiktokAvatarEndpoint(stream.channel);
   }
-  controls.append(focusButton, reloadButton, removeButton);
+  controls.append(theaterButton, focusButton, reloadButton, removeButton);
   header.append(headerNameBadge.root, controls);
 
   const player = document.createElement('div');
@@ -2942,16 +3098,24 @@ function createPlayerElement(
   // to this element (see StreamReorder's `handle` option) and drives the
   // drag itself. A stray click after a drag ends has nothing to do here.
 
+  const overlayTheater = document.createElement('button');
+  overlayTheater.type = 'button';
+  overlayTheater.className = 'stream-card__overlay-theater';
+  overlayTheater.title = 'Enter Theater Mode';
+  overlayTheater.setAttribute('aria-label', 'Enter Theater Mode');
+  overlayTheater.setAttribute('aria-pressed', 'false');
+  overlayTheater.innerHTML = ICON_THEATER;
+  overlayTheater.addEventListener('click', () => handleCardTheaterClick(container, stream.id));
+
   const overlayFocus = document.createElement('button');
   overlayFocus.type = 'button';
   overlayFocus.className = 'stream-card__overlay-focus';
   overlayFocus.title = 'Focus stream';
-  overlayFocus.setAttribute('aria-label', 'Focus stream in browser window');
+  overlayFocus.setAttribute('aria-label', 'Focus stream');
   overlayFocus.setAttribute('aria-pressed', 'false');
   overlayFocus.innerHTML = ICON_MAGNIFIER;
-  // Same control as the header's focusButton above — this is its
-  // headers-hidden hover-toolbar copy (see handleCardFocusClick).
-  overlayFocus.addEventListener('click', () => handleCardFocusClick(container, stream));
+  // Same control as the header's focusButton above — headers-hidden copy.
+  overlayFocus.addEventListener('click', () => handleCardFocusClick(container, stream.id));
 
   const overlayReload = document.createElement('button');
   overlayReload.type = 'button';
@@ -2972,6 +3136,14 @@ function createPlayerElement(
   overlayRemove.innerHTML = ICON_CLOSE;
   overlayRemove.addEventListener('click', () => handleCardCloseClick(container, store, stream));
 
+  const ipadClose = document.createElement('button');
+  ipadClose.type = 'button';
+  ipadClose.className = 'stream-card__ipad-close';
+  ipadClose.title = 'Remove stream';
+  ipadClose.setAttribute('aria-label', 'Remove stream');
+  ipadClose.innerHTML = ICON_CLOSE;
+  ipadClose.addEventListener('click', () => handleCardCloseClick(container, store, stream));
+
   if (stream.platform === 'youtube') {
     const { root, closePanel } = createYouTubeVolumeControl(stream.id, toolbar);
     overlayControls.append(root);
@@ -2987,48 +3159,17 @@ function createPlayerElement(
     tiktokVolumePanelClosers.get(stream.id)!.push(closePanel);
     tiktokVolumeSyncers.get(stream.id)!.push(sync);
   }
-  overlayControls.append(overlayDrag, overlayFocus, overlayReload, overlayRemove);
+  overlayControls.append(overlayDrag, overlayTheater, overlayFocus, overlayReload, overlayRemove);
 
   toolbar.append(toolbarNameBadge.root, overlayControls);
 
-  card.append(header, player, toolbar);
+  card.append(header, player, toolbar, ipadClose);
 
   if (stream.platform === 'tiktok') {
     syncTikTokMuteUi(card);
   }
 
-  if (stream.platform === 'twitch') {
-    syncTwitchMuteUi(card);
-
-    /*
-     * Headers-hidden reveals this toolbar on hover by shrinking the player
-     * box (main.css) — a real iframe resize we otherwise never observe, on
-     * both open and close. Arm recovery at transitionstart (not end) so a
-     * headers-hidden drag that begins mid-animation still has this card in
-     * the coordinator's pending set before Sortable's onChoose snapshot.
-     * The bounded schedule already waits for Twitch's async pause; starting
-     * 150ms earlier does not issue a premature play() on a still-healthy
-     * player (pass 0 only acts on a positive paused reading).
-     */
-    toolbar.addEventListener('transitionstart', (event) => {
-      if (event.propertyName !== 'height') return;
-      const wasPlaying = twitchPlayback.get(stream.id) === 'playing';
-      logPlayerEvent('toolbar-transition-start', {
-        streamId: stream.id,
-        mountId: card.querySelector<HTMLElement>('.stream-card__iframe')?.id,
-        wasPlaying,
-      });
-      if (!wasPlaying) return;
-      playbackRecovery.hover(createTwitchRecoveryTarget(stream.id, Date.now()), 'toolbar-hover');
-    });
-    toolbar.addEventListener('transitionend', (event) => {
-      if (event.propertyName !== 'height') return;
-      logPlayerEvent('toolbar-transition-end', {
-        streamId: stream.id,
-        mountId: card.querySelector<HTMLElement>('.stream-card__iframe')?.id,
-      });
-    });
-  }
+  if (stream.platform === 'twitch') syncTwitchMuteUi(card);
 
   if (document.hidden) {
     card.dataset.tabFrozen = '1';
@@ -3332,16 +3473,17 @@ export function bindStreamFocus(handler: FocusChangeHandler): void {
 }
 
 /**
- * Wires main.ts's viewModeStore into the per-card Focus control (see
- * focusViewEntryHandler's own doc comment for why this replaced the old
- * global header toggle as Focus View's only entry point). The handler is
- * expected to set the stream as primary and switch to Focus View in one
- * synchronous pair of calls — e.g. `(id) => { setFocusViewPrimary(grid,
- * id); viewModeStore.setMode('focus'); }` — so there's no frame where the
- * grid shows 'focus' mode with the wrong (or no) primary.
+ * Wires main.ts's viewModeStore into the per-card Focus control for solo
+ * primary entry. The handler is expected to set the stream as primary and
+ * switch to solo Focus in one synchronous pair of calls.
  */
 export function bindFocusViewEntry(handler: (streamId: string) => void): void {
   focusViewEntryHandler = handler;
+}
+
+/** Wires main.ts's viewModeStore into the per-card Theater control for tray entry. */
+export function bindTheaterViewEntry(handler: (streamId: string) => void): void {
+  theaterViewEntryHandler = handler;
 }
 
 /** Primary's X — exit Theater/Focus back to Grid (see focusViewExitHandler's own doc comment). */
@@ -3651,6 +3793,16 @@ function reloadStreamCard(card: HTMLElement): void {
 }
 
 /**
+ * The "back live" toast's Reload action (see main.ts's bindStreamWentLive):
+ * the exact same per-card reload path as that card's own reload button,
+ * addressed by stream id since the toast lives outside the card tree.
+ */
+export function reloadStreamCardById(streamId: string): void {
+  const card = cardForStream(streamId);
+  if (card) reloadStreamCard(card);
+}
+
+/**
  * Pure status -> dot modifier/label mapping, kept separate from any DOM code
  * so it's unit-testable on its own. `null` means "no real status to show" —
  * currently only invalid_input, which the frontend already prevents from
@@ -3676,13 +3828,41 @@ export function twitchStatusDotProps(
 }
 
 /**
- * Builds the "Live · Category · 12.4K viewers · 2h 14m" tooltip text (the
- * dot's title/aria-label — always the full detail, category included, since
- * it costs no layout space there) and the shorter "12.4K viewers · 2h 14m"
- * inline meta span text. Category is deliberately left out of the visible
- * meta line — it rarely changes and isn't worth the header space — but stays
- * one hover away via the tooltip. Category/viewer count/duration only ever
- * apply to a live result.
+ * True only on a definitive offline → live flip. `unavailable` is excluded
+ * on purpose: after an API outage every card would otherwise flash "back
+ * live" at once, and a first-ever apply (previous === undefined, e.g. page
+ * load with an already-live channel) is not news either. Pure, so the
+ * transition rule is unit-testable without a DOM.
+ */
+export function detectWentLive(
+  previousStatus: string | undefined,
+  nextStatus: string | undefined,
+): boolean {
+  return previousStatus === 'offline' && nextStatus === 'live';
+}
+
+type StreamWentLiveHandler = (card: HTMLElement) => void;
+let streamWentLiveHandler: StreamWentLiveHandler | null = null;
+
+/**
+ * Fires from applyTwitchStatus/applyKickStatus when a card flips
+ * offline → live (see detectWentLive). main.ts binds the "back live" toast
+ * + tab-title flash here. YouTube never fires it: a YouTube channel card
+ * resolves its live video once at mount, so there is no offline → live
+ * transition in its periodic stats (applyYouTubeStats) at all.
+ */
+export function bindStreamWentLive(handler: StreamWentLiveHandler): void {
+  streamWentLiveHandler = handler;
+}
+
+/**
+ * Builds the "Live · Category · 12.4K viewers · 2h 14m" tooltip text
+ * (the dot's title/aria-label — always the full detail, category included,
+ * since it costs no layout space there) and the inline meta span text
+ * "12.4K viewers · 2h 14m". Category is deliberately left out of the visible
+ * meta line — it rarely changes and isn't worth the header space — but
+ * stays one hover away via the tooltip. Category/viewer count/duration only
+ * ever apply to a live result.
  */
 function twitchStatusText(
   props: ReturnType<typeof twitchStatusDotProps>,
@@ -3812,11 +3992,15 @@ export function applyTwitchStatus(
     const result = results.get(channel);
     if (!result) continue;
 
+    const previousStatus = card.dataset.twitchStatus;
     const props = twitchStatusDotProps(result);
     if (props) {
       card.dataset.twitchStatus = props.modifier;
     } else {
       delete card.dataset.twitchStatus;
+    }
+    if (detectWentLive(previousStatus, props?.modifier)) {
+      streamWentLiveHandler?.(card);
     }
 
     if (result.status === 'live' && result.startedAt) {
@@ -3839,11 +4023,47 @@ export function applyTwitchStatus(
       'twitchAvatarUrl',
       result.status === 'live' || result.status === 'offline' ? result.avatarUrl : undefined,
     );
+    // Unlike the avatar, a thumbnail is only meaningful while live (it's a
+    // capture of current content) — so this is an explicit set/delete, not
+    // retainCreatorAvatar's keep-forever semantics. The Story Card falls
+    // back to it when no avatar resolved (see collectShareCardAvatarUrls).
+    if (result.status === 'live' && result.thumbnailUrl) {
+      card.dataset.twitchThumbnailUrl = result.thumbnailUrl;
+    } else {
+      delete card.dataset.twitchThumbnailUrl;
+    }
+    applyTwitchThumbnailBackdrop(card);
 
     renderTwitchCardStatus(card, nowMs);
   }
 
   syncTwitchDurationTimer(container);
+}
+
+/**
+ * Paints the live thumbnail as the player container's background — visible
+ * only during the mount window, before the opaque Twitch iframe covers it,
+ * so a slow embed load shows a preview of the stream instead of a blank
+ * box. Purely cosmetic CSS on the container: the player object and iframe
+ * are never touched. Never used as an "offline card" image — Twitch embed
+ * requirement 1.3 forbids obscuring the iframe once it's mounted.
+ */
+function applyTwitchThumbnailBackdrop(card: HTMLElement): void {
+  const player = card.querySelector<HTMLElement>('.stream-card__player');
+  if (!player) return;
+  const url = card.dataset.twitchThumbnailUrl;
+  if (url) {
+    // Strip characters that could break out of the url("...") context — the
+    // URL comes from our own status API, this is defense in depth only.
+    const safeUrl = url.replace(/["'\\()]/g, '');
+    player.style.backgroundImage = `url("${safeUrl}")`;
+    player.style.backgroundSize = 'cover';
+    player.style.backgroundPosition = 'center';
+  } else {
+    player.style.backgroundImage = '';
+    player.style.backgroundSize = '';
+    player.style.backgroundPosition = '';
+  }
 }
 
 /**
@@ -4026,11 +4246,15 @@ export function applyKickStatus(
     const result = results.get(channel);
     if (!result) continue;
 
+    const previousStatus = card.dataset.kickStatus;
     const props = kickStatusDotProps(result);
     if (props) {
       card.dataset.kickStatus = props.modifier;
     } else {
       delete card.dataset.kickStatus;
+    }
+    if (detectWentLive(previousStatus, props?.modifier)) {
+      streamWentLiveHandler?.(card);
     }
 
     if (result.status === 'live' && result.startedAt) {
@@ -4182,7 +4406,6 @@ export function applyYouTubeStats(container: HTMLElement, results: Map<string, Y
     } else {
       delete card.dataset.youtubeStartedAt;
     }
-
     renderYouTubeCardMeta(card, nowMs);
   }
 
@@ -4837,6 +5060,25 @@ export function nudgeStalledTwitchPlayers(container: HTMLElement): void {
   }
 }
 
+/**
+ * A real pointer gesture can satisfy autoplay policy on iPad. Retry only
+ * players that emitted PLAYBACK_BLOCKED; user-paused and merely stalled
+ * players are deliberately excluded.
+ */
+export function replayBlockedVisibleTwitchPlayers(container: HTMLElement): void {
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    if (!isStreamCardLayoutVisible(card)) continue;
+    if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
+    if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+    const streamId = card.dataset.streamId ?? '';
+    if (!streamId || twitchPlayback.get(streamId) !== 'blocked') continue;
+    const player = twitchPlayers.get(streamId);
+    if (!player) continue;
+    setPlaybackState(streamId, 'unknown', card.dataset.channel);
+    replayTwitchPlayback(player, card);
+  }
+}
+
 export function syncStreamGrid(container: HTMLElement, store: StreamStore): void {
   const streams = store.getStreams();
   const nextIds = new Set(streams.map((stream) => stream.id));
@@ -4941,11 +5183,11 @@ function measureCardChrome(container: HTMLElement, focusedStreamId: string | nul
       ? container.querySelector<HTMLElement>(`.stream-card[data-stream-id="${focusedStreamId}"]`)
       : null) ?? container.querySelector<HTMLElement>('.stream-card');
   if (!card) return null;
-  // Hidden headers measure 0 (display: none), which matches the 0 chrome the
-  // headers-hidden branch feeds the packer — no special-casing needed.
+  const headersHidden = document.documentElement.classList.contains('headers-hidden');
   const header = card.querySelector<HTMLElement>('.stream-card__header');
+  const toolbar = card.querySelector<HTMLElement>('.stream-card__toolbar');
   return {
-    header: header?.offsetHeight ?? 0,
+    header: headersHidden ? (toolbar?.offsetHeight ?? 0) : (header?.offsetHeight ?? 0),
     borderX: Math.max(0, card.offsetWidth - card.clientWidth),
     borderY: Math.max(0, card.offsetHeight - card.clientHeight),
   };
@@ -4978,6 +5220,10 @@ export function updateGridLayout(container: HTMLElement): void {
   ) {
     updateFocusViewLayout(container, streamArea, totalCount);
     return;
+  }
+
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    card.style.removeProperty('grid-column');
   }
 
   const hasKick =
@@ -5015,9 +5261,14 @@ export function updateGridLayout(container: HTMLElement): void {
   layoutRetries = 0;
 
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
-  // Headers-hidden: video alone (no chrome height). Focused keeps header for ×.
+  const ipadHeaderless = document.documentElement.classList.contains('ipad-device');
+  // Compact mode replaces the header with a fixed footer; focused solo mode keeps its header.
   const chromeHeight =
-    !headersHidden || focusedStreamId ? CARD_HEADER_HEIGHT : 0;
+    ipadHeaderless
+      ? 0
+      : !headersHidden || focusedStreamId
+        ? CARD_HEADER_HEIGHT
+        : COMPACT_TOOLBAR_HEIGHT;
 
   // Solo focus keeps its existing always-16:9 behavior (unrelated to the
   // portrait-aware weighting below, which only applies to the multi-stream
@@ -5068,9 +5319,8 @@ export function updateGridLayout(container: HTMLElement): void {
    * A header that measures 0 while chrome is expected means the DOM cannot be
    * measured yet (offsetHeight is 0 before first layout, and always 0 under
    * jsdom), not that the header is gone — headers-hidden reports chromeHeight
-   * 0 and is handled by that branch instead. Falling back to the constant
-   * keeps the row track from being pinned a header short, which is the very
-   * failure this measurement exists to prevent.
+   * 0 and falls back to COMPACT_TOOLBAR_HEIGHT. Falling back to the expected
+   * chrome keeps the row track from being pinned a control strip short.
    */
   const headerHeight = chromeHeight > 0 && chrome.header <= 0 ? chromeHeight : chrome.header;
   const cardChromeHeight = headerHeight + chrome.borderY;
@@ -5186,7 +5436,12 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
   // computeFocusViewLayout must leave that much room out of the pure player
   // math, and the row track itself (below) must add it back on top.
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
-  const chromeHeight = headersHidden ? 0 : CARD_HEADER_HEIGHT;
+  const ipadHeaderless = document.documentElement.classList.contains('ipad-device');
+  const chromeHeight = ipadHeaderless
+    ? 0
+    : headersHidden
+      ? COMPACT_TOOLBAR_HEIGHT
+      : CARD_HEADER_HEIGHT;
 
   const includeTray = container.dataset.viewMode === 'focus';
   const secondaryCount = Math.max(0, totalCount - 1);
@@ -5230,6 +5485,33 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
     `${Math.floor(result.trayColumnWidth)}px`,
   );
   container.style.setProperty('--focus-tray-count', String(trayColumns));
+
+  // Center a partial last row: main.css doubles the tray tracks (2 per
+  // logical column, tray cards span 2) so an odd leftover can be offset by
+  // half a tile. Reset every tray card first, then offset only the first
+  // card of a partial last row — full rows (lastRowCount === 0) and the
+  // single-row case need no offset at all.
+  //
+  // The offset is set via the `grid-column` shorthand (start AND span
+  // together), not the `grid-column-start` longhand alone: main.css's
+  // `grid-column: span 2` shorthand (no slash) actually assigns "span 2" to
+  // grid-column-start itself (grid-column-end defaults to auto per spec) —
+  // an inline grid-column-start override would win the cascade for that one
+  // longhand and silently drop the span, collapsing the card to one track.
+  for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+    card.style.removeProperty('grid-column');
+  }
+  const trayCards = Array.from(
+    container.querySelectorAll<HTMLElement>('.stream-card:not(.is-focus-primary)'),
+  );
+  if (includeTray && secondaryCount > 0) {
+    const lastRowCount = secondaryCount - (result.trayRows - 1) * trayColumns;
+    if (lastRowCount > 0 && lastRowCount < trayColumns) {
+      const firstCardOfLastRow = trayCards[(result.trayRows - 1) * trayColumns];
+      const leadTracks = trayColumns - lastRowCount;
+      firstCardOfLastRow?.style.setProperty('grid-column', `${leadTracks + 1} / span 2`);
+    }
+  }
 
   const hasKick = container.dataset.hasKick === '1';
   if (hasKick) {

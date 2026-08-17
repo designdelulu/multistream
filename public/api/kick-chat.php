@@ -9,6 +9,11 @@
  * the rolling per-channel buffer. There is no official Kick chat history
  * GET — an empty list on first poll is expected ("waiting for new messages").
  *
+ * Abuse guards: GETs are per-IP throttled, and subscription attempts are
+ * globally capped per day with per-broadcaster failure backoff (see
+ * kick_ensure_chat_subscription). Over-cap requests still get the chat
+ * buffer, just with subscription: "unavailable" — never an error.
+ *
  * Writing chat (POST /public/v1/chat) is not exposed here: that requires a
  * user or bot OAuth token, not the existing App Access Token.
  */
@@ -44,6 +49,17 @@ if (!defined('KICK_CHAT_TESTING')) {
             'status' => 'error',
             'code' => 'not_configured',
             'channel' => '',
+            'messages' => [],
+        ]);
+    }
+
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    if (kick_chat_rate_limited($ip)) {
+        http_response_code(429);
+        kick_chat_respond([
+            'status' => 'error',
+            'code' => 'rate_limited',
+            'message' => 'Too many requests — try again shortly.',
             'messages' => [],
         ]);
     }

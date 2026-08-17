@@ -120,6 +120,24 @@ if (!defined('KICK_CHAT_BUFFER_TTL')) {
 if (!defined('KICK_CHAT_SUB_CACHE_TTL')) {
     define('KICK_CHAT_SUB_CACHE_TTL', 6 * 60 * 60);
 }
+/**
+ * Subscription-attempt guards for kick_ensure_chat_subscription: a global
+ * daily cap on attempts protects the Kick Events quota, and a per-
+ * broadcaster failure marker stops one bad slug from retry-storming on
+ * every viewer poll (previously only successes were cached).
+ */
+if (!defined('KICK_CHAT_SUB_DAILY_CAP')) {
+    define('KICK_CHAT_SUB_DAILY_CAP', 50);
+}
+if (!defined('KICK_CHAT_SUB_FAIL_TTL')) {
+    define('KICK_CHAT_SUB_FAIL_TTL', 30 * 60);
+}
+if (!defined('KICK_CHAT_RATE_GET_MAX')) {
+    define('KICK_CHAT_RATE_GET_MAX', 60);
+}
+if (!defined('KICK_CHAT_RATE_GET_WINDOW')) {
+    define('KICK_CHAT_RATE_GET_WINDOW', 60);
+}
 if (!defined('KICK_WEBHOOK_MAX_SKEW_SECONDS')) {
     define('KICK_WEBHOOK_MAX_SKEW_SECONDS', 600);
 }
@@ -1136,6 +1154,25 @@ function kick_ensure_chat_subscription(int $broadcasterUserId): array
         return ['ok' => true, 'subscriptionId' => $cached['id'], 'reused' => true, 'error' => null];
     }
 
+    // Failure backoff: a broadcaster whose last attempt failed is not
+    // retried for KICK_CHAT_SUB_FAIL_TTL, so a bad slug can't burn a
+    // GET+POST pair on every viewer's poll.
+    $failKey = 'kick:chat-sub-fail:' . $broadcasterUserId;
+    if (kick_cache_get($failKey) !== null) {
+        return ['ok' => false, 'subscriptionId' => null, 'reused' => false, 'error' => 'subscription_backoff'];
+    }
+
+    // Global daily cap on attempts (not just successes) — the Kick Events
+    // quota is what is being protected, so the counter increments before
+    // the upstream calls.
+    $dailyKey = 'kick:chat-sub-daily:' . gmdate('Y-m-d');
+    $daily = kick_cache_get($dailyKey);
+    $attempts = is_array($daily) && isset($daily['count']) && is_int($daily['count']) ? $daily['count'] : 0;
+    if ($attempts >= KICK_CHAT_SUB_DAILY_CAP) {
+        return ['ok' => false, 'subscriptionId' => null, 'reused' => false, 'error' => 'quota_exceeded'];
+    }
+    kick_cache_set($dailyKey, ['count' => $attempts + 1], 48 * 60 * 60);
+
     $errorCode = null;
     $existing = kick_call_api(
         'events/subscriptions',
@@ -1150,6 +1187,7 @@ function kick_ensure_chat_subscription(int $broadcasterUserId): array
             if ($event === 'chat.message.sent' && $method === 'webhook' && !empty($item['id'])) {
                 $id = (string) $item['id'];
                 kick_cache_set($cacheKey, ['id' => $id], KICK_CHAT_SUB_CACHE_TTL);
+                kick_cache_delete($failKey);
                 return ['ok' => true, 'subscriptionId' => $id, 'reused' => true, 'error' => null];
             }
         }
@@ -1162,6 +1200,7 @@ function kick_ensure_chat_subscription(int $broadcasterUserId): array
     ], $errorCode);
 
     if (!is_array($created)) {
+        kick_cache_set($failKey, ['at' => time()], KICK_CHAT_SUB_FAIL_TTL);
         return ['ok' => false, 'subscriptionId' => null, 'reused' => false, 'error' => $errorCode ?? 'api_error'];
     }
 
@@ -1183,10 +1222,27 @@ function kick_ensure_chat_subscription(int $broadcasterUserId): array
         $id = 'existing';
     }
     if ($id === null) {
+        kick_cache_set($failKey, ['at' => time()], KICK_CHAT_SUB_FAIL_TTL);
         return ['ok' => false, 'subscriptionId' => null, 'reused' => false, 'error' => 'api_error'];
     }
     kick_cache_set($cacheKey, ['id' => $id], KICK_CHAT_SUB_CACHE_TTL);
+    kick_cache_delete($failKey);
     return ['ok' => true, 'subscriptionId' => $id, 'reused' => false, 'error' => null];
+}
+
+/**
+ * Sliding-window per-IP throttle for kick-chat.php GETs (60/min: chat
+ * polling is every few seconds per open chat panel, so one viewer = ~20/
+ * min). Fails open when the cache dir is unavailable.
+ */
+function kick_chat_rate_limited(string $ip): bool
+{
+    if (!kick_cache_dir_ready()) return false;
+    $key = 'kick:chat-rate:' . hash('sha256', $ip);
+    $state = kick_cache_get($key);
+    $count = is_array($state) && isset($state['count']) && is_int($state['count']) ? $state['count'] : 0;
+    kick_cache_set($key, ['count' => $count + 1], KICK_CHAT_RATE_GET_WINDOW);
+    return $count + 1 > KICK_CHAT_RATE_GET_MAX;
 }
 
 function kick_webhook_header(string $name): string

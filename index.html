@@ -107,7 +107,11 @@
         }
         if (
           localStorage.getItem('multistream:headers-hidden') === '1' &&
-          !window.matchMedia('(max-width: 640px)').matches
+          !window.matchMedia('(max-width: 640px)').matches &&
+          !(
+            /iPad/i.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+          )
         ) {
           document.documentElement.classList.add('headers-hidden');
         }
@@ -186,6 +190,11 @@
               Switch to <strong>Focus view</strong> for one large primary stream and a tray of the
               rest — click a tray stream's header to swap it into the primary spot without
               interrupting playback.
+            </li>
+            <li class="site-intro__desktop-only">
+              Keyboard shortcuts: <strong>1–9</strong> pick a stream, <strong>F</strong> toggles the
+              Focus tray, <strong>M</strong> mutes the big stream, <strong>Esc</strong> returns to
+              the grid.
             </li>
             <li class="site-intro__desktop-only">
               Hover the toolbar icons to <strong>Share</strong>, <strong>Clear</strong>, hide
@@ -405,6 +414,12 @@
       <div id="undo-toast" class="undo-toast" hidden role="status" aria-live="polite">
         <span class="undo-toast__message"></span>
         <button type="button" class="undo-toast__action">Undo</button>
+      </div>
+
+      <!-- Same styling as the undo toast; .live-toast offsets it upward so the two never overlap. -->
+      <div id="live-toast" class="undo-toast live-toast" hidden role="status" aria-live="polite">
+        <span class="undo-toast__message live-toast__message"></span>
+        <button type="button" class="undo-toast__action live-toast__action">Reload</button>
       </div>
 
       <div id="story-preview-backdrop" class="story-preview__backdrop" hidden></div>

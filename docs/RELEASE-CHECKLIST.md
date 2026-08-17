@@ -8,10 +8,12 @@ skipped just because there's no pipeline enforcing it.
 
 ## Before every release
 
-1. **Tests pass.**
+1. **Tests pass** — frontend (Vitest) and backend (PHP) together:
    ```bash
-   npx vitest run
+   npm run test:all
    ```
+   (`npm run test:php` runs the framework-free `tests/*.test.php` suites
+   on their own; each also runs standalone via `php tests/<file>`.)
 2. **Types check clean.**
    ```bash
    npx tsc --noEmit
@@ -35,7 +37,8 @@ skipped just because there's no pipeline enforcing it.
      the *existing* streams keep playing uninterrupted (the mixed-provider
      regression this session fixed — see PLAYBACK_STABILITY.md).
    - Toggle **Focus view** / **Grid view**; click a tray stream's header to
-     promote it; confirm nothing remounts or restarts.
+     promote it; confirm nothing remounts or restarts and the new primary
+     is unmuted while the former primary in the tray is muted (Theater mode).
    - Toggle **Hide headers**; hover a card; confirm the below-player
      toolbar appears without obscuring the video.
    - Drag-reorder at least one card with headers visible and at least one

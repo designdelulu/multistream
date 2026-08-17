@@ -1,7 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveAddInput, plainUsernameCandidate, resolveLivePartyShareUrl } from './StreamToolbar';
+import {
+  resolveAddInput,
+  plainUsernameCandidate,
+  usernameCandidatePlatforms,
+  resolveLivePartyShareUrl,
+  collectShareCardAvatarUrls,
+} from './StreamToolbar';
 import { parseStreamInput } from '../platforms';
 import { isTikTokShortLink } from '../platforms/tiktok';
+
+function buildCard(dataset: Record<string, string>): HTMLElement {
+  const card = document.createElement('article');
+  card.className = 'stream-card';
+  for (const [key, value] of Object.entries(dataset)) {
+    card.dataset[key] = value;
+  }
+  return card;
+}
 
 describe('resolveAddInput — TikTok LIVE explicit provider selection', () => {
   it('bare username resolves to a canonical TikTok LIVE URL and parses as tiktok', () => {
@@ -60,6 +75,15 @@ describe('resolveAddInput — TikTok LIVE explicit provider selection', () => {
   it('a bare username is still a Twitch/Kick/YouTube suggestion candidate when TikTok is not selected', () => {
     expect(plainUsernameCandidate('someuser')).toBe('someuser');
   });
+
+  it('accepts a dotted handle and offers only compatible providers', () => {
+    expect(plainUsernameCandidate('yonna.jay')).toBe('yonna.jay');
+    expect(usernameCandidatePlatforms('yonna.jay')).toEqual(['youtube', 'tiktok']);
+    expect(parseStreamInput(resolveAddInput('yonna.jay', 'tiktok'))).toEqual({
+      platform: 'tiktok',
+      channel: 'yonna.jay',
+    });
+  });
 });
 
 describe('resolveLivePartyShareUrl', () => {
@@ -90,5 +114,56 @@ describe('resolveLivePartyShareUrl', () => {
       start,
     });
     expect(result).toEqual({ ok: false, error: 'Add at least one stream first.' });
+  });
+});
+
+describe('collectShareCardAvatarUrls', () => {
+  it('prefers the avatar over the live thumbnail when both are present', () => {
+    const root = document.createElement('div');
+    root.append(
+      buildCard({
+        streamId: 'twitch:foo',
+        platform: 'twitch',
+        twitchAvatarUrl: 'https://static-cdn.jtvnw.net/foo.png',
+        twitchThumbnailUrl: 'https://static-cdn.jtvnw.net/foo-live.jpg',
+      }),
+    );
+
+    expect(collectShareCardAvatarUrls(root).get('twitch:foo')).toBe('https://static-cdn.jtvnw.net/foo.png');
+  });
+
+  it('falls back to the live Twitch thumbnail when no avatar resolved', () => {
+    const root = document.createElement('div');
+    root.append(
+      buildCard({
+        streamId: 'twitch:foo',
+        platform: 'twitch',
+        twitchThumbnailUrl: 'https://static-cdn.jtvnw.net/foo-live.jpg',
+      }),
+    );
+
+    expect(collectShareCardAvatarUrls(root).get('twitch:foo')).toBe(
+      'https://static-cdn.jtvnw.net/foo-live.jpg',
+    );
+  });
+
+  it('collects each platform\'s avatar and skips cards with no imagery at all', () => {
+    const root = document.createElement('div');
+    root.append(
+      buildCard({
+        streamId: 'youtube:a',
+        platform: 'youtube',
+        youtubeAvatarUrl: 'https://yt3.ggpht.com/a.jpg',
+      }),
+      buildCard({ streamId: 'kick:b', platform: 'kick', kickAvatarUrl: 'https://files.kick.com/b.webp' }),
+      buildCard({ streamId: 'tiktok:c', platform: 'tiktok', tiktokAvatarUrl: '/api/tiktok-avatar.php?handle=c' }),
+      buildCard({ streamId: 'twitch:bare', platform: 'twitch' }),
+    );
+
+    const urls = collectShareCardAvatarUrls(root);
+    expect(urls.get('youtube:a')).toBe('https://yt3.ggpht.com/a.jpg');
+    expect(urls.get('kick:b')).toBe('https://files.kick.com/b.webp');
+    expect(urls.get('tiktok:c')).toBe('/api/tiktok-avatar.php?handle=c');
+    expect(urls.has('twitch:bare')).toBe(false);
   });
 });

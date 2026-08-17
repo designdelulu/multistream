@@ -91,6 +91,11 @@ directly.
 
 ## 6. TikTok LIVE — researched, correctly not implemented
 
+> **Superseded:** TikTok LIVE has since shipped experimentally (unofficial
+> resolver + `<video>` player) — [docs/TIKTOK.md](./TIKTOK.md) is the
+> current reference; the analysis below is kept as the historical record
+> of why it was originally deferred.
+
 `docs/TIKTOK.md` (new) documents why: TikTok's oEmbed API only resolves
 published `video/{id}` URLs, not a live room; the TikTok Live API is a
 partner metadata product, not an embed product. No unofficial
@@ -246,10 +251,10 @@ deploy/upload was performed — that remains the user's manual action per
 
 ## 15. Known limitations and recommended next steps
 
-- **Orientation resets to landscape on reload** (§11) — pre-existing,
-  not fixed this pass. Worth a dedicated follow-up if portrait/Shorts
-  usage grows, since a shared/reloaded link currently loses the
-  Shorts-aware layout until the stream is re-added fresh.
+- ~~**Orientation resets to landscape on reload** (§11)~~ — **fixed**:
+  orientation now persists through `localStorage` and the watch-party
+  payload, so a reloaded lineup or party view keeps Shorts portrait.
+  (Static path URLs deliberately remain platform+channel only.)
 - **Memory-leak absence cannot be proven with this tooling** (§8) — only
   DOM/registry-count stability was verified, stated explicitly rather
   than overclaimed.

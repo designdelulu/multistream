@@ -611,6 +611,22 @@ function resolve_tiktok_live(string $username): array
         }
     }
 
+    // TikTok sometimes publishes only HEVC pull URLs for a confirmed-live
+    // room. Standard H.264 candidates remain the first choice; HEVC is
+    // exposed only when the standard payload produced nothing playable.
+    if (empty($qualities) && is_string($hevcRaw) && $hevcRaw !== '') {
+        $parsedHevc = json_decode($hevcRaw, true);
+        if (is_array($parsedHevc) && isset($parsedHevc['data']) && is_array($parsedHevc['data'])) {
+            $extractedHevc = extract_qualities_from_stream_data($parsedHevc['data']);
+            if (!empty($extractedHevc['qualities'])) {
+                $qualities = $extractedHevc['qualities'];
+                $expiresAt = $extractedHevc['expiresAt'];
+                $diagnostics['flv_candidates'] = count(array_filter($qualities, fn($q) => $q['protocol'] === 'flv'));
+                $diagnostics['hls_candidates'] = count(array_filter($qualities, fn($q) => $q['protocol'] === 'hls'));
+            }
+        }
+    }
+
     // Room is confirmed live but the primary call exposed nothing playable —
     // try the bounded fallback (see API_LIVE_DETAIL_FALLBACK doc comment)
     // before giving up. Never attempted when the primary call already

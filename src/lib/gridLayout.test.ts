@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeFocusViewLayout,
   computeWeightedGridLayout,
+  COMPACT_TOOLBAR_HEIGHT,
   GRID_GAP,
   PORTRAIT_ROW_SPAN,
   targetVisibleTrayCount,
@@ -235,10 +236,52 @@ describe('computeFocusViewLayout', () => {
     expect(result.trayColumns * result.trayRows).toBeGreaterThanOrEqual(8);
   });
 
+  describe('row balancing (even rows over a left-aligned orphan)', () => {
+    // 1600px area fits 5 tray columns (targetVisibleTrayCount) before balancing.
+    it('8 secondaries at fit=5 becomes 2 even rows of 4, not 5+3', () => {
+      const result = computeFocusViewLayout(1600, 900, 'landscape', { secondaryCount: 8 });
+      expect(result.trayRows).toBe(2);
+      expect(result.trayColumns).toBe(4);
+    });
+
+    it('7 secondaries at fit=5 becomes a balanced 4+3 (not a left-aligned 5+2)', () => {
+      const result = computeFocusViewLayout(1600, 900, 'landscape', { secondaryCount: 7 });
+      expect(result.trayRows).toBe(2);
+      expect(result.trayColumns).toBe(4);
+    });
+
+    it('6 secondaries at fit=5 becomes two full rows of 3', () => {
+      const result = computeFocusViewLayout(1600, 900, 'landscape', { secondaryCount: 6 });
+      expect(result.trayRows).toBe(2);
+      expect(result.trayColumns).toBe(3);
+    });
+
+    it('a single secondary is one column, one row', () => {
+      const result = computeFocusViewLayout(1600, 900, 'landscape', { secondaryCount: 1 });
+      expect(result.trayRows).toBe(1);
+      expect(result.trayColumns).toBe(1);
+    });
+  });
+
   it('primary height leaves room for the tray (never overlaps it)', () => {
     const result = computeFocusViewLayout(1200, 800, 'landscape');
     expect(result.primaryHeight).toBeLessThan(800);
     expect(result.primaryHeight + result.trayHeight).toBeLessThanOrEqual(800);
+  });
+
+  it('budgets the fixed compact footer in every Focus row', () => {
+    expect(COMPACT_TOOLBAR_HEIGHT).toBe(30);
+    const result = computeFocusViewLayout(1200, 800, 'landscape', {
+      secondaryCount: 7,
+      chromeHeightPerRow: COMPACT_TOOLBAR_HEIGHT,
+    });
+    const occupied =
+      result.primaryHeight +
+      COMPACT_TOOLBAR_HEIGHT +
+      GRID_GAP +
+      result.trayRows * (result.trayHeight + COMPACT_TOOLBAR_HEIGHT) +
+      Math.max(0, result.trayRows - 1) * GRID_GAP;
+    expect(occupied).toBeLessThanOrEqual(800);
   });
 });
 

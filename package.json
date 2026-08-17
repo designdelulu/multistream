@@ -31,7 +31,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:php": "for f in tests/*.test.php; do php \"$f\" || exit 1; done",
+    "test:all": "vitest run && npm run test:php"
   },
   "devDependencies": {
     "@types/sortablejs": "^1.15.9",

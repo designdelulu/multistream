@@ -47,7 +47,6 @@ file_put_contents(
 define('KICK_CACHE_DIR', $cacheDir);
 define('KICK_CONFIG_PATH', $validConfigPath);
 define('KICK_STATUS_TESTING', true);
-
 $endpointFile = realpath(__DIR__ . '/../public/api/kick-status.php');
 if ($endpointFile === false) {
     fwrite(STDERR, "FAIL: could not locate public/api/kick-status.php\n");

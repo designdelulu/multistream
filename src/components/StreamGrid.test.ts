@@ -11,9 +11,12 @@ import {
   beginAddRemoveRecovery,
   beginFocusExitRecovery,
   bindFocusViewEntry,
+  bindTheaterViewEntry,
   bindFocusViewPromotion,
   bindFocusViewToggle,
   bindStreamRemoved,
+  bindStreamWentLive,
+  detectWentLive,
   getFocusedStreamId,
   getFocusViewPrimaryId,
   isStreamFocused,
@@ -25,6 +28,7 @@ import {
   refreshLoadedStreamPlayers,
   refreshTwitchStatus,
   refreshYouTubeStats,
+  resolveTikTokWithMissingStreamRetry,
   resumeVisibleStreamPlayers,
   filterLayoutVisibleStreamIds,
   isStreamCardLayoutVisible,
@@ -47,6 +51,7 @@ import type { StreamRef } from '../types';
 import type { KickStatusResult } from '../platforms/kickStatus';
 import type { TwitchStatusResult } from '../platforms/twitchStatus';
 import type { YouTubeStatsResult } from '../platforms/youtubeStats';
+import type { TikTokResolveResult } from '../platforms/tiktok';
 
 function liveResult(channel: string, overrides: Partial<TwitchStatusResult> = {}): TwitchStatusResult {
   return {
@@ -175,7 +180,7 @@ afterEach(() => {
   __resetPlaybackRecoveryForTests();
   __resetTwitchDurationTimerForTests();
   __resetYouTubeDurationTimerForTests();
-  document.documentElement.classList.remove('headers-hidden');
+  document.documentElement.classList.remove('headers-hidden', 'ipad-device', 'watch-party-viewer');
   document.body.innerHTML = '';
 });
 
@@ -235,6 +240,35 @@ describe('applyTwitchStatus — dot + meta rendering', () => {
     const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
     expect(meta?.hidden).toBe(false);
     expect(meta?.textContent).toBe('· 42 viewers · 37m');
+  });
+
+  it('does not render the stream title in the header meta or the dot tooltip', () => {
+    const { card } = buildTwitchCard('foo');
+    container.append(card);
+
+    applyTwitchStatus(container, new Map([['foo', liveResult('foo', { title: 'Road to Choco' })]]));
+
+    const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+    expect(meta?.textContent).toBe('· 42 viewers · 37m');
+    expect(card.dataset.twitchTitle).toBeUndefined();
+
+    const dot = card.querySelector<HTMLElement>('.stream-card__name-badge-dot');
+    expect(dot?.title).toBe('Live · Just Chatting · 42 viewers · 37m');
+    expect(dot?.getAttribute('aria-label')).toBe('Live · Just Chatting · 42 viewers · 37m');
+  });
+
+  it('clears the meta line when the stream goes offline', () => {
+    const { card } = buildTwitchCard('foo');
+    container.append(card);
+
+    applyTwitchStatus(container, new Map([['foo', liveResult('foo', { title: 'Road to Choco' })]]));
+    const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+    expect(meta?.hidden).toBe(false);
+
+    applyTwitchStatus(container, new Map([['foo', offlineResult('foo')]]));
+
+    expect(meta?.hidden).toBe(true);
+    expect(meta?.textContent).toBe('');
   });
 
   it('hides the meta span once no viewer count or duration is available', () => {
@@ -320,6 +354,41 @@ describe('applyTwitchStatus — dot + meta rendering', () => {
     expect(card.dataset.twitchViewerCount).toBeUndefined();
   });
 
+  it('keeps the live thumbnail on the card while live and drops it (plus its backdrop) when offline', () => {
+    const { card } = buildTwitchCard('foo');
+    container.append(card);
+
+    applyTwitchStatus(
+      container,
+      new Map([['foo', liveResult('foo', { thumbnailUrl: 'https://static-cdn.jtvnw.net/foo-live.jpg' })]]),
+    );
+
+    // Unlike the avatar, a thumbnail is a capture of current content — it
+    // must not outlive the live session (see applyTwitchStatus).
+    expect(card.dataset.twitchThumbnailUrl).toBe('https://static-cdn.jtvnw.net/foo-live.jpg');
+    const player = card.querySelector<HTMLElement>('.stream-card__player');
+    expect(player?.style.backgroundImage).toContain('foo-live.jpg');
+
+    applyTwitchStatus(container, new Map([['foo', offlineResult('foo')]]));
+
+    expect(card.dataset.twitchThumbnailUrl).toBeUndefined();
+    expect(player?.style.backgroundImage).toBe('');
+  });
+
+  it('strips url-breaking characters from the thumbnail before using it as a CSS background', () => {
+    const { card } = buildTwitchCard('foo');
+    container.append(card);
+
+    applyTwitchStatus(
+      container,
+      new Map([['foo', liveResult('foo', { thumbnailUrl: 'https://x.test/a");evil(.jpg' })]]),
+    );
+
+    const player = card.querySelector<HTMLElement>('.stream-card__player');
+    expect(player?.style.backgroundImage).not.toContain('evil(');
+    expect(player?.style.backgroundImage).not.toContain('");');
+  });
+
   it('leaves a card with no matching result untouched', () => {
     const { card } = buildTwitchCard('foo');
     container.append(card);
@@ -364,6 +433,79 @@ describe('applyTwitchStatus — dot + meta rendering', () => {
 
     expect(twitchCard.querySelector('.stream-card__name-badge-dot')?.className).toContain('--live');
     expect(kickCard.querySelector('.stream-card__name-badge-dot')).toBeNull();
+  });
+});
+
+describe('detectWentLive + bindStreamWentLive', () => {
+  it('is true only for a definitive offline → live flip', () => {
+    expect(detectWentLive('offline', 'live')).toBe(true);
+    // An API outage recovering must not flash every card "back live".
+    expect(detectWentLive('unavailable', 'live')).toBe(false);
+    // First-ever apply (page load with the channel already live) is not news.
+    expect(detectWentLive(undefined, 'live')).toBe(false);
+    expect(detectWentLive('live', 'live')).toBe(false);
+    expect(detectWentLive('offline', 'offline')).toBe(false);
+    expect(detectWentLive('not_found', 'live')).toBe(false);
+    expect(detectWentLive('live', 'offline')).toBe(false);
+  });
+
+  it('applyTwitchStatus fires the handler exactly on offline → live', () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const wentLive = vi.fn();
+    bindStreamWentLive(wentLive);
+
+    const { card } = buildTwitchCard('foo');
+    container.append(card);
+
+    applyTwitchStatus(container, new Map([['foo', offlineResult('foo')]]));
+    expect(wentLive).not.toHaveBeenCalled();
+
+    applyTwitchStatus(container, new Map([['foo', liveResult('foo')]]));
+    expect(wentLive).toHaveBeenCalledOnce();
+    expect(wentLive).toHaveBeenCalledWith(card);
+
+    // Staying live across later polls never re-fires.
+    applyTwitchStatus(container, new Map([['foo', liveResult('foo')]]));
+    expect(wentLive).toHaveBeenCalledOnce();
+  });
+
+  it('applyTwitchStatus does not fire on first apply, or on unavailable → live', () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const wentLive = vi.fn();
+    bindStreamWentLive(wentLive);
+
+    const firstApply = buildTwitchCard('foo');
+    container.append(firstApply.card);
+    applyTwitchStatus(container, new Map([['foo', liveResult('foo')]]));
+    expect(wentLive).not.toHaveBeenCalled();
+
+    const { card } = buildTwitchCard('bar');
+    container.append(card);
+    applyTwitchStatus(container, new Map([['bar', unavailableResult('bar')]]));
+    applyTwitchStatus(container, new Map([['bar', liveResult('bar')]]));
+    expect(wentLive).not.toHaveBeenCalled();
+  });
+
+  it('applyKickStatus fires the handler on offline → live', () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const wentLive = vi.fn();
+    bindStreamWentLive(wentLive);
+
+    const { card } = buildKickCard('deenthegreat');
+    container.append(card);
+
+    applyKickStatus(
+      container,
+      new Map([['deenthegreat', { status: 'offline', input: 'deenthegreat', normalized: 'deenthegreat' }]]),
+    );
+    expect(wentLive).not.toHaveBeenCalled();
+
+    applyKickStatus(container, new Map([['deenthegreat', kickLive('deenthegreat')]]));
+    expect(wentLive).toHaveBeenCalledOnce();
+    expect(wentLive).toHaveBeenCalledWith(card);
   });
 });
 
@@ -481,7 +623,7 @@ describe('applyYouTubeStats — meta rendering', () => {
     document.body.append(container);
   });
 
-  it('renders viewer count + duration on the header meta span for a live result', () => {
+  it('renders viewer count + duration on the header meta span (no title)', () => {
     const { card } = buildYouTubeCard('abc123');
     container.append(card);
 
@@ -490,6 +632,7 @@ describe('applyYouTubeStats — meta rendering', () => {
     const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
     expect(meta?.hidden).toBe(false);
     expect(meta?.textContent).toBe('· 42 viewers · 37m');
+    expect(card.dataset.youtubeTitle).toBeUndefined();
   });
 
   it('clears viewer count + duration once the video is no longer live', () => {
@@ -1673,6 +1816,187 @@ describe('syncViewMode / setFocusViewPrimary — DOM identity across Grid <-> Fo
     document.body.append(container);
   });
 
+  it('centers a partial last tray row by offsetting only its first card, and clears the offset for full rows', async () => {
+    const streamArea = document.createElement('div');
+    streamArea.className = 'stream-area';
+    container.remove();
+    streamArea.append(container);
+    document.body.append(streamArea);
+    Object.defineProperty(streamArea, 'clientWidth', { configurable: true, get: () => 1600 });
+    Object.defineProperty(streamArea, 'clientHeight', { configurable: true, get: () => 900 });
+
+    // 8 streams = 1 primary + 7 secondaries. At this width fitColumns=5, but
+    // row-balancing (gridLayout.ts) turns that into 2 rows of 4 -> a partial
+    // last row of 3 (see the matching 'row balancing' case in
+    // gridLayout.test.ts), which should get centered via grid-column-start.
+    const partialStreams: StreamRef[] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(partialStreams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(8),
+    );
+    syncViewMode(container, 'focus', partialStreams);
+    updateGridLayout(container);
+
+    const trayColumns = Number.parseInt(container.style.getPropertyValue('--focus-tray-count'), 10);
+    expect(trayColumns).toBe(4);
+    const trayCards = [
+      ...container.querySelectorAll<HTMLElement>('.stream-card:not(.is-focus-primary)'),
+    ];
+    const offsetCards = trayCards.filter((card) => card.style.gridColumn !== '');
+    expect(offsetCards).toHaveLength(1);
+    expect(offsetCards[0]).toBe(trayCards[4]);
+    // Full shorthand (start AND span), not just grid-column-start — see
+    // updateFocusViewLayout's comment on why the longhand alone would drop
+    // the span-2 from main.css's `grid-column: span 2` shorthand quirk.
+    expect(offsetCards[0]?.style.gridColumn).toBe('2 / span 2');
+
+    // 9 streams = 1 primary + 8 secondaries -> 2 even rows of 4 (no partial
+    // last row) — re-running layout must clear the previous offset rather
+    // than leaving it stranded on a card that no longer starts a partial row.
+    const evenStreams: StreamRef[] = [...partialStreams, {
+      id: 'twitch:i',
+      platform: 'twitch',
+      channel: 'i',
+      muted: true,
+      orientation: 'landscape',
+    }];
+    syncStreamGrid(container, fakeStore(evenStreams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(9),
+    );
+    syncViewMode(container, 'focus', evenStreams);
+    updateGridLayout(container);
+
+    const trayCardsAfter = [
+      ...container.querySelectorAll<HTMLElement>('.stream-card:not(.is-focus-primary)'),
+    ];
+    expect(trayCardsAfter.every((card) => card.style.gridColumn === '')).toBe(true);
+
+    streamArea.remove();
+    document.body.append(container);
+  });
+
+  it('clears a partial-row grid-column offset from a card promoted to primary', async () => {
+    const streamArea = document.createElement('div');
+    streamArea.className = 'stream-area';
+    container.remove();
+    streamArea.append(container);
+    document.body.append(streamArea);
+    Object.defineProperty(streamArea, 'clientWidth', { configurable: true, get: () => 1600 });
+    Object.defineProperty(streamArea, 'clientHeight', { configurable: true, get: () => 900 });
+
+    const partialStreams: StreamRef[] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(partialStreams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(8),
+    );
+    syncViewMode(container, 'focus', partialStreams);
+    updateGridLayout(container);
+
+    const trayCards = [
+      ...container.querySelectorAll<HTMLElement>('.stream-card:not(.is-focus-primary)'),
+    ];
+    const offsetCard = trayCards.find((card) => card.style.gridColumn !== '');
+    expect(offsetCard).toBeDefined();
+    expect(offsetCard?.style.gridColumn).toBe('2 / span 2');
+    const offsetStreamId = offsetCard!.dataset.streamId!;
+
+    setFocusViewPrimary(container, offsetStreamId);
+    updateGridLayout(container);
+
+    const promotedPrimary = container.querySelector<HTMLElement>(
+      `[data-stream-id="${offsetStreamId}"].is-focus-primary`,
+    );
+    expect(promotedPrimary?.style.gridColumn).toBe('');
+
+    streamArea.remove();
+    document.body.append(container);
+  });
+
+  it('clears tray grid-column offsets when exiting Theater to the grid', async () => {
+    const streamArea = document.createElement('div');
+    streamArea.className = 'stream-area';
+    container.remove();
+    streamArea.append(container);
+    document.body.append(streamArea);
+    Object.defineProperty(streamArea, 'clientWidth', { configurable: true, get: () => 1600 });
+    Object.defineProperty(streamArea, 'clientHeight', { configurable: true, get: () => 900 });
+
+    const partialStreams: StreamRef[] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(partialStreams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(8),
+    );
+    syncViewMode(container, 'focus', partialStreams);
+    updateGridLayout(container);
+    expect(
+      [...container.querySelectorAll<HTMLElement>('.stream-card')].some(
+        (card) => card.style.gridColumn !== '',
+      ),
+    ).toBe(true);
+
+    syncViewMode(container, 'grid', partialStreams);
+
+    expect(
+      [...container.querySelectorAll<HTMLElement>('.stream-card')].every(
+        (card) => card.style.gridColumn === '',
+      ),
+    ).toBe(true);
+    expect(container.style.getPropertyValue('--focus-primary-width')).toBe('');
+
+    streamArea.remove();
+    document.body.append(container);
+  });
+
+  it('maps store focus to solo theater display on iPad', async () => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X)',
+      platform: 'iPad',
+      maxTouchPoints: 5,
+    });
+    document.documentElement.classList.add('ipad-device');
+    const streams: StreamRef[] = ['a', 'b', 'c'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(3),
+    );
+
+    syncViewMode(container, 'focus', streams);
+    expect(container.dataset.viewMode).toBe('theater');
+    expect(
+      isStreamCardLayoutVisible(container.querySelector('[data-stream-id="twitch:a"]')!),
+    ).toBe(true);
+    expect(
+      isStreamCardLayoutVisible(container.querySelector('[data-stream-id="twitch:b"]')!),
+    ).toBe(false);
+
+    document.documentElement.classList.remove('ipad-device');
+  });
+
   it('a portrait stream keeps data-orientation="portrait" through a Grid <-> Focus toggle (Focus View sizes it by aspect ratio alone, per gridLayout.ts)', async () => {
     const streams: StreamRef[] = [
       { id: 'twitch:land', platform: 'twitch', channel: 'land', muted: true, orientation: 'landscape' },
@@ -2165,6 +2489,16 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
   }
 
   function enterTheater(container: HTMLElement, streamId: string, streams: StreamRef[]): void {
+    bindTheaterViewEntry((id) => {
+      setFocusViewPrimary(container, id);
+      syncViewMode(container, 'focus', streams);
+    });
+    container
+      .querySelector<HTMLButtonElement>(`[data-stream-id="${streamId}"] .stream-card__theater`)!
+      .click();
+  }
+
+  function enterFocus(container: HTMLElement, streamId: string, streams: StreamRef[]): void {
     bindFocusViewEntry((id) => {
       setFocusViewPrimary(container, id);
       syncViewMode(container, 'theater', streams);
@@ -2216,7 +2550,7 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
 
     enterTheater(container, 'twitch:xqc', streams);
 
-    expect(container.dataset.viewMode).toBe('theater');
+    expect(container.dataset.viewMode).toBe('focus');
     expect(card.dataset.embedMuted).toBe('0');
     expect(player.setMutedCalls.at(-1)).toBe(false);
     expect(player.setVolumeCalls.at(-1)).toBe(0.25);
@@ -2224,20 +2558,43 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
     expect(createdTwitchPlayers).toHaveLength(1);
   });
 
-  it('Twitch fallback mode (no live Player API) is left untouched on Theater entry — no reload, no iframe src mutation, stays muted', () => {
+  it('Twitch fallback mode reloads unmuted on Theater entry — one-time focus-unmute remount, same as Focus entry', () => {
     const streams: StreamRef[] = [
       { id: 'twitch:xqc', platform: 'twitch', channel: 'xqc', muted: true, orientation: 'landscape' },
     ];
     syncStreamGrid(container, fakeStore(streams));
     const card = container.querySelector<HTMLElement>('[data-stream-id="twitch:xqc"]')!;
+    const mount = card.querySelector<HTMLElement>('.stream-card__iframe')!;
+    const iframe = document.createElement('iframe');
+    iframe.className = 'stream-card__iframe';
+    iframe.src = 'https://player.twitch.tv/?channel=xqc&muted=true&parent=localhost';
+    mount.replaceWith(iframe);
     card.dataset.twitchMode = 'fallback';
-    const iframe = card.querySelector<HTMLIFrameElement>('iframe');
-    const srcBefore = iframe?.src;
+    const srcBefore = iframe.src;
 
     enterTheater(container, 'twitch:xqc', streams);
 
-    expect(card.dataset.embedMuted).toBe('1');
-    expect(card.querySelector<HTMLIFrameElement>('iframe')?.src).toBe(srcBefore);
+    const nextIframe = card.querySelector<HTMLIFrameElement>('iframe')!;
+    expect(card.dataset.embedMuted).toBe('0');
+    expect(nextIframe.src).not.toBe(srcBefore);
+    expect(nextIframe.src).not.toContain('muted=true');
+  });
+
+  it("clicking a muted Twitch card's Focus control unmutes it at the shared default (25%) — same path as Theater entry", async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:xqc', platform: 'twitch', channel: 'xqc', muted: true, orientation: 'landscape' },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(1));
+    const player = createdTwitchPlayers[0];
+    const card = container.querySelector<HTMLElement>('[data-stream-id="twitch:xqc"]')!;
+
+    enterFocus(container, 'twitch:xqc', streams);
+
+    expect(container.dataset.viewMode).toBe('theater');
+    expect(card.dataset.embedMuted).toBe('0');
+    expect(player.setMutedCalls.at(-1)).toBe(false);
+    expect(player.setVolumeCalls.at(-1)).toBe(0.25);
   });
 
   it("clicking a muted YouTube card's Theater/expand control unmutes it via the live player's own unMute/setVolume, at the shared default (25)", async () => {
@@ -2323,7 +2680,7 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
     expect(card.dataset.embedMuted).toBe('1');
   });
 
-  it('promoting a different stream to primary, or toggling Theater<->Focus on the current primary, does not re-fire the entry unmute (only the deliberate Theater-entry click does)', async () => {
+  it('promoting a tray stream in Theater mode unmutes the new primary and mutes the former primary', async () => {
     const streams: StreamRef[] = [
       { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
       { id: 'twitch:b', platform: 'twitch', channel: 'b', muted: true, orientation: 'landscape' },
@@ -2338,18 +2695,35 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
     expect(cardA.dataset.embedMuted).toBe('0');
     expect(playerA.setMutedCalls).toEqual([false]);
 
-    // Re-mute manually (simulates the viewer choosing to mute it back), then
-    // promote b to primary — a plain layout promotion, not a fresh Theater
-    // entry, so it must not force a's or b's audio to change.
-    cardA.dataset.embedMuted = '1';
-    playerA.setMuted(true);
     setFocusViewPrimary(container, 'twitch:b');
+    expect(cardB.dataset.embedMuted).toBe('0');
+    expect(cardA.dataset.embedMuted).toBe('1');
+    expect(playerB.setMutedCalls).toEqual([false]);
+    expect(playerB.setVolumeCalls.at(-1)).toBe(0.25);
     expect(playerA.setMutedCalls).toEqual([false, true]);
-    expect(playerB.setMutedCalls).toEqual([]);
-    expect(cardB.dataset.embedMuted).toBe('1');
   });
 
-  it('Full Window ↔ Theater keeps the same primary card, iframe, and Twitch.Player', async () => {
+  it('promoting a tray stream in solo Focus mode does not swap audio (tray is hidden)', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+      { id: 'twitch:b', platform: 'twitch', channel: 'b', muted: true, orientation: 'landscape' },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    const [playerA, playerB] = createdTwitchPlayers;
+    const cardA = container.querySelector<HTMLElement>('[data-stream-id="twitch:a"]')!;
+    const cardB = container.querySelector<HTMLElement>('[data-stream-id="twitch:b"]')!;
+
+    enterFocus(container, 'twitch:a', streams);
+    expect(cardA.dataset.embedMuted).toBe('0');
+
+    setFocusViewPrimary(container, 'twitch:b');
+    expect(cardB.dataset.embedMuted).toBe('1');
+    expect(playerB.setMutedCalls).toEqual([]);
+    expect(playerA.setMutedCalls).toEqual([false]);
+  });
+
+  it('toggling Theater<->Focus on the current primary does not re-fire tray-promotion audio swap', async () => {
     const streams: StreamRef[] = [
       { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
       { id: 'twitch:b', platform: 'twitch', channel: 'b', muted: true, orientation: 'landscape' },
@@ -2357,7 +2731,7 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
     syncStreamGrid(container, fakeStore(streams));
     await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
     const player = createdTwitchPlayers[0];
-    enterTheater(container, 'twitch:a', streams);
+    enterFocus(container, 'twitch:a', streams);
 
     const card = container.querySelector<HTMLElement>('[data-stream-id="twitch:a"]')!;
     const mount = card.querySelector<HTMLElement>('.stream-card__iframe')!;
@@ -2368,7 +2742,7 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
       syncViewMode(container, next, streams);
     });
 
-    card.querySelector<HTMLButtonElement>('.stream-card__focus')!.click();
+    card.querySelector<HTMLButtonElement>('.stream-card__theater')!.click();
     expect(container.dataset.viewMode).toBe('focus');
     expect(container.querySelector('[data-stream-id="twitch:a"]')).toBe(card);
     expect(card.querySelector('.stream-card__iframe')).toBe(mount);
@@ -2381,23 +2755,61 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
     expect(createdTwitchPlayers).toHaveLength(2);
   });
 
-  it('Full Window primary control becomes a film icon labeled Enter Theater Mode', async () => {
+  it('grid Theater button is labeled Enter Theater Mode and primary Theater reflects tray state', async () => {
     const streams: StreamRef[] = [
       { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
     ];
     syncStreamGrid(container, fakeStore(streams));
     await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(1));
-    const button = container.querySelector<HTMLButtonElement>('[data-stream-id="twitch:a"] .stream-card__focus')!;
-    expect(button.title).toBe('Focus stream');
+    const theaterButton = container.querySelector<HTMLButtonElement>('[data-stream-id="twitch:a"] .stream-card__theater')!;
+    const focusButton = container.querySelector<HTMLButtonElement>('[data-stream-id="twitch:a"] .stream-card__focus')!;
+    expect(theaterButton.title).toBe('Enter Theater Mode');
+    expect(focusButton.title).toBe('Focus stream');
 
-    enterTheater(container, 'twitch:a', streams);
-    expect(button.title).toBe('Enter Theater Mode');
-    expect(button.getAttribute('aria-label')).toBe('Enter Theater Mode');
-    expect(button.innerHTML).toContain('rect');
+    enterFocus(container, 'twitch:a', streams);
+    expect(theaterButton.title).toBe('Enter Theater Mode');
+    expect(focusButton.title).toBe('Focus stream');
+    expect(focusButton.getAttribute('aria-pressed')).toBe('true');
 
     syncViewMode(container, 'focus', streams);
-    expect(button.title).toBe('Exit Theater Mode');
-    expect(button.getAttribute('aria-label')).toBe('Exit Theater Mode');
+    expect(theaterButton.title).toBe('Exit Theater Mode');
+    expect(theaterButton.getAttribute('aria-label')).toBe('Exit Theater Mode');
+    expect(focusButton.getAttribute('aria-pressed')).toBe('false');
+  });
+});
+
+describe('resolveTikTokWithMissingStreamRetry', () => {
+  function result(state: TikTokResolveResult['state']): TikTokResolveResult {
+    return {
+      state,
+      live: state === 'live',
+      username: 'creator',
+      title: null,
+      qualities: [],
+      expiresAt: null,
+    };
+  }
+
+  it.each(['no_stream_data', 'no_playable_streams'] as const)(
+    'retries %s exactly once',
+    async (state) => {
+      const resolve = vi
+        .fn<() => Promise<TikTokResolveResult>>()
+        .mockResolvedValueOnce(result(state))
+        .mockResolvedValueOnce(result('live'));
+      const wait = vi.fn().mockResolvedValue(undefined);
+      expect(await resolveTikTokWithMissingStreamRetry(resolve, wait)).toEqual(result('live'));
+      expect(resolve).toHaveBeenCalledTimes(2);
+      expect(wait).toHaveBeenCalledWith(1200);
+    },
+  );
+
+  it('does not retry other resolver states', async () => {
+    const resolve = vi.fn().mockResolvedValue(result('offline'));
+    const wait = vi.fn().mockResolvedValue(undefined);
+    expect(await resolveTikTokWithMissingStreamRetry(resolve, wait)).toEqual(result('offline'));
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(wait).not.toHaveBeenCalled();
   });
 });
 
@@ -2472,6 +2884,24 @@ describe('bindStreamRemoved — Undo hook fires with the removed stream and its 
     overlayRemove.click();
 
     expect(calls).toEqual([{ id: 'kick:a', index: 0 }]);
+  });
+
+  it('fires from the iPad circular X with the same remove behavior', async () => {
+    const streams: StreamRef[] = [
+      { id: 'kick:a', platform: 'kick', channel: 'a', muted: true, orientation: 'landscape' },
+    ];
+    const store = fakeRemovableStore(streams);
+    syncStreamGrid(container, store);
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(1),
+    );
+
+    const calls: Array<{ id: string; index: number }> = [];
+    bindStreamRemoved((removed, index) => calls.push({ id: removed.id, index }));
+    container.querySelector<HTMLButtonElement>('.stream-card__ipad-close')!.click();
+
+    expect(calls).toEqual([{ id: 'kick:a', index: 0 }]);
+    expect(store.getStreams()).toEqual([]);
   });
 });
 
@@ -2670,10 +3100,10 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
     const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
     expect(withoutComments).toMatch(
-      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\)\s+\.stream-card\s*\{[^}]*height:\s*var\(--player-height/,
+      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\)\s+\.stream-card\s*\{[^}]*height:\s*calc\(var\(--player-height,\s*0px\)\s*\+\s*var\(--toolbar-open-height\)\)/,
     );
     expect(withoutComments).toMatch(
-      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\):not\(:empty\)\s+\.stream-card__player\s*\{[^}]*height:\s*auto\s*!important/,
+      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\):not\(:empty\)\s+\.stream-card__player\s*\{[^}]*height:\s*var\(--player-height,\s*auto\)\s*!important/,
     );
     expect(withoutComments).toMatch(
       /\.stream-grid\[data-view-mode='theater'\] \.stream-card\.is-focus-primary \{[^}]*align-self:\s*center/,
@@ -2692,6 +3122,26 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     );
     expect(withoutComments).toMatch(
       /html\.headers-hidden[\s\S]*?\[data-view-mode='theater'\][\s\S]*?--focus-primary-height/,
+    );
+  });
+
+  it('keeps iPad headerless with only a neutral circular X and no viewer close control', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    expect(withoutComments).toMatch(
+      /html\.ipad-device\s+\.stream-card__header,\s*html\.ipad-device\s+\.stream-card__toolbar\s*\{[^}]*display:\s*none\s*!important/,
+    );
+    expect(withoutComments).toMatch(
+      /html\.ipad-device\s+\.stream-card__ipad-close\s*\{[^}]*border-radius:\s*50%[^}]*color:\s*var\(--muted\)/,
+    );
+    expect(withoutComments).toMatch(
+      /html\.ipad-device\.watch-party-viewer\s+\.stream-card__ipad-close\s*\{[^}]*display:\s*none/,
+    );
+    expect(withoutComments).toMatch(
+      /\.stream-card__overlay-remove\s*\{[^}]*color:\s*var\(--muted\)/,
     );
   });
 
@@ -2736,7 +3186,7 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(html).toMatch(/matchMedia\('\(max-width: 640px\)'\)/);
     expect(html).toContain('class="site-intro__desktop-only"');
     expect(withoutComments).toMatch(
-      /@media \(max-width:\s*640px\)[\s\S]*?\.stream-card__focus,\s*\.stream-card__overlay-focus\s*\{[^}]*display:\s*none/,
+      /@media \(max-width:\s*640px\)[\s\S]*?\.stream-card__theater,\s*\.stream-card__focus,\s*\.stream-card__overlay-theater,\s*\.stream-card__overlay-focus\s*\{[^}]*display:\s*none/,
     );
     expect(withoutComments).toMatch(
       /@media \(max-width:\s*640px\)[\s\S]*?\.toolbar__share-menu\s*\{[^}]*left:\s*0/,
@@ -2882,6 +3332,44 @@ describe('applyKickStatus — metadata rendering', () => {
     const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
     expect(meta?.textContent).toBe('· 8.2K viewers · 2h 17m');
     expect(meta?.hidden).toBe(false);
+  });
+
+  it('does not render the stream title in the header meta or the dot tooltip', () => {
+    const { card } = buildKickCard('deenthegreat');
+    container.append(card);
+
+    applyKickStatus(
+      container,
+      new Map([['deenthegreat', kickLive('deenthegreat', { title: 'Deen Hour' })]]),
+    );
+
+    const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+    expect(meta?.textContent).toBe('· 8.2K viewers · 2h 17m');
+    expect(card.dataset.kickTitle).toBeUndefined();
+
+    const dot = card.querySelector<HTMLElement>('.stream-card__name-badge-dot');
+    expect(dot?.title).toBe('Live · Just Chatting · 8.2K viewers · 2h 17m');
+    expect(dot?.getAttribute('aria-label')).toBe('Live · Just Chatting · 8.2K viewers · 2h 17m');
+  });
+
+  it('clears the meta line when the channel goes offline', () => {
+    const { card } = buildKickCard('deenthegreat');
+    container.append(card);
+
+    applyKickStatus(
+      container,
+      new Map([['deenthegreat', kickLive('deenthegreat', { title: 'Deen Hour' })]]),
+    );
+    const meta = card.querySelector<HTMLElement>('.stream-card__name-badge-meta');
+    expect(meta?.hidden).toBe(false);
+
+    applyKickStatus(
+      container,
+      new Map([['deenthegreat', { status: 'offline', input: 'deenthegreat', normalized: 'deenthegreat' }]]),
+    );
+
+    expect(meta?.hidden).toBe(true);
+    expect(meta?.textContent).toBe('');
   });
 
   it('marks every name-badge dot live and drops the decorative-only state', () => {
@@ -3193,6 +3681,20 @@ describe('portrait grid row-track height (--grid-row-height)', () => {
     expect(rowHeight - playerHeight).toBeLessThan(CARD_HEADER_HEIGHT + 1);
   });
 
+  it('reserves no hidden header or footer height on iPad', async () => {
+    document.documentElement.classList.add('ipad-device');
+    const streams = mixedLineup();
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(4));
+
+    updateGridLayout(container);
+
+    const playerHeight = Number.parseFloat(container.style.getPropertyValue('--player-height'));
+    const rowHeight = Number.parseFloat(container.style.getPropertyValue('--grid-row-height'));
+    expect(rowHeight - playerHeight).toBeGreaterThanOrEqual(0);
+    expect(rowHeight - playerHeight).toBeLessThan(1);
+  });
+
   it('keeps the player box itself exactly 16:9 so a landscape embed has no app-created side gutters', async () => {
     const streams = mixedLineup();
     syncStreamGrid(container, fakeStore(streams));
@@ -3444,16 +3946,21 @@ describe('phone visible playback (scroll-to-play)', () => {
     expect(createdYouTubePlayers[0].playCallCount).toBeGreaterThan(0);
   });
 
-  it('does not enter Theater when a card Focus control is clicked on a phone viewport', async () => {
+  it('does not enter Theater or Focus when card view controls are clicked on a phone viewport', async () => {
     const streams: StreamRef[] = [
       { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
     ];
     syncStreamGrid(container, fakeStore(streams));
     await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(1));
-    const entry = vi.fn();
-    bindFocusViewEntry(entry);
-    container.querySelector<HTMLButtonElement>('[data-stream-id="twitch:a"] .stream-card__focus')!.click();
-    expect(entry).not.toHaveBeenCalled();
+    const theaterEntry = vi.fn();
+    const focusEntry = vi.fn();
+    bindTheaterViewEntry(theaterEntry);
+    bindFocusViewEntry(focusEntry);
+    const card = container.querySelector<HTMLElement>('[data-stream-id="twitch:a"]')!;
+    card.querySelector<HTMLButtonElement>('.stream-card__theater')!.click();
+    card.querySelector<HTMLButtonElement>('.stream-card__focus')!.click();
+    expect(theaterEntry).not.toHaveBeenCalled();
+    expect(focusEntry).not.toHaveBeenCalled();
     expect(container.dataset.viewMode).not.toBe('theater');
     expect(container.dataset.viewMode).not.toBe('focus');
   });

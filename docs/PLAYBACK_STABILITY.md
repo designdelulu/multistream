@@ -223,6 +223,37 @@ on the production bundle (OS-level key injection does not reach the page
 in this sandbox — a tooling limitation, not something the fix depends
 on).
 
+## Theater tray promotion — primary audio handoff
+
+**Behavior**: in Theater mode (primary plus tray visible), promoting a
+tray stream via its header (`setFocusViewPrimary`, `StreamGrid.ts`)
+resizes only — no remount — but also **unmutes the new primary at the
+shared default volume (25%)** and **mutes the stream that drops into the
+tray**. Solo Focus (primary only, tray hidden) does not swap audio on
+promotion because the tray is not active.
+
+**Regression coverage**: `StreamGrid.test.ts`'s Theater-entry suite includes
+`'promoting a tray stream in Theater mode unmutes the new primary and mutes
+the former primary'` and a companion test asserting solo Focus promotion
+leaves tray audio unchanged.
+
+## Theater tray layout — partial-row grid-column cleanup
+
+**Symptom**: promoting a tray card from a partial last row (centered via
+inline `grid-column`) could leave that offset on the new primary, breaking
+Theater layout (cards floating left under the primary). Exiting Theater
+via the primary × could leave the offset on grid cards, producing
+double-width tiles until a hard refresh.
+
+**Fix**: `updateFocusViewLayout` clears `grid-column` on every card before
+re-applying the partial-row offset; `setFocusViewPrimary` clears it on the
+promoted card; `syncViewMode(..., 'grid')` and the ordinary grid branch in
+`updateGridLayout` clear stray offsets when returning to the grid.
+
+**Regression coverage**: `StreamGrid.test.ts` includes tests for promoting
+a partial-row offset card, exiting Theater to grid with all offsets cleared,
+and iPad store-`focus` → display-`theater` solo layout.
+
 ## Remaining limitation
 
 This closes the specific gap that had no recovery path at all. It does

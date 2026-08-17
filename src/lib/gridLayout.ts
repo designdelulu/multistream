@@ -11,6 +11,8 @@ export type StreamOrientation = 'landscape' | 'portrait';
 export const GRID_GAP = 12;
 export const GRID_PADDING = 24;
 export const CARD_HEADER_HEIGHT = 42;
+/** Fixed compact control strip rendered below players while headers are hidden. */
+export const COMPACT_TOOLBAR_HEIGHT = 30;
 export const MAX_GRID_COLUMNS = 4;
 
 /**
@@ -232,8 +234,11 @@ export function computeFocusViewLayout(
     const fitColumns = targetVisibleTrayCount(areaWidth);
     const secondaries = options.secondaryCount ?? fitColumns;
     if (secondaries > 0) {
-      trayColumns = Math.max(1, Math.min(secondaries, fitColumns));
-      trayRows = Math.ceil(secondaries / trayColumns);
+      // Pick the row count first, then spread items evenly across it (e.g. 8
+      // secondaries at fitColumns=5 becomes 2 rows of 4, not a 5+3 orphan) —
+      // this is what lets the last row center cleanly in main.css/StreamGrid.ts.
+      trayRows = Math.ceil(secondaries / fitColumns);
+      trayColumns = Math.max(1, Math.ceil(secondaries / trayRows));
       const provisionalColumnWidth = Math.max(
         64,
         Math.floor((areaWidth - gap * (trayColumns - 1)) / trayColumns),

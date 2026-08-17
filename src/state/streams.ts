@@ -5,7 +5,7 @@ import {
   streamsFromPathname,
   streamsFromSearch,
 } from '../platforms';
-import type { Platform, StreamRef } from '../types';
+import type { Platform, StreamOrientation, StreamRef } from '../types';
 
 type Listener = () => void;
 
@@ -16,21 +16,36 @@ function createId(platform: string, channel: string): string {
 }
 
 /**
- * Every restore path (URL path/query, localStorage) only ever carries
- * platform+channel — never the raw input string a user originally typed —
- * so a YouTube Shorts link loses its portrait hint on reload. That's a
- * deliberate, documented limitation (see StreamOrientation's doc comment in
- * types.ts): only a fresh addStream() call in the current session (which
- * still has the raw input) can detect it. TikTok doesn't have this problem —
- * every TikTok stream is LIVE and LIVE is always portrait, so orientation is
- * derivable from platform alone on every path, restore included.
+ * A stream as carried by restore/sync paths (localStorage, live-party
+ * payloads): everything but the derived fields, plus an optional
+ * orientation. URL path/query shares are the deliberate exception — they
+ * stay platform+channel only, so a shared static link still falls back to
+ * the platform-derived default.
  */
-function toStreamRefs(items: Omit<StreamRef, 'id' | 'muted' | 'orientation'>[]): StreamRef[] {
+type RestoredStream = Omit<StreamRef, 'id' | 'muted' | 'orientation'> & {
+  orientation?: StreamOrientation;
+};
+
+/**
+ * localStorage and live-party payloads DO carry orientation (persistStreams
+ * writes it; watch-party.php validates it), so a YouTube Shorts link's
+ * portrait hint now survives reload and party sync — that used to be a
+ * documented loss (only a fresh addStream() in the current session had the
+ * raw input to detect it from). TikTok never needs the hint: every TikTok
+ * stream is LIVE and LIVE is always portrait, so the platform rule wins
+ * over anything stored.
+ */
+function toStreamRefs(items: RestoredStream[]): StreamRef[] {
   return items.map((item) => ({
     ...item,
     id: createId(item.platform, item.channel),
     muted: true,
-    orientation: item.platform === 'tiktok' ? 'portrait' : 'landscape',
+    orientation:
+      item.platform === 'tiktok'
+        ? 'portrait'
+        : item.orientation === 'portrait'
+          ? 'portrait'
+          : 'landscape',
   }));
 }
 
@@ -42,24 +57,36 @@ function detectOrientation(platform: Platform, rawInput: string): StreamRef['ori
   return YOUTUBE_SHORTS_RE.test(rawInput) ? 'portrait' : 'landscape';
 }
 
-function loadFromStorage(): Omit<StreamRef, 'id' | 'muted' | 'orientation'>[] {
+function loadFromStorage(): RestoredStream[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is { platform: Platform; channel: string } =>
-        Boolean(
-          item &&
-            typeof item === 'object' &&
-            ((item as { platform?: string }).platform === 'twitch' ||
-              (item as { platform?: string }).platform === 'kick' ||
-              (item as { platform?: string }).platform === 'youtube' ||
-              (item as { platform?: string }).platform === 'tiktok') &&
-            typeof (item as { channel?: string }).channel === 'string',
-        ),
-    );
+    const out: RestoredStream[] = [];
+    for (const item of parsed as unknown[]) {
+      if (!item || typeof item !== 'object') continue;
+      const platform = (item as { platform?: unknown }).platform;
+      const channel = (item as { channel?: unknown }).channel;
+      if (
+        platform !== 'twitch' &&
+        platform !== 'kick' &&
+        platform !== 'youtube' &&
+        platform !== 'tiktok'
+      ) {
+        continue;
+      }
+      if (typeof channel !== 'string') continue;
+      // Orientation persisted by an older/newer build: unknown values are
+      // dropped to the platform-derived default rather than trusted.
+      const orientation = (item as { orientation?: unknown }).orientation;
+      out.push({
+        platform,
+        channel,
+        ...(orientation === 'portrait' || orientation === 'landscape' ? { orientation } : {}),
+      });
+    }
+    return out;
   } catch {
     return [];
   }
@@ -74,7 +101,7 @@ function persistStreams(streams: StreamRef[], enabled: boolean): void {
     }
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify(streams.map(({ platform, channel }) => ({ platform, channel }))),
+      JSON.stringify(streams.map(({ platform, channel, orientation }) => ({ platform, channel, orientation }))),
     );
   } catch {
     // Ignore storage failures.
@@ -228,10 +255,11 @@ export function createStreamStore() {
 
     /**
      * Replace the whole lineup from a live-party snapshot. Same restore
-     * rules as a URL/localStorage load (TikTok stays portrait; YouTube
-     * Shorts orientation is not in the payload — see toStreamRefs).
+     * rules as a URL/localStorage load (TikTok stays portrait; the party
+     * payload carries per-stream orientation, so a host's YouTube Shorts
+     * arrive portrait for viewers too — see toStreamRefs).
      */
-    replaceLineup(items: Omit<StreamRef, 'id' | 'muted' | 'orientation'>[]): void {
+    replaceLineup(items: RestoredStream[]): void {
       setStreams(toStreamRefs(items));
     },
 

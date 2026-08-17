@@ -11,15 +11,7 @@
   --tiktok: #fe2c55;
   --danger: #ff5d5d;
   --status-live: #3ddc84;
-  /*
-   * Height the headers-hidden hover toolbar opens to, and therefore exactly
-   * how much height the player gives up during a hover. Read in two places
-   * that must never disagree: the toolbar's own open height, and Kick's
-   * hover re-scale (which has to fit the shrunk box or its bottom chrome
-   * clips). Was 40px when this bar also held a reload button and a drag
-   * handle; a text label plus four 26px buttons still fits in 30px because
-   * the buttons set the bar's cross-axis size, not its own font metrics.
-   */
+  /* Fixed compact controls below each player while headers are hidden. */
   --toolbar-open-height: 30px;
   --radius: 10px;
   --grid-columns: 2;
@@ -159,6 +151,7 @@ html.watch-party-viewer .toolbar__form,
 html.watch-party-viewer #clear-streams,
 html.watch-party-viewer .stream-card__close,
 html.watch-party-viewer .stream-card__overlay-remove,
+html.watch-party-viewer .stream-card__ipad-close,
 html.watch-party-viewer .stream-card__overlay-drag {
   display: none;
 }
@@ -767,20 +760,9 @@ html.stream-focused .stream-card__header {
   pointer-events: none !important;
 }
 
-/*
- * Headers-hidden hover opens the toolbar by shrinking the player — that
- * resize can pause Twitch. During reorder the pointer travels across other
- * cards; those :hover opens must not fire or they pause players that were
- * never in the pre-drag snapshot. Keep every in-grid toolbar closed while
- * dragging except the chosen/dragged card (the fallback clone on body still
- * shows the grip). Restored as soon as is-dragging is cleared.
- */
+/* Disable compact controls during drag without changing their reserved height. */
 html.headers-hidden .stream-grid.is-dragging .stream-card:not(.stream-card--chosen):not(.stream-card--drag) .stream-card__toolbar {
-  height: 0 !important;
-  min-height: 0 !important;
-  max-height: 0 !important;
-  opacity: 0 !important;
-  border: 0 !important;
+  opacity: 0.35 !important;
   pointer-events: none;
 }
 
@@ -800,6 +782,7 @@ html.headers-hidden .stream-grid.is-dragging .stream-card:not(.stream-card--chos
   gap: 6px;
 }
 
+.stream-card__theater,
 .stream-card__focus,
 .stream-card__reload,
 .stream-card__close {
@@ -819,22 +802,26 @@ html.headers-hidden .stream-grid.is-dragging .stream-card:not(.stream-card--chos
   cursor: pointer;
 }
 
+.stream-card__theater:hover,
 .stream-card__focus:hover {
   color: var(--text);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+.stream-card__theater[aria-pressed='true'],
 .stream-card__focus[aria-pressed='true'] {
   color: #d5b8ff;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+.stream-card__theater[hidden],
 .stream-card__focus[hidden] {
   display: none !important;
 }
 
+.stream-card__theater svg,
 .stream-card__focus svg,
 .stream-card__reload svg {
   display: block;
@@ -1034,7 +1021,7 @@ html.stream-focused .stream-card__toolbar {
 html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card {
   display: flex;
   flex-direction: column;
-  height: var(--player-height, auto);
+  height: calc(var(--player-height, 0px) + var(--toolbar-open-height));
   overflow: hidden;
 }
 
@@ -1051,28 +1038,11 @@ html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mo
 }
 
 html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']):not(:empty) .stream-card__player {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   width: 100%;
   min-height: 0;
-  height: auto !important;
+  height: var(--player-height, auto) !important;
   aspect-ratio: unset;
-}
-
-html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
-  .stream-card--kick:not(.is-focused):hover .stream-card__iframe,
-html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
-  .stream-card--kick:not(.is-focused):focus-within .stream-card__iframe {
-  /* 9999px fallback when --player-height is unset (phone stack) → width scale wins. */
-  transform: translate(-50%, -50%)
-    scale(
-      min(
-        var(--kick-scale, 1),
-        calc(
-          (var(--player-height, 9999px) - var(--toolbar-open-height)) /
-            (var(--kick-render-width) * 9 / 16)
-        )
-      )
-    );
 }
 
 .stream-card__toolbar {
@@ -1086,13 +1056,13 @@ html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mo
   justify-content: space-between;
   gap: 8px;
   box-sizing: border-box;
-  height: 0;
-  min-height: 0;
-  max-height: 0;
+  height: var(--toolbar-open-height);
+  min-height: var(--toolbar-open-height);
+  max-height: var(--toolbar-open-height);
   padding: 0 8px;
   margin: 0;
   overflow: hidden;
-  opacity: 0;
+  opacity: 1;
   border: 0;
   background: color-mix(in srgb, var(--surface) 94%, black);
   transition:
@@ -1105,14 +1075,6 @@ html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mo
 
 html.headers-hidden .stream-card__toolbar {
   display: flex;
-}
-
-html.headers-hidden .stream-card:hover .stream-card__toolbar,
-html.headers-hidden .stream-card:focus-within .stream-card__toolbar {
-  height: var(--toolbar-open-height);
-  min-height: var(--toolbar-open-height);
-  max-height: var(--toolbar-open-height);
-  opacity: 1;
   border-top: 1px solid var(--border);
 }
 
@@ -1316,6 +1278,7 @@ html.headers-hidden .stream-card__overlay-controls {
  * would add a phantom descender under the icon and push it off centre.
  */
 .stream-card__overlay-drag,
+.stream-card__overlay-theater,
 .stream-card__overlay-focus,
 .stream-card__overlay-reload,
 .stream-card__overlay-remove {
@@ -1349,6 +1312,7 @@ html.headers-hidden .stream-card__overlay-controls {
 }
 
 .stream-card__overlay-drag svg,
+.stream-card__overlay-theater svg,
 .stream-card__overlay-focus svg,
 .stream-card__overlay-reload svg,
 .stream-card__overlay-remove svg {
@@ -1360,6 +1324,8 @@ html.headers-hidden .stream-card__overlay-controls {
 
 .stream-card__overlay-drag:hover,
 .stream-card__overlay-drag:focus-visible,
+.stream-card__overlay-theater:hover,
+.stream-card__overlay-theater:focus-visible,
 .stream-card__overlay-focus:hover,
 .stream-card__overlay-focus:focus-visible,
 .stream-card__overlay-reload:hover,
@@ -1371,6 +1337,7 @@ html.headers-hidden .stream-card__overlay-controls {
 }
 
 .stream-card__overlay-drag:focus-visible,
+.stream-card__overlay-theater:focus-visible,
 .stream-card__overlay-focus:focus-visible,
 .stream-card__overlay-reload:focus-visible,
 .stream-card__overlay-remove:focus-visible {
@@ -1378,18 +1345,72 @@ html.headers-hidden .stream-card__overlay-controls {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+.stream-card__overlay-theater[aria-pressed='true'],
 .stream-card__overlay-focus[aria-pressed='true'] {
   border-color: color-mix(in srgb, var(--accent) 55%, white);
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .stream-card__overlay-remove {
-  color: color-mix(in srgb, var(--danger) 80%, var(--text));
+  color: var(--muted);
 }
 
 .stream-card__overlay-remove:hover,
 .stream-card__overlay-remove:focus-visible {
   color: var(--danger);
+}
+
+.stream-card__ipad-close {
+  display: none;
+}
+
+/*
+ * iPad keeps the player box free of both horizontal control bars. The only
+ * card action is a neutral circular X inset over the top-right corner.
+ */
+html.ipad-device .stream-card {
+  position: relative;
+}
+
+html.ipad-device .stream-card__header,
+html.ipad-device .stream-card__toolbar {
+  display: none !important;
+}
+
+html.ipad-device .stream-card__ipad-close {
+  position: absolute;
+  z-index: 40;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 35%, var(--border));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--muted);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+html.ipad-device .stream-card__ipad-close:hover,
+html.ipad-device .stream-card__ipad-close:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 65%, var(--border));
+  background: color-mix(in srgb, var(--surface) 96%, black);
+}
+
+html.ipad-device .stream-card__ipad-close svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+html.ipad-device.watch-party-viewer .stream-card__ipad-close {
+  display: none;
 }
 
 .stream-grid:not(:empty):not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card__player {
@@ -1512,7 +1533,13 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
  */
 .stream-grid[data-view-mode='focus'],
 .stream-grid[data-view-mode='focus'][data-has-kick='1'] {
-  grid-template-columns: repeat(var(--focus-tray-count, 1), minmax(0, 1fr));
+  /*
+   * Doubled tracks (2 per logical tray column) so a partial last row can be
+   * centered by offsetting its first card's grid-column-start by half a
+   * tile (see StreamGrid.ts's updateFocusViewLayout) — full rows still fill
+   * the width exactly as before since every tray card spans 2 tracks.
+   */
+  grid-template-columns: repeat(calc(var(--focus-tray-count, 1) * 2), minmax(0, 1fr));
   grid-template-rows: auto;
   grid-auto-rows: var(--focus-tray-row-height, auto);
   grid-auto-flow: row;
@@ -1522,51 +1549,19 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
 }
 
 .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) {
+  grid-column: span 2;
   width: 100%;
   align-self: start;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-/*
- * Stronger visual promote-affordance beyond the header's cursor/title
- * tooltip alone (Section 12): a small upward arrow fades in on hover/focus
- * of a promotable secondary header, and the whole card lifts slightly —
- * signaling "click to bring this forward" without relying on hidden knowledge.
- */
+/* Promotable tray cards lift on hover/focus; the header tooltip names the action. */
 .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):hover,
 .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):has(
     .stream-card__header:focus-visible
   ) {
   transform: translateY(-4px);
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.4);
-}
-
-.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__header {
-  position: relative;
-}
-
-.stream-grid[data-view-mode='focus']
-  .stream-card:not(.is-focus-primary)
-  .stream-card__header[role='button']::after {
-  content: '▲';
-  position: absolute;
-  top: 50%;
-  right: 8px;
-  transform: translateY(-50%);
-  font-size: 0.7rem;
-  color: var(--accent);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
-}
-
-.stream-grid[data-view-mode='focus']
-  .stream-card:not(.is-focus-primary):hover
-  .stream-card__header[role='button']::after,
-.stream-grid[data-view-mode='focus']
-  .stream-card:not(.is-focus-primary)
-  .stream-card__header[role='button']:focus-visible::after {
-  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1581,11 +1576,6 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
     transform: none;
   }
 
-  .stream-grid[data-view-mode='focus']
-    .stream-card:not(.is-focus-primary)
-    .stream-card__header[role='button']::after {
-    transition: none;
-  }
 }
 
 /*
@@ -1597,8 +1587,18 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
  * syncFocusButtonLabel in StreamGrid.ts) as the Theater<->Focus tray
  * toggle, so it must NOT be hidden here.
  */
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__theater,
 .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__focus,
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__overlay-theater,
 .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__overlay-focus {
+  display: none;
+}
+
+/* iPad keeps Focus-with-tray and never offers the primary's Theater/Focus toggles. */
+html.ipad-device .stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary .stream-card__theater,
+html.ipad-device .stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary .stream-card__focus,
+html.ipad-device .stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary .stream-card__overlay-theater,
+html.ipad-device .stream-grid[data-view-mode='theater'] .stream-card.is-focus-primary .stream-card__overlay-focus {
   display: none;
 }
 
@@ -1889,6 +1889,12 @@ html.headers-hidden .stream-grid[data-view-mode='theater'] .stream-card.is-focus
 .undo-toast__action:focus-visible {
   background: var(--accent);
   color: var(--text);
+}
+
+/* The "back live" toast reuses .undo-toast entirely, just stacked above it
+   so both can be visible at once without overlapping. */
+.live-toast {
+  bottom: 84px;
 }
 
 /*
@@ -2333,25 +2339,6 @@ html.show-welcome .welcome-modal {
   }
 
   /*
-   * Same Kick re-scale the desktop hover path uses, applied while the
-   * toolbar is always open so native chrome is not clipped.
-   */
-  html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
-    .stream-card--kick:not(.is-focused)
-    .stream-card__iframe {
-    transform: translate(-50%, -50%)
-      scale(
-        min(
-          var(--kick-scale, 1),
-          calc(
-            (var(--player-height, 9999px) - var(--toolbar-open-height)) /
-              (var(--kick-render-width) * 9 / 16)
-          )
-        )
-      );
-  }
-
-  /*
    * Portrait cards hit the same collapse as above, one layer deeper: their
    * desktop rule (`flex: 1 1 auto`, no aspect-ratio) depends on the 2-row
    * grid span giving the card a definite height via --player-height, which
@@ -2556,6 +2543,7 @@ html.show-welcome .welcome-modal {
     margin-left: 0;
   }
 
+  .stream-card__theater,
   .stream-card__focus,
   .stream-card__reload,
   .stream-card__close {
@@ -2565,11 +2553,14 @@ html.show-welcome .welcome-modal {
     border-radius: 4px;
   }
 
+  .stream-card__theater,
   .stream-card__focus,
+  .stream-card__overlay-theater,
   .stream-card__overlay-focus {
     display: none;
   }
 
+  .stream-card__theater svg,
   .stream-card__focus svg,
   .stream-card__reload svg {
     width: 12px;
