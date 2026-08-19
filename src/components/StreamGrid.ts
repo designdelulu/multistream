@@ -3699,6 +3699,25 @@ function checkPaused(player: Twitch.Player, streamId: string): boolean | null {
   }
 }
 
+/**
+ * Current playback position in seconds, or null if unreadable.
+ *
+ * The stall sentinel uses this as ground truth about whether frames are
+ * actually moving, which isPaused() alone cannot tell it (see
+ * lib/stallSentinel.ts). Deliberately does NOT feed twitchExceptionCounts the
+ * way checkPaused does: a throwing getCurrentTime is a missing signal, not
+ * evidence the player instance is broken, and must never push a card toward
+ * the rebuild threshold on its own.
+ */
+function checkPosition(player: Twitch.Player): number | null {
+  try {
+    const seconds = player.getCurrentTime();
+    return Number.isFinite(seconds) ? seconds : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Destroy and reconstruct from scratch — for when the instance itself can't be trusted. */
 function rebuildTwitchPlayer(card: HTMLElement): void {
   const streamId = card.dataset.streamId ?? '';
@@ -5192,6 +5211,7 @@ export function startStallSentinel(
           id: streamId,
           isPaused: () => checkPaused(player, streamId),
           engagedAt: () => Number(card.dataset.userEngagedAt ?? '0'),
+          position: () => checkPosition(player),
         });
       }
       return candidates;
