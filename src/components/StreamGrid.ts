@@ -7,6 +7,7 @@ import {
   statsDebugEnabled,
 } from '../lib/embedDebug';
 import { createPlaybackRecovery, type RecoveryTarget } from '../lib/playbackRecovery';
+import { createStallSentinel, type StallCandidate, type StallSentinel } from '../lib/stallSentinel';
 import { formatTwitchLiveDuration } from '../lib/twitchDuration';
 import { formatTwitchViewerCount } from '../lib/twitchViewerCount';
 import {
@@ -4883,6 +4884,75 @@ export function beginFocusExitRecovery(
 }
 
 /**
+ * Overlay-covering counterpart to snapshotPlayingTwitchPlayers: same
+ * "confirmed playing, api-mode, not offline/blocked" definition, further
+ * restricted to cards whose player box actually intersects `rect`. Used so
+ * an absolutely-positioned overlay (add-stream suggestions, share menu,
+ * party menu) only ever nudges the card(s) it is visibly covering, not
+ * every playing Twitch card in the grid — a card the overlay never touched
+ * has no reason to flash its loading spinner.
+ *
+ * A zero-area rect (nothing measurable yet) falls back to the full grid
+ * snapshot rather than silently recovering nothing.
+ */
+export function snapshotPlayingTwitchPlayersUnder(
+  container: HTMLElement,
+  rect: DOMRectReadOnly | DOMRect,
+): string[] {
+  if (rect.width <= 0 || rect.height <= 0) {
+    return snapshotPlayingTwitchPlayers(container);
+  }
+  const playing = new Set(snapshotPlayingTwitchPlayers(container));
+  if (playing.size === 0) return [];
+  const ids: string[] = [];
+  for (const streamId of playing) {
+    const card = cardForStream(streamId);
+    if (!card) continue;
+    const box = (streamIframe(card) ?? card).getBoundingClientRect();
+    const intersects =
+      box.left < rect.right &&
+      box.right > rect.left &&
+      box.top < rect.bottom &&
+      box.bottom > rect.top;
+    if (intersects) ids.push(streamId);
+  }
+  return ids;
+}
+
+/**
+ * Start the bounded post-overlay checks for exactly the api-mode Twitch
+ * players a covering overlay (add-stream suggestions, share menu, party
+ * menu) was observed playing under. Unlike beginAddRemoveRecovery, this
+ * never remounts on exhaustion and never arms the layout circuit breaker —
+ * the overlay never resizes the grid, so there is nothing here for the
+ * circuit breaker's "layout thrash left most of the set stuck" heuristic to
+ * detect, and a card merely covered-then-uncovered does not warrant a
+ * visible reload. play() is the only recovery action.
+ */
+export function beginOverlayRecovery(
+  container: HTMLElement,
+  snapshotIds: readonly string[],
+  startedAt: number,
+): void {
+  const targets = snapshotIds
+    .filter((streamId) => {
+      const card = cardForStream(streamId);
+      return Boolean(card?.isConnected) && container.contains(card);
+    })
+    .map((streamId) =>
+      createTwitchRecoveryTarget(streamId, startedAt, { remountOnEscalate: false }),
+    );
+
+  logPlayerEvent('layout-settled', {
+    cause: 'overlay',
+    survivors: targets.map((target) => target.id),
+    dropped: snapshotIds.filter((id) => !targets.some((target) => target.id === id)),
+  });
+
+  playbackRecovery.overlay(targets, 'overlay');
+}
+
+/**
  * If ≥80% of the pre-operation playing set is still paused shortly after
  * layout, remount those same cards once (the same per-card reload Refresh
  * uses). Guards: visible tab, snapshot of at least two, 12s cooldown, never
@@ -5068,6 +5138,82 @@ export function startStatsProbe(container: HTMLElement): void {
       });
     }
   }, STATS_PROBE_INTERVAL_MS);
+}
+
+/**
+ * Bounded, play()-only retry schedule for a sentinel-detected stall. Shorter
+ * than RECOVERY_RETRY_OFFSETS_MS: those offsets are spaced to straddle a
+ * resize reaction that hasn't happened yet, but a sentinel-triggered run
+ * starts from an isPaused() the sentinel already read as true on this tick —
+ * there is nothing further to wait out before the first attempt.
+ */
+const SENTINEL_RETRY_OFFSETS_MS: readonly number[] = [0, 1000];
+
+let stallSentinel: StallSentinel | null = null;
+
+/**
+ * Always-on stall detector — see lib/stallSentinel.ts for the module doc
+ * comment and the invariants it enforces. This is the only place that knows
+ * how to turn a live `.stream-card` into a StallCandidate: gating mirrors
+ * snapshotPlayingTwitchPlayers (api-mode, not frozen, layout-visible, not
+ * latched offline/blocked) plus the same userEngagedAt signal
+ * createTwitchRecoveryTarget's isEligible() already relies on elsewhere.
+ *
+ * Idempotent — a second call is a no-op, so main.ts can call this
+ * unconditionally at boot the same way it calls startStatsProbe.
+ */
+export function startStallSentinel(
+  container: HTMLElement,
+  options?: { isQuietWindow?: () => boolean },
+): void {
+  if (stallSentinel) return;
+  const isQuietWindow = options?.isQuietWindow ?? (() => false);
+
+  stallSentinel = createStallSentinel({
+    timers: {
+      setInterval: (handler, ms) => window.setInterval(handler, ms),
+      clearInterval: (handle) => window.clearInterval(handle),
+    },
+    now: () => Date.now(),
+    shouldRun: () => !document.hidden && !isQuietWindow(),
+    listCandidates: () => {
+      const candidates: StallCandidate[] = [];
+      for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+        if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
+        if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
+        if (!isStreamCardLayoutVisible(card)) continue;
+        const streamId = card.dataset.streamId ?? '';
+        if (!streamId) continue;
+        const latched = twitchPlayback.get(streamId);
+        if (latched === 'offline' || latched === 'blocked') continue;
+        const player = twitchPlayers.get(streamId);
+        if (!player) continue;
+        candidates.push({
+          id: streamId,
+          isPaused: () => checkPaused(player, streamId),
+          engagedAt: () => Number(card.dataset.userEngagedAt ?? '0'),
+        });
+      }
+      return candidates;
+    },
+    isPending: (id) => playbackRecovery.pendingIds().includes(id),
+    onStall: (id) => {
+      logPlayerEvent('sentinel-stall', { streamId: id });
+      playbackRecovery.track(
+        createTwitchRecoveryTarget(id, Date.now(), { remountOnEscalate: false }),
+        'sentinel',
+        SENTINEL_RETRY_OFFSETS_MS,
+      );
+    },
+    log: (event, detail) => logPlayerEvent(`sentinel-${event}`, detail),
+  });
+  stallSentinel.start();
+}
+
+/** Test-only: stop the sentinel and clear its singleton so tests get a fresh instance. */
+export function __stopStallSentinelForTests(): void {
+  stallSentinel?.stop();
+  stallSentinel = null;
 }
 
 /**

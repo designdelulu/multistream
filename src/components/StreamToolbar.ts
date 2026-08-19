@@ -38,6 +38,21 @@ export interface StoryPreviewHooks {
 }
 
 /**
+ * Fired on the hidden<->visible edge (never on every keystroke/re-sync) for
+ * any toolbar dropdown that is absolutely positioned over the grid — the
+ * add-stream suggestions list and the share/watch-party menu. Twitch's
+ * embed pauses itself when a covering overlay like this appears above it;
+ * see beginOverlayRecovery in StreamGrid.ts. `rect` is the overlay's own
+ * bounding box, measured after it becomes visible (open) or just before it
+ * is hidden (close), so recovery can be scoped to only the card(s) actually
+ * covered.
+ */
+export interface OverlayHooks {
+  onOverlayOpen?: (rect: DOMRect) => void;
+  onOverlayClose?: (rect: DOMRect) => void;
+}
+
+/**
  * Share/copy always uses a live `/w/ROOM_ID` link: reuse the current party,
  * or start one. Static lineup URLs stay parseable; they are no longer a
  * share-menu action.
@@ -233,6 +248,7 @@ export function bindStreamToolbar(
   globalRefresh: GlobalRefreshDeps,
   storyPreviewHooks?: StoryPreviewHooks,
   watchParty?: WatchPartyController,
+  overlayHooks?: OverlayHooks,
 ): { sync: () => void } {
   const form = document.querySelector<HTMLFormElement>('#add-stream-form');
   const input = document.querySelector<HTMLInputElement>('#stream-input');
@@ -330,6 +346,10 @@ export function bindStreamToolbar(
   }
 
   function hideSuggestions(): void {
+    if (!suggestionsEl.hidden) {
+      // Measure before hiding — after hidden the rect collapses to 0x0.
+      overlayHooks?.onOverlayClose?.(suggestionsEl.getBoundingClientRect());
+    }
     suggestionsEl.hidden = true;
     suggestionsEl.replaceChildren();
     inputEl.setAttribute('aria-expanded', 'false');
@@ -406,8 +426,15 @@ export function bindStreamToolbar(
       suggestionsEl.append(option);
     }
 
+    const wasHidden = suggestionsEl.hidden;
     suggestionsEl.hidden = false;
     inputEl.setAttribute('aria-expanded', 'true');
+    // Only the hidden->visible edge — showSuggestions re-renders on every
+    // keystroke while the dropdown stays open, and that must not restart
+    // recovery on every keypress.
+    if (wasHidden) {
+      overlayHooks?.onOverlayOpen?.(suggestionsEl.getBoundingClientRect());
+    }
   }
 
   function syncSuggestions(): void {
@@ -653,6 +680,10 @@ export function bindStreamToolbar(
    */
   function closeShareMenu(): void {
     if (!shareMenu || !shareMenuToggle) return;
+    if (!shareMenu.hidden) {
+      // Measure before hiding — after hidden the rect collapses to 0x0.
+      overlayHooks?.onOverlayClose?.(shareMenu.getBoundingClientRect());
+    }
     shareMenu.hidden = true;
     shareMenuToggle.setAttribute('aria-expanded', 'false');
   }
@@ -662,6 +693,7 @@ export function bindStreamToolbar(
     shareMenu.hidden = false;
     shareMenuToggle.setAttribute('aria-expanded', 'true');
     shareMenu.querySelector<HTMLButtonElement>('.toolbar__share-menu-item')?.focus();
+    overlayHooks?.onOverlayOpen?.(shareMenu.getBoundingClientRect());
   }
 
   shareMenuToggle?.addEventListener('click', () => {

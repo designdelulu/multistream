@@ -876,4 +876,93 @@ describe('createPlaybackRecovery', () => {
       expect(recovery.pendingIds()).toEqual([]);
     });
   });
+
+  /**
+   * overlay() backs the add-stream suggestions dropdown and share/watch-party
+   * menu — absolutely-positioned toolbar overlays that can cover the grid
+   * without resizing it. Unlike focusExit's one-shot call on mode exit, this
+   * fires on every open/close edge (once per keystroke that opens the
+   * dropdown for the first time, and again on close) — so the property that
+   * matters most here is that a second overlay() call for the same id
+   * restarts cleanly rather than layering a second run on top.
+   */
+  describe('overlay()', () => {
+    it('starts a bounded run using the default multi-pass schedule', () => {
+      const { timers, recovery } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.overlay([player], 'overlay');
+      timers.advance(FULL_RUN_MS);
+
+      expect(player.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+
+    it('a second overlay() call for the same id supersedes the first (the reopen/keystroke case)', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.overlay([player], 'overlay');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      recovery.overlay([player], 'overlay');
+      timers.advance(FULL_RUN_MS);
+
+      // 1 from the first call's immediate pass, plus one full fresh run —
+      // never blocked, never left running twice.
+      expect(player.plays).toBe(1 + RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(recovery.pendingIds()).toEqual([]);
+      expect(events.filter((entry) => entry.event === 'track' && entry.detail.cause === 'overlay')).toHaveLength(2);
+    });
+
+    it('does not disturb an in-flight transaction run for the same id', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.begin([player], 'add');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      recovery.overlay([player], 'overlay');
+      expect(events.some((entry) => entry.event === 'cancel')).toBe(false);
+
+      timers.advance(FULL_RUN_MS);
+      expect(player.plays).toBe(RECOVERY_RETRY_OFFSETS_MS.length);
+    });
+
+    it('does not disturb an in-flight new-player run for the same id', () => {
+      const { timers, recovery, events } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.track(player, 'new-player');
+      recovery.overlay([player], 'overlay');
+
+      expect(events.some((entry) => entry.event === 'cancel')).toBe(false);
+
+      timers.advance(60_000);
+      expect(player.plays).toBe(3); // NEW_PLAYER_RETRY_OFFSETS_MS.length, untouched
+    });
+
+    it('supersedes a stale toolbar-hover run for the same id', () => {
+      const { timers, recovery } = setup();
+      const player = createFakePlayer('a', true);
+
+      recovery.hover(player, 'toolbar-hover');
+      timers.advance(0);
+      expect(player.plays).toBe(1);
+
+      recovery.overlay([player], 'overlay');
+      timers.advance(FULL_RUN_MS);
+
+      expect(player.plays).toBe(1 + RECOVERY_RETRY_OFFSETS_MS.length);
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+
+    it('overlay() with an empty target list is a no-op', () => {
+      const { recovery } = setup();
+      recovery.overlay([], 'overlay');
+      expect(recovery.pendingIds()).toEqual([]);
+    });
+  });
 });

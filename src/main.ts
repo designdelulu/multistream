@@ -3,6 +3,7 @@ import {
   activateCardTheaterById,
   beginAddRemoveRecovery,
   beginFocusExitRecovery,
+  beginOverlayRecovery,
   bindFocusViewEntry,
   bindTheaterViewEntry,
   bindFocusViewExit,
@@ -36,9 +37,11 @@ import {
   resumeVisibleStreamPlayers,
   setFocusViewPrimary,
   snapshotPlayingTwitchPlayers,
+  snapshotPlayingTwitchPlayersUnder,
   snapshotReorderRecoveryIds,
   captureTwitchPlayerIdentities,
   diffTwitchPlayerIdentities,
+  startStallSentinel,
   startStatsProbe,
   syncStreamGrid,
   syncViewMode,
@@ -561,6 +564,34 @@ function recoverAfterStoryPreview(): void {
   });
 }
 
+/**
+ * Recovery for a covering toolbar overlay (add-stream suggestions, share/
+ * watch-party menu) — mirrors recoverAfterStoryPreview, but never remounts
+ * (see beginOverlayRecovery) since these overlays never resize the grid.
+ * Fired on both the open and close edge: open in case Twitch pauses the
+ * covered card immediately, close in case it paused sometime while covered
+ * and needs a nudge now that nothing hides it.
+ */
+let overlayPlaybackSnapshot: string[] = [];
+let overlayIdentitiesBefore: ReturnType<typeof captureTwitchPlayerIdentities> = [];
+let overlayRecoveryStartedAt = 0;
+
+function recoverAfterOverlay(diffLabel: string): void {
+  afterLayoutPaint(() => {
+    requestAnimationFrame(() => {
+      const after = captureTwitchPlayerIdentities(gridEl);
+      const diff = diffTwitchPlayerIdentities(overlayIdentitiesBefore, after);
+      logPlayerEvent(diffLabel, {
+        remounts: diff.remounts,
+        srcChanges: diff.srcChanges,
+        playerObjectChanges: diff.playerObjectChanges,
+        newlyPaused: diff.newlyPaused,
+      });
+      beginOverlayRecovery(gridEl, overlayPlaybackSnapshot, overlayRecoveryStartedAt);
+    });
+  });
+}
+
 /*
  * Host spotlight sync: the watch-party controller needs to read the current
  * view (host pushes), apply a host view (viewer follows), and hear about
@@ -653,6 +684,19 @@ const toolbar = bindStreamToolbar(
     },
   },
   watchParty,
+  {
+    onOverlayOpen: (rect) => {
+      overlayIdentitiesBefore = captureTwitchPlayerIdentities(gridEl);
+      overlayPlaybackSnapshot = snapshotPlayingTwitchPlayersUnder(gridEl, rect);
+      overlayRecoveryStartedAt = Date.now();
+      logTwitchPlayerIdentities(gridEl, 'overlay-before-open');
+      recoverAfterOverlay('overlay-open-diff');
+    },
+    onOverlayClose: () => {
+      logTwitchPlayerIdentities(gridEl, 'overlay-before-close');
+      recoverAfterOverlay('overlay-close-diff');
+    },
+  },
 );
 const reorder = bindStreamReorder(gridEl, store, headersStore, {
   onDragChoose: () => {
@@ -939,6 +983,11 @@ window.setInterval(() => {
 
 // Phase C2 diagnostic probe — no-ops unless ?debug=stats is active.
 startStatsProbe(gridEl);
+
+// Always-on stall detector — see lib/stallSentinel.ts. Freezes (rather than
+// resets) its own bookkeeping during the same suppressLayout windows the 90s
+// watchdog above already respects.
+startStallSentinel(gridEl, { isQuietWindow: () => suppressLayout });
 
 /**
  * A tab-resume's (or fullscreen-exit's) own play() call isn't a genuine user

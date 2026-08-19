@@ -10,6 +10,7 @@ import {
   applyYouTubeStats,
   beginAddRemoveRecovery,
   beginFocusExitRecovery,
+  beginOverlayRecovery,
   bindFocusViewEntry,
   bindTheaterViewEntry,
   bindFocusViewPromotion,
@@ -36,6 +37,7 @@ import {
   setFocusedStream,
   setFocusViewPrimary,
   snapshotPlayingTwitchPlayers,
+  snapshotPlayingTwitchPlayersUnder,
   snapshotReorderRecoveryIds,
   captureTwitchPlayerIdentities,
   diffTwitchPlayerIdentities,
@@ -1239,6 +1241,80 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
     expect(createdTwitchPlayers.every((player) => player.isPaused() === false)).toBe(true);
     expect(createdTwitchPlayers.every((player) => player.setMutedCalls.includes(false))).toBe(false);
     expect(createdTwitchPlayers.every((player) => player.getMuted() === true)).toBe(true);
+  });
+
+  it('beginOverlayRecovery replays play() for the covered players and never remounts', async () => {
+    const twitchStreams: StreamRef[] = ['a', 'b'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    for (const player of createdTwitchPlayers) player.play();
+
+    const snapshotIds = snapshotPlayingTwitchPlayers(container);
+    expect(new Set(snapshotIds)).toEqual(new Set(['twitch:a', 'twitch:b']));
+
+    // Simulate the add-stream dropdown covering both cards and Twitch
+    // reacting to that by pausing them, the same way it reacts to a resize.
+    for (const player of createdTwitchPlayers) player.pause();
+
+    beginOverlayRecovery(container, snapshotIds, Date.now());
+
+    await vi.waitFor(() => {
+      expect(createdTwitchPlayers.every((player) => player.playCallCount >= 2)).toBe(true);
+    });
+    expect(createdTwitchPlayers.every((player) => player.isPaused() === false)).toBe(true);
+
+    // Unlike 'add-remove'/'reorder', an overlay never resizes the grid, so
+    // there is nothing for the layout circuit breaker to detect — confirm it
+    // never arms by waiting past its 250ms delay and checking no destroy().
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(createdTwitchPlayers[0].destroyCallCount).toBe(0);
+    expect(createdTwitchPlayers[1].destroyCallCount).toBe(0);
+  });
+
+  it('snapshotPlayingTwitchPlayersUnder only returns players whose box intersects the given rect', async () => {
+    const twitchStreams: StreamRef[] = ['a', 'b'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    for (const player of createdTwitchPlayers) player.play();
+
+    const mountA = container.querySelector<HTMLElement>(
+      '[data-stream-id="twitch:a"] .stream-card__iframe',
+    );
+    const mountB = container.querySelector<HTMLElement>(
+      '[data-stream-id="twitch:b"] .stream-card__iframe',
+    );
+    expect(mountA).toBeTruthy();
+    expect(mountB).toBeTruthy();
+    mountA!.getBoundingClientRect = () =>
+      ({ left: 0, right: 100, top: 0, bottom: 100, width: 100, height: 100 }) as DOMRect;
+    mountB!.getBoundingClientRect = () =>
+      ({ left: 500, right: 600, top: 500, bottom: 600, width: 100, height: 100 }) as DOMRect;
+
+    const coveringOnlyA = { left: 0, right: 50, top: 0, bottom: 50, width: 50, height: 50 } as DOMRect;
+    expect(snapshotPlayingTwitchPlayersUnder(container, coveringOnlyA)).toEqual(['twitch:a']);
+
+    const coveringNeither = { left: 900, right: 950, top: 900, bottom: 950, width: 50, height: 50 } as DOMRect;
+    expect(snapshotPlayingTwitchPlayersUnder(container, coveringNeither)).toEqual([]);
+
+    // Zero-area rect (nothing measurable yet) falls back to the full snapshot.
+    const zeroRect = { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 } as DOMRect;
+    expect(new Set(snapshotPlayingTwitchPlayersUnder(container, zeroRect))).toEqual(
+      new Set(['twitch:a', 'twitch:b']),
+    );
   });
 
   it('snapshotReorderRecoveryIds keeps hover-paused players that the coordinator is already chasing', async () => {

@@ -1,13 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveAddInput,
   plainUsernameCandidate,
   usernameCandidatePlatforms,
   resolveLivePartyShareUrl,
   collectShareCardAvatarUrls,
+  bindStreamToolbar,
+  type OverlayHooks,
 } from './StreamToolbar';
 import { parseStreamInput } from '../platforms';
 import { isTikTokShortLink } from '../platforms/tiktok';
+import { createStreamStore } from '../state/streams';
+import { createHeadersStore } from '../state/headers';
+import { createViewModeStore } from '../state/viewMode';
 
 function buildCard(dataset: Record<string, string>): HTMLElement {
   const card = document.createElement('article');
@@ -165,5 +170,138 @@ describe('collectShareCardAvatarUrls', () => {
     expect(urls.get('kick:b')).toBe('https://files.kick.com/b.webp');
     expect(urls.get('tiktok:c')).toBe('/api/tiktok-avatar.php?handle=c');
     expect(urls.has('twitch:bare')).toBe(false);
+  });
+});
+
+/**
+ * The add-stream suggestions dropdown and the share/watch-party menu are
+ * absolutely-positioned overlays that can cover the grid without resizing
+ * it — nothing about their layout tells the grid they exist. These tests
+ * pin the edge-triggering contract StreamGrid.ts's beginOverlayRecovery
+ * depends on: fire once on the hidden->visible transition (never once per
+ * keystroke, since suggestions re-renders on every keystroke while staying
+ * open), and once on the visible->hidden transition, however that happens
+ * (Escape, outside click, or a successful add).
+ */
+describe('bindStreamToolbar — overlay hooks for covering dropdowns', () => {
+  function mountToolbarDom(): void {
+    document.body.innerHTML = `
+      <form id="add-stream-form">
+        <div class="toolbar__input-wrap">
+          <input id="stream-input" />
+          <div id="add-stream-suggestions" hidden></div>
+        </div>
+        <button id="add-stream-submit" type="submit">Add Stream</button>
+      </form>
+      <div class="toolbar__share-menu-wrap">
+        <button id="share-menu-toggle" type="button" aria-expanded="false"></button>
+        <div id="share-menu" hidden></div>
+      </div>
+    `;
+  }
+
+  function setup(overlayHooks: OverlayHooks) {
+    mountToolbarDom();
+    const store = createStreamStore();
+    const headersStore = createHeadersStore();
+    const viewModeStore = createViewModeStore();
+    bindStreamToolbar(
+      store,
+      headersStore,
+      viewModeStore,
+      {
+        refresh: async () => ({ outcome: 'ok' as const, twitchAllUnavailable: false }),
+        isRefreshInFlight: () => false,
+      },
+      undefined,
+      undefined,
+      overlayHooks,
+    );
+    return {
+      store,
+      input: document.querySelector<HTMLInputElement>('#stream-input')!,
+      shareToggle: document.querySelector<HTMLButtonElement>('#share-menu-toggle')!,
+    };
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    localStorage.clear();
+  });
+
+  it('opening the suggestions dropdown fires onOverlayOpen once, not on every keystroke', () => {
+    const onOverlayOpen = vi.fn();
+    const onOverlayClose = vi.fn();
+    const { input } = setup({ onOverlayOpen, onOverlayClose });
+
+    for (const value of ['t', 'te', 'tes', 'test']) {
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+    }
+
+    expect(onOverlayOpen).toHaveBeenCalledTimes(1);
+    expect(onOverlayClose).not.toHaveBeenCalled();
+  });
+
+  it('pressing Escape closes the dropdown and fires onOverlayClose exactly once', () => {
+    const onOverlayOpen = vi.fn();
+    const onOverlayClose = vi.fn();
+    const { input } = setup({ onOverlayOpen, onOverlayClose });
+
+    input.value = 'test';
+    input.dispatchEvent(new Event('input'));
+    expect(onOverlayOpen).toHaveBeenCalledTimes(1);
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onOverlayClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('an outside click closes the dropdown once, and a second outside click while already closed does not re-fire', () => {
+    const onOverlayOpen = vi.fn();
+    const onOverlayClose = vi.fn();
+    const { input } = setup({ onOverlayOpen, onOverlayClose });
+
+    input.value = 'test';
+    input.dispatchEvent(new Event('input'));
+    expect(onOverlayOpen).toHaveBeenCalledTimes(1);
+
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onOverlayClose).toHaveBeenCalledTimes(1);
+
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onOverlayClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('selecting a suggestion adds the stream, closes the dropdown, and fires onOverlayClose once', () => {
+    const onOverlayOpen = vi.fn();
+    const onOverlayClose = vi.fn();
+    const { input, store } = setup({ onOverlayOpen, onOverlayClose });
+
+    input.value = 'teststreamer123';
+    input.dispatchEvent(new Event('input'));
+    expect(onOverlayOpen).toHaveBeenCalledTimes(1);
+
+    const twitchOption = document.querySelector<HTMLButtonElement>(
+      '.toolbar__suggestion[data-platform="twitch"]',
+    );
+    expect(twitchOption).toBeTruthy();
+    twitchOption!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(store.getStreams().some((stream) => stream.id === 'twitch:teststreamer123')).toBe(true);
+    expect(onOverlayClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('opening the share menu fires onOverlayOpen with its own rect; closing it fires onOverlayClose', () => {
+    const onOverlayOpen = vi.fn();
+    const onOverlayClose = vi.fn();
+    const { shareToggle } = setup({ onOverlayOpen, onOverlayClose });
+
+    shareToggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onOverlayOpen).toHaveBeenCalledTimes(1);
+    const rect = onOverlayOpen.mock.calls[0][0] as DOMRect;
+    expect(typeof rect.width).toBe('number');
+
+    shareToggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onOverlayClose).toHaveBeenCalledTimes(1);
   });
 });

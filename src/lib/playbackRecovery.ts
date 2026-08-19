@@ -126,6 +126,16 @@ export interface PlaybackRecovery {
    * already enforces in the other direction.
    */
   focusExit(targets: readonly RecoveryTarget[], cause: string): void;
+  /**
+   * Start bounded runs for the exact set of Twitch players an on-screen
+   * overlay (add-stream suggestions, share menu, party menu) is currently
+   * covering. Same supersede rule as focusExit: never disturbs an in-flight
+   * 'transaction' or 'new-player' run for that id, but does supersede a
+   * stale 'toolbar-hover', 'focus-exit', or prior 'overlay' run — the menu
+   * can open/close/reopen many times (once per keystroke) while the grid
+   * itself never changes, so each edge just restarts the same bounded watch.
+   */
+  overlay(targets: readonly RecoveryTarget[], cause: string): void;
   /** A real PLAYING event arrived — positive confirmation, stop chasing this id. */
   confirmPlaying(id: string): void;
   /**
@@ -153,7 +163,7 @@ interface Pass {
  * lands mid-transaction. Cancelling those together would mean a stream added
  * during another change silently loses its only autoplay check.
  */
-type RunKind = 'transaction' | 'new-player' | 'toolbar-hover' | 'focus-exit';
+type RunKind = 'transaction' | 'new-player' | 'toolbar-hover' | 'focus-exit' | 'overlay';
 
 interface Run {
   readonly target: RecoveryTarget;
@@ -346,6 +356,21 @@ export function createPlaybackRecovery(options: {
         }
         log('track', { id: target.id, cause });
         start(target, cause, 'focus-exit', defaultOffsets);
+      }
+    },
+
+    overlay(targets, cause) {
+      // Mirrors focusExit()'s rule: a real grid mutation or a fresh card's
+      // own autoplay check is left alone, but a stale toolbar-hover,
+      // focus-exit, or previous overlay run for this same id never gets to
+      // suppress the play() this overlay edge owes it.
+      for (const target of targets) {
+        const existing = runs.get(target.id);
+        if (existing && (existing.kind === 'transaction' || existing.kind === 'new-player')) {
+          continue;
+        }
+        log('track', { id: target.id, cause });
+        start(target, cause, 'overlay', defaultOffsets);
       }
     },
 
