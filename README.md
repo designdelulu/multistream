@@ -295,7 +295,7 @@ Legacy uppercase `T:` / `K:` prefixes and query URLs (`?streams=t:username,k:use
 
 Open the toolbar **Share** menu to **Start Live Watch Party** (or **Share Watch Party**, which starts a live `/w/ROOM_ID` party if none is running and copies the link), **Preview Story Card**, or **Download Story Card**. **Clear all** removes every stream (with confirmation). Toolbar actions (Share, Refresh, Clear, Headers, Chat) are icons that expand their labels on hover.
 
-**Hide headers** replaces each desktop card’s top bar with a fixed compact footer below the iframe — channel name, **drag to reorder**, **Theater**, **Focus**, and **×** remove. The footer stays visible and never resizes or stacks over the player (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)). On iPad, both bars stay hidden and a circular **×** in the video’s top-right corner remains available.
+**Hide headers** hides each desktop card’s top bar. At rest the tile is video only; hover (or keyboard focus) shrinks the player slightly so a control strip appears **below** the iframe — channel name, **drag to reorder**, **Theater**, **Focus**, and **×** remove. Controls never stack over the player (Twitch [requirement 1.3](https://dev.twitch.tv/docs/embed/)). Kick embeds re-scale on hover so volume / pause stay inside the smaller box. On iPad, both bars stay hidden and a circular **×** in the video’s top-right corner remains available.
 
 ### Add streams from the toolbar
 

@@ -46,7 +46,6 @@ import {
   GRID_GAP,
   GRID_PADDING,
   CARD_HEADER_HEIGHT,
-  COMPACT_TOOLBAR_HEIGHT,
   MAX_GRID_COLUMNS,
   type WeightedGridItem,
 } from '../lib/gridLayout';
@@ -3165,6 +3164,36 @@ function createPlayerElement(
 
   card.append(header, player, toolbar, ipadClose);
 
+  if (stream.platform === 'twitch') {
+    /*
+     * Hover-toolbar height transitions resize the Twitch iframe. Arm recovery
+     * at transitionstart (not end) so a headers-hidden drag that begins
+     * mid-animation still has this card in the coordinator's pending set
+     * before Sortable's onChoose snapshot. The bounded schedule already waits
+     * for Twitch's async pause; starting 150ms earlier does not issue a
+     * premature play() on a still-healthy player (pass 0 only acts on a
+     * positive paused reading).
+     */
+    toolbar.addEventListener('transitionstart', (event) => {
+      if (event.propertyName !== 'height') return;
+      const wasPlaying = twitchPlayback.get(stream.id) === 'playing';
+      logPlayerEvent('toolbar-transition-start', {
+        streamId: stream.id,
+        mountId: card.querySelector<HTMLElement>('.stream-card__iframe')?.id,
+        wasPlaying,
+      });
+      if (!wasPlaying) return;
+      playbackRecovery.hover(createTwitchRecoveryTarget(stream.id, Date.now()), 'toolbar-hover');
+    });
+    toolbar.addEventListener('transitionend', (event) => {
+      if (event.propertyName !== 'height') return;
+      logPlayerEvent('toolbar-transition-end', {
+        streamId: stream.id,
+        mountId: card.querySelector<HTMLElement>('.stream-card__iframe')?.id,
+      });
+    });
+  }
+
   if (stream.platform === 'tiktok') {
     syncTikTokMuteUi(card);
   }
@@ -5262,13 +5291,10 @@ export function updateGridLayout(container: HTMLElement): void {
 
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
   const ipadHeaderless = document.documentElement.classList.contains('ipad-device');
-  // Compact mode replaces the header with a fixed footer; focused solo mode keeps its header.
+  // Headers-hidden: video alone at rest (hover toolbar is 0px until hover).
+  // iPad has neither header nor toolbar. Focused solo mode keeps its header for ×.
   const chromeHeight =
-    ipadHeaderless
-      ? 0
-      : !headersHidden || focusedStreamId
-        ? CARD_HEADER_HEIGHT
-        : COMPACT_TOOLBAR_HEIGHT;
+    ipadHeaderless || (headersHidden && !focusedStreamId) ? 0 : CARD_HEADER_HEIGHT;
 
   // Solo focus keeps its existing always-16:9 behavior (unrelated to the
   // portrait-aware weighting below, which only applies to the multi-stream
@@ -5319,8 +5345,8 @@ export function updateGridLayout(container: HTMLElement): void {
    * A header that measures 0 while chrome is expected means the DOM cannot be
    * measured yet (offsetHeight is 0 before first layout, and always 0 under
    * jsdom), not that the header is gone — headers-hidden reports chromeHeight
-   * 0 and falls back to COMPACT_TOOLBAR_HEIGHT. Falling back to the expected
-   * chrome keeps the row track from being pinned a control strip short.
+   * 0 because the hover toolbar reserves no space at rest. Falling back to the
+   * expected chrome keeps the row track from being pinned a header short.
    */
   const headerHeight = chromeHeight > 0 && chrome.header <= 0 ? chromeHeight : chrome.header;
   const cardChromeHeight = headerHeight + chrome.borderY;
@@ -5437,11 +5463,7 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
   // math, and the row track itself (below) must add it back on top.
   const headersHidden = document.documentElement.classList.contains('headers-hidden');
   const ipadHeaderless = document.documentElement.classList.contains('ipad-device');
-  const chromeHeight = ipadHeaderless
-    ? 0
-    : headersHidden
-      ? COMPACT_TOOLBAR_HEIGHT
-      : CARD_HEADER_HEIGHT;
+  const chromeHeight = ipadHeaderless || headersHidden ? 0 : CARD_HEADER_HEIGHT;
 
   const includeTray = container.dataset.viewMode === 'focus';
   const secondaryCount = Math.max(0, totalCount - 1);

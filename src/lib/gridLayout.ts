@@ -11,7 +11,7 @@ export type StreamOrientation = 'landscape' | 'portrait';
 export const GRID_GAP = 12;
 export const GRID_PADDING = 24;
 export const CARD_HEADER_HEIGHT = 42;
-/** Fixed compact control strip rendered below players while headers are hidden. */
+/** Hover-open compact toolbar height (30px). Packer tests pass this as chrome; live headers-hidden layout reserves 0 at rest. */
 export const COMPACT_TOOLBAR_HEIGHT = 30;
 export const MAX_GRID_COLUMNS = 4;
 

@@ -1021,7 +1021,7 @@ html.stream-focused .stream-card__toolbar {
 html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']) .stream-card {
   display: flex;
   flex-direction: column;
-  height: calc(var(--player-height, 0px) + var(--toolbar-open-height));
+  height: var(--player-height, auto);
   overflow: hidden;
 }
 
@@ -1038,11 +1038,28 @@ html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mo
 }
 
 html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater']):not(:empty) .stream-card__player {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   width: 100%;
   min-height: 0;
-  height: var(--player-height, auto) !important;
+  height: auto !important;
   aspect-ratio: unset;
+}
+
+html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
+  .stream-card--kick:not(.is-focused):hover .stream-card__iframe,
+html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mode='theater'])
+  .stream-card--kick:not(.is-focused):focus-within .stream-card__iframe {
+  /* 9999px fallback when --player-height is unset (phone stack) → width scale wins. */
+  transform: translate(-50%, -50%)
+    scale(
+      min(
+        var(--kick-scale, 1),
+        calc(
+          (var(--player-height, 9999px) - var(--toolbar-open-height)) /
+            (var(--kick-render-width) * 9 / 16)
+        )
+      )
+    );
 }
 
 .stream-card__toolbar {
@@ -1056,13 +1073,13 @@ html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mo
   justify-content: space-between;
   gap: 8px;
   box-sizing: border-box;
-  height: var(--toolbar-open-height);
-  min-height: var(--toolbar-open-height);
-  max-height: var(--toolbar-open-height);
+  height: 0;
+  min-height: 0;
+  max-height: 0;
   padding: 0 8px;
   margin: 0;
   overflow: hidden;
-  opacity: 1;
+  opacity: 0;
   border: 0;
   background: color-mix(in srgb, var(--surface) 94%, black);
   transition:
@@ -1075,6 +1092,14 @@ html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mo
 
 html.headers-hidden .stream-card__toolbar {
   display: flex;
+}
+
+html.headers-hidden .stream-card:hover .stream-card__toolbar,
+html.headers-hidden .stream-card:focus-within .stream-card__toolbar {
+  height: var(--toolbar-open-height);
+  min-height: var(--toolbar-open-height);
+  max-height: var(--toolbar-open-height);
+  opacity: 1;
   border-top: 1px solid var(--border);
 }
 

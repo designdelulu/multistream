@@ -14,8 +14,8 @@ Watch Twitch, Kick, YouTube, and experimental TikTok LIVE on one page — or sta
 | Username dropdown | Type a name (or `@name`) and choose Twitch, Kick, YouTube, or TikTok LIVE (Experimental) |
 | Share menu | **Start Live Watch Party** / **Share Watch Party** (live `/w/ROOM_ID`; starts a party if needed and copies the link), Story Card preview/download |
 | Clear all | Remove every stream (with confirmation) |
-| Hide headers | Compact grid with a fixed control footer below every video (never over it) |
-| Drag reorder | Drag card headers — or the drag handle in the compact footer |
+| Hide headers | Compact grid; hover a card to reveal controls below the video (never over it) |
+| Drag reorder | Drag card headers — or the drag handle in the hover toolbar when headers are hidden |
 | Theater | Per-card button opens that stream as the primary |
 | Session restore | Last lineup, view mode, and selected primary saved in `localStorage` |
 | Focus mode | Expand one stream, unmute it, open Twitch or Kick chat when available |
@@ -57,8 +57,8 @@ Each TikTok card is marked **Experimental**. Playback uses a resolver + `<video>
 ## Watching the grid
 
 - Streams fill a responsive grid that keeps every player as large as possible.
-- Each card shows a platform badge and username on the header (or in the fixed compact footer when headers are hidden).
-- Drag a card's **header** to reorder (or the **drag** handle in the compact footer). Playback continues — players are not remounted.
+- Each card shows a platform badge and username on the header (or in the hover toolbar when headers are hidden).
+- Drag a card's **header** to reorder (or the **drag** handle in the hover toolbar). Playback continues — players are not remounted.
 - Use the red **×** to remove a stream. On a Theater/Focus primary, × returns to the grid instead.
 - A **portrait stream** (a YouTube Short or TikTok LIVE) always takes up the height of 2 landscape rows in its column — not a partial row — so it never leaves an oddly-sized gap next to the streams beside it. The video itself keeps its real 9:16 shape inside that space; it's never stretched wider or squeezed to fill the box. On a phone-width screen, where the grid is a single column anyway, a portrait stream instead gets its own full-width row sized to its real 9:16 shape.
 
@@ -80,6 +80,7 @@ control hides it again.
 
 - Click the **Focus** control on a card (header button, or magnifying glass in no-header mode) for solo primary.
 - That stream fills the area below the toolbar and reloads **unmuted**.
+- Twitch or Kick chat opens automatically for the primary. **Theater** (primary plus tray) does not auto-open chat.
 - Click **Theater** on the same card for primary plus tray instead.
 
 ### Keyboard shortcuts
@@ -96,8 +97,8 @@ Desktop only — Theater/Focus don't exist on phones. Shortcuts never fire while
 ### Hide headers
 
 - Toolbar **Show headers** / **Hide headers** toggles card top bars (preference is remembered; headers shown by default).
-- A fixed compact footer remains below the iframe (name, drag, Theater, Focus, remove). It never changes the player's dimensions on hover and never overlays the embed.
-- iPad hides both the header and compact footer, leaving only a circular close X in the video’s top-right corner.
+- At rest the card is **video only**. Hover the card and the player shrinks slightly so a control strip appears **below** the iframe (name, drag, Theater, Focus, remove) — never stacked over the embed. Kick embeds re-scale on hover so volume / pause stay inside the smaller player.
+- iPad hides both the header and hover toolbar, leaving only a circular close X in the video’s top-right corner.
 
 ### Twitch and Kick status
 
@@ -174,7 +175,7 @@ Performance depends on how many live embeds are open. Fewer streams = smoother p
 
 - Start muted — browsers block unmuted autoplay.
 - Focus a stream when you want sound quickly.
-- Hide headers on desktop for tournaments or dense watch parties; the compact footer stays available below each video without resizing it.
+- Hide headers on desktop for tournaments or dense watch parties; hover a card to reveal controls under the video.
 - Clear all when starting a fresh layout.
 - Kick's volume UI needs a wide player; MultiStream scales Kick embeds so desktop chrome stays available when cells are narrow.
 - Story Card preview is overlay-only — opening or closing it should not restart your streams.

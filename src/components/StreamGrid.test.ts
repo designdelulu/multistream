@@ -3100,10 +3100,13 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
     const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
     expect(withoutComments).toMatch(
-      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\)\s+\.stream-card\s*\{[^}]*height:\s*calc\(var\(--player-height,\s*0px\)\s*\+\s*var\(--toolbar-open-height\)\)/,
+      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\)\s+\.stream-card\s*\{[^}]*height:\s*var\(--player-height/,
     );
     expect(withoutComments).toMatch(
-      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\):not\(:empty\)\s+\.stream-card__player\s*\{[^}]*height:\s*var\(--player-height,\s*auto\)\s*!important/,
+      /html\.headers-hidden\s+\.stream-grid:not\(\[data-view-mode='focus'\]\):not\(\[data-view-mode='theater'\]\):not\(:empty\)\s+\.stream-card__player\s*\{[^}]*height:\s*auto\s*!important/,
+    );
+    expect(withoutComments).toMatch(
+      /html\.headers-hidden\s+\.stream-card:hover\s+\.stream-card__toolbar/,
     );
     expect(withoutComments).toMatch(
       /\.stream-grid\[data-view-mode='theater'\] \.stream-card\.is-focus-primary \{[^}]*align-self:\s*center/,

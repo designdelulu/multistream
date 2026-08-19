@@ -224,7 +224,9 @@ function afterViewModeToggle(): void {
   // this must be called on every mode change, not just headers toggles.
   reorder.sync();
   syncPrimaryChat({
-    openSupportedChat: previousMode === 'grid' && nextMode !== 'grid',
+    // User Focus (store `theater`, solo primary) auto-opens Twitch/Kick chat.
+    // User Theater (store `focus`, primary + tray) does not — leave chat as-is.
+    openSupportedChat: nextMode === 'theater',
   });
   // syncViewMode only flips data-view-mode + .is-focus-primary — the actual
   // --focus-primary-width/--focus-tray-* pixel vars that size the primary
