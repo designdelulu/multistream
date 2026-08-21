@@ -1074,13 +1074,15 @@ document.addEventListener('fullscreenchange', () => {
 });
 window.addEventListener('mousemove', nudgeOnInteraction, { passive: true });
 window.addEventListener('pointerdown', nudgeOnInteraction, { passive: true });
-if (isIPadDevice()) {
-  window.addEventListener(
-    'pointerdown',
-    () => replayBlockedVisibleTwitchPlayers(gridEl),
-    { passive: true },
-  );
-}
+// Every device, not just iPad: a pointer gesture is what lets a blocked player
+// start and what lets audio deferred by resumeBlockedTwitchPlayback come back.
+// Autoplay policy applies everywhere, and desktop had no retry path at all —
+// an unmuted stream blocked by an add stayed dead until a manual reload.
+window.addEventListener(
+  'pointerdown',
+  () => replayBlockedVisibleTwitchPlayers(gridEl),
+  { passive: true },
+);
 
 renderStreams();
 if (viewModeStore.getMode() !== 'grid') {

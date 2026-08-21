@@ -592,6 +592,76 @@ function replayTwitchPlayback(player: Twitch.Player, card: HTMLElement): void {
 }
 
 /**
+ * Marks a card as wanting audio back and drops it to muted, so that something
+ * can play at all. See resumeBlockedTwitchPlayback for the full reasoning; the
+ * remount path in rebuildTwitchPlayer needs the same two lines before it
+ * constructs, which is why they live here rather than inline.
+ */
+function deferTwitchAudioToGesture(card: HTMLElement): void {
+  if (preferredMuted(card)) return;
+  card.dataset.audioWanted = '1';
+  card.dataset.embedMuted = '1';
+  syncTwitchMuteUi(card);
+}
+
+/**
+ * Recover a player Twitch reported as PLAYBACK_BLOCKED.
+ *
+ * A block is autoplay policy, never a stall, and it can only ever hit an
+ * *unmuted* player: muted playback is always permitted. So retrying play() on
+ * an unmuted card is guaranteed to be refused again — which is exactly what
+ * this app used to do, leaving the card latched `blocked` with its mute button
+ * still drawing the unmuted icon over a dead player.
+ *
+ * Mute first, then play. That always succeeds, so the video comes straight
+ * back and the button stops lying. The audio the viewer actually asked for is
+ * not thrown away: `audioWanted` marks the card, and
+ * restoreWantedTwitchAudio turns it back on at their next real click, when
+ * autoplay policy finally allows it.
+ */
+function resumeBlockedTwitchPlayback(player: Twitch.Player, card: HTMLElement): void {
+  if (preferredMuted(card)) {
+    replayTwitchPlayback(player, card);
+    return;
+  }
+
+  deferTwitchAudioToGesture(card);
+  safeCall(() => player.setMuted(true));
+  player.play();
+  /*
+   * No longer blocked — muted, and playing. Leaving the latch on `blocked`
+   * would make the next gesture retry a play() on a card that is already
+   * running, instead of doing the one thing still outstanding: putting the
+   * audio back. It would also keep the card out of snapshotPlayingTwitchPlayers,
+   * hiding a perfectly healthy player from every later recovery pass.
+   */
+  const streamId = card.dataset.streamId ?? '';
+  if (streamId) setPlaybackState(streamId, 'unknown', card.dataset.channel);
+}
+
+/**
+ * The other half of resumeBlockedTwitchPlayback: a real pointer gesture is the
+ * one moment autoplay policy lets an unmuted player start, so that is when the
+ * deferred audio goes back on. Only cards actually playing again are restored —
+ * unmuting a still-stuck player would just re-block it.
+ */
+function restoreWantedTwitchAudio(card: HTMLElement): void {
+  if (card.dataset.audioWanted !== '1') return;
+  const streamId = card.dataset.streamId ?? '';
+  const player = twitchPlayers.get(streamId);
+  if (!player) return;
+  if (checkPaused(player, streamId) !== false) return;
+
+  delete card.dataset.audioWanted;
+  card.dataset.embedMuted = '0';
+  safeCall(() => player.setMuted(false));
+  const volume = twitchVolume.get(streamId) ?? DEFAULT_UNMUTE_VOLUME;
+  safeCall(() => player.setVolume(volume / 100));
+  syncTwitchMuteUi(card);
+  logPlayerEvent('audio-restored', { streamId, volume });
+}
+
+/**
  * Lazily loads Twitch's embed script once, shared by every Twitch card, so a
  * Kick-only session never pays for it. Resolves true only if the script
  * actually loaded AND window.Twitch.Player is really there — some
@@ -688,10 +758,11 @@ function constructTwitchPlayer(card: HTMLElement, muted: boolean): void {
     logPlayerEvent('event:PLAYBACK_BLOCKED', { streamId, channel });
     reportEmbedRecovery('playback-blocked', { platform: 'twitch' });
     setPlaybackState(streamId, 'blocked', channel);
-    // Autoplay policy, not a stall — retrying play() cannot clear it, so stop
-    // any recovery run chasing this card and let it be reported on its own.
+    // Autoplay policy, not a stall — retrying play() *unmuted* cannot clear
+    // it, so stop any recovery run chasing this card and let
+    // resumeBlockedTwitchPlayback drop it to muted instead.
     playbackRecovery.markBlocked(streamId);
-    replayTwitchPlayback(player, card);
+    resumeBlockedTwitchPlayback(player, card);
   });
   player.addEventListener(Twitch.Player.OFFLINE, () => {
     logEmbedEvent('player-offline', { platform: 'twitch', channel, card });
@@ -1405,6 +1476,10 @@ function toggleTwitchMute(card: HTMLElement): void {
   const streamId = card.dataset.streamId ?? '';
   const nextMuted = !preferredMuted(card);
   const mode = card.dataset.twitchMode;
+
+  // An explicit choice outranks any audio restore still pending from a block
+  // (see resumeBlockedTwitchPlayback) — in either direction.
+  delete card.dataset.audioWanted;
 
   if (mode === 'fallback') {
     mountTwitchIframe(card, nextMuted, 'focus-unmute');
@@ -3801,9 +3876,20 @@ function checkPosition(player: Twitch.Player): number | null {
   }
 }
 
-/** Destroy and reconstruct from scratch — for when the instance itself can't be trusted. */
-function rebuildTwitchPlayer(card: HTMLElement): void {
+/**
+ * Destroy and reconstruct from scratch — for when the instance itself can't be
+ * trusted.
+ *
+ * `userInitiated` decides whether the replacement may start with audio. A
+ * fresh player constructed `muted: false, autoplay: true` outside a real click
+ * is refused by autoplay policy every single time, so an automatic rebuild
+ * that honoured an unmuted preference was building a guaranteed-blocked
+ * player. Automatic callers construct muted and hand the audio to
+ * restoreWantedTwitchAudio; a click can construct unmuted directly.
+ */
+function rebuildTwitchPlayer(card: HTMLElement, userInitiated: boolean): void {
   const streamId = card.dataset.streamId ?? '';
+  if (!userInitiated) deferTwitchAudioToGesture(card);
 
   logPlayerEvent('rebuild', { streamId, channel: card.dataset.channel });
   twitchPlayers.get(streamId)?.destroy();
@@ -3881,7 +3967,8 @@ function refreshTikTokPlayerIfNeeded(card: HTMLElement): void {
  * reloading the focused stream is exactly what's wanted when a user asks,
  * and no rate limit applies to a deliberate click.
  */
-function reloadStreamCard(card: HTMLElement): void {
+function reloadStreamCard(card: HTMLElement, options?: { userInitiated?: boolean }): void {
+  const userInitiated = options?.userInitiated !== false;
   if (card.dataset.platform === 'kick') {
     reloadKickPlayer(card);
     return;
@@ -3901,12 +3988,17 @@ function reloadStreamCard(card: HTMLElement): void {
   const container = card.parentElement;
   if (container) refreshTwitchStatus(container, [card.dataset.channel ?? '']);
 
+  // Every branch below reads preferredMuted(card), so dropping the preference
+  // to muted here covers the api rebuild, the fallback remount and the pending
+  // re-mount in one place — none of them may start unmuted without a gesture.
+  if (!userInitiated) deferTwitchAudioToGesture(card);
+
   const mode = card.dataset.twitchMode;
 
   if (mode === 'api') {
     logEmbedEvent('player-recover', { platform: 'twitch', channel: card.dataset.channel, card });
     reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'manual' });
-    rebuildTwitchPlayer(card);
+    rebuildTwitchPlayer(card, userInitiated);
     return;
   }
 
@@ -4621,7 +4713,7 @@ function verifyAndRecoverTwitchPlayer(card: HTMLElement, allowReconnect = true):
       card,
     });
     reportEmbedRecovery('player-recover', { platform: 'twitch', reason: 'rebuild' });
-    rebuildTwitchPlayer(card);
+    rebuildTwitchPlayer(card, false);
     return;
   }
 
@@ -4741,7 +4833,7 @@ function createTwitchRecoveryTarget(
       if (!isStreamCardLayoutVisible(card)) return;
       if (Number(card.dataset.userEngagedAt ?? '0') >= startedAt) return;
       if (!isTwitchEmbedBoxLargeEnoughForRemount(card)) return;
-      reloadStreamCard(card);
+      reloadStreamCard(card, { userInitiated: false });
     },
   };
 }
@@ -5125,7 +5217,7 @@ function runLayoutCircuitBreaker(container: HTMLElement, snapshotIds: readonly s
     snapshot: snapshotIds.length,
   });
   for (const card of stuck) {
-    reloadStreamCard(card);
+    reloadStreamCard(card, { userInitiated: false });
   }
 }
 
@@ -5339,9 +5431,17 @@ export function nudgeStalledTwitchPlayers(container: HTMLElement): void {
 }
 
 /**
- * A real pointer gesture can satisfy autoplay policy on iPad. Retry only
- * players that emitted PLAYBACK_BLOCKED; user-paused and merely stalled
- * players are deliberately excluded.
+ * A real pointer gesture is the one moment autoplay policy relents, so this
+ * runs on every pointerdown and does the two things that need a gesture:
+ *
+ * 1. Retries players still latched `blocked`. User-paused and merely stalled
+ *    players are deliberately excluded.
+ * 2. Turns audio back on for cards resumeBlockedTwitchPlayback had to drop to
+ *    muted, restoring the volume the viewer had.
+ *
+ * Both were iPad-only until the unmuted-stream-dies-on-add bug showed the
+ * policy is not iPad-specific — desktop simply had no retry path at all, which
+ * is why a blocked card stayed dead there until a manual reload.
  */
 export function replayBlockedVisibleTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
@@ -5349,7 +5449,13 @@ export function replayBlockedVisibleTwitchPlayers(container: HTMLElement): void 
     if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     const streamId = card.dataset.streamId ?? '';
-    if (!streamId || twitchPlayback.get(streamId) !== 'blocked') continue;
+    if (!streamId) continue;
+
+    if (twitchPlayback.get(streamId) !== 'blocked') {
+      restoreWantedTwitchAudio(card);
+      continue;
+    }
+
     const player = twitchPlayers.get(streamId);
     if (!player) continue;
     setPlaybackState(streamId, 'unknown', card.dataset.channel);

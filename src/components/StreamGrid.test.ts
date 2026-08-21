@@ -29,6 +29,8 @@ import {
   refreshLoadedStreamPlayers,
   refreshTwitchStatus,
   refreshYouTubeStats,
+  reloadStreamCardById,
+  replayBlockedVisibleTwitchPlayers,
   resolveTikTokWithMissingStreamRetry,
   resumeVisibleStreamPlayers,
   filterLayoutVisibleStreamIds,
@@ -4131,4 +4133,235 @@ describe('isStreamCardPlaybackEligible — phone-parked cards are off-limits to 
     expect(isStreamCardPlaybackEligible(el)).toBe(false);
   });
 
+});
+
+/**
+ * Regression suite for "unmuting a stream, then adding another, kills it".
+ *
+ * A PLAYBACK_BLOCKED event is autoplay policy refusing an *unmuted* player —
+ * muted playback is always permitted, so a block can only ever hit a card the
+ * viewer had unmuted. The handler used to answer it with another unmuted
+ * play(), which is refused for exactly the same reason, so the card latched
+ * `blocked` with its mute button still drawing the unmuted icon over a dead
+ * player. These tests pin the fix: mute, play, and hand the audio back at the
+ * next real gesture.
+ */
+describe('blocked playback — unmuted Twitch recovery', () => {
+  class FakeTwitchPlayer {
+    static readonly READY = 'READY';
+    static readonly PLAY = 'PLAY';
+    static readonly PLAYING = 'PLAYING';
+    static readonly PAUSE = 'PAUSE';
+    static readonly ENDED = 'ENDED';
+    static readonly PLAYBACK_BLOCKED = 'PLAYBACK_BLOCKED';
+    static readonly OFFLINE = 'OFFLINE';
+    static readonly ONLINE = 'ONLINE';
+
+    paused = false;
+    muted: boolean;
+    volume = 1;
+    /** Ordered call log — the fix is as much about order as about the calls. */
+    calls: string[] = [];
+    private listeners = new Map<string, Array<() => void>>();
+
+    constructor(
+      public elementId: string,
+      public options: Twitch.PlayerOptions,
+    ) {
+      this.muted = options.muted ?? true;
+    }
+    play(): void {
+      this.calls.push('play');
+      this.paused = false;
+    }
+    pause(): void {
+      this.paused = true;
+    }
+    isPaused(): boolean {
+      return this.paused;
+    }
+    setMuted(muted: boolean): void {
+      this.calls.push(`setMuted:${muted}`);
+      this.muted = muted;
+    }
+    getMuted(): boolean {
+      return this.muted;
+    }
+    setVolume(volume: number): void {
+      this.calls.push(`setVolume:${volume}`);
+      this.volume = volume;
+    }
+    getVolume(): number {
+      return this.volume;
+    }
+    setChannel(): void {}
+    getCurrentTime(): number {
+      return 0;
+    }
+    getPlaybackStats(): Twitch.PlaybackStats {
+      return {};
+    }
+    addEventListener(event: string, callback: () => void): void {
+      const list = this.listeners.get(event) ?? [];
+      list.push(callback);
+      this.listeners.set(event, list);
+    }
+    removeEventListener(): void {}
+    destroy(): void {}
+    emit(event: string): void {
+      for (const callback of this.listeners.get(event) ?? []) callback();
+    }
+  }
+
+  let container: HTMLElement;
+  let created: FakeTwitchPlayer[];
+
+  function fakeStore(streams: StreamRef[]): StreamStore {
+    return { getStreams: () => streams } as StreamStore;
+  }
+
+  const stream: StreamRef = {
+    id: 'twitch:alpha',
+    platform: 'twitch',
+    channel: 'alpha',
+    muted: true,
+    orientation: 'landscape',
+  };
+
+  async function mountOne(): Promise<{ card: HTMLElement; player: FakeTwitchPlayer }> {
+    syncStreamGrid(container, fakeStore([stream]));
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    const card = container.querySelector<HTMLElement>('[data-stream-id="twitch:alpha"]');
+    if (!card) throw new Error('test setup failed to mount the card');
+    return { card, player: created[0] };
+  }
+
+  /** The viewer unmutes via the header control — the real toggleTwitchMute path. */
+  function clickMute(card: HTMLElement): void {
+    card.querySelector<HTMLButtonElement>('.stream-card__mute-btn')?.click();
+  }
+
+  function muteButtonSaysMuted(card: HTMLElement): boolean {
+    const button = card.querySelector<HTMLButtonElement>('.stream-card__mute-btn');
+    return button?.getAttribute('aria-pressed') === 'true';
+  }
+
+  beforeEach(() => {
+    created = [];
+    container = document.createElement('div');
+    container.id = 'stream-grid';
+    document.body.append(container);
+
+    const players = created;
+    (globalThis as unknown as { Twitch: unknown }).Twitch = {
+      Player: class extends FakeTwitchPlayer {
+        constructor(elementId: string, options: Twitch.PlayerOptions) {
+          super(elementId, options);
+          players.push(this);
+        }
+      },
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'ok', results: [] }) }),
+    );
+  });
+
+  afterEach(() => {
+    __resetPlaybackRecoveryForTests();
+    syncStreamGrid(container, fakeStore([]));
+    __resetTwitchMutePollTimerForTests();
+    delete (globalThis as unknown as { Twitch?: unknown }).Twitch;
+    container.remove();
+  });
+
+  it('answers a block on an unmuted card by muting first, then playing', async () => {
+    const { card, player } = await mountOne();
+    clickMute(card);
+    expect(card.dataset.embedMuted).toBe('0');
+    expect(muteButtonSaysMuted(card)).toBe(false);
+
+    player.calls = [];
+    player.emit('PLAYBACK_BLOCKED');
+
+    // Mute *before* play — the other order is refused all over again.
+    expect(player.calls).toEqual(['setMuted:true', 'play']);
+    // The button must stop claiming audio it isn't delivering.
+    expect(card.dataset.embedMuted).toBe('1');
+    expect(muteButtonSaysMuted(card)).toBe(true);
+    // ...but the viewer's intent is remembered, not discarded.
+    expect(card.dataset.audioWanted).toBe('1');
+  });
+
+  it('leaves an already-muted card on its existing blocked path', async () => {
+    const { card, player } = await mountOne();
+    expect(card.dataset.embedMuted).toBe('1');
+
+    player.calls = [];
+    player.emit('PLAYBACK_BLOCKED');
+
+    // Unchanged pre-fix behaviour: play(), then re-assert the mute preference.
+    expect(player.calls).toEqual(['play', 'setMuted:true']);
+    expect(card.dataset.audioWanted).toBeUndefined();
+  });
+
+  it('restores the deferred audio at the next pointer gesture', async () => {
+    const { card, player } = await mountOne();
+    clickMute(card);
+    player.emit('PLAYBACK_BLOCKED');
+    expect(card.dataset.audioWanted).toBe('1');
+
+    player.calls = [];
+    replayBlockedVisibleTwitchPlayers(container);
+
+    expect(player.calls).toEqual(['setMuted:false', 'setVolume:0.25']);
+    expect(card.dataset.embedMuted).toBe('0');
+    expect(card.dataset.audioWanted).toBeUndefined();
+    expect(muteButtonSaysMuted(card)).toBe(false);
+  });
+
+  it('does not restore audio onto a player that is still stopped', async () => {
+    const { card, player } = await mountOne();
+    clickMute(card);
+    player.emit('PLAYBACK_BLOCKED');
+    // Still not running — unmuting now would simply be blocked again.
+    player.pause();
+
+    player.calls = [];
+    replayBlockedVisibleTwitchPlayers(container);
+
+    expect(player.calls).toEqual([]);
+    expect(card.dataset.audioWanted).toBe('1');
+    expect(card.dataset.embedMuted).toBe('1');
+  });
+
+  it('drops a pending restore when the viewer makes their own mute choice', async () => {
+    const { card, player } = await mountOne();
+    clickMute(card);
+    player.emit('PLAYBACK_BLOCKED');
+    expect(card.dataset.audioWanted).toBe('1');
+
+    // Viewer unmutes it themselves — inside a real click, so this one is allowed.
+    clickMute(card);
+    expect(card.dataset.audioWanted).toBeUndefined();
+
+    player.calls = [];
+    replayBlockedVisibleTwitchPlayers(container);
+    expect(player.calls).toEqual([]);
+  });
+
+  it('still builds an unmuted player for a user-clicked reload', async () => {
+    const { card } = await mountOne();
+    clickMute(card);
+    expect(card.dataset.embedMuted).toBe('0');
+
+    reloadStreamCardById('twitch:alpha');
+    await vi.waitFor(() => expect(created).toHaveLength(2));
+
+    // A click carries user activation, so audio may start immediately — this
+    // is the path that made the bug survivable, and it must not regress.
+    expect(created[1].options.muted).toBe(false);
+    expect(card.dataset.embedMuted).toBe('0');
+  });
 });

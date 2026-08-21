@@ -140,6 +140,49 @@ literal, formerly-empty-array symptom. A second test confirms the
 `offline`/`blocked` exclusion still works via a real `OFFLINE` event, not a
 hand-set flag.
 
+## Autoplay policy: automatic recovery is always muted
+
+**The rule:** only a path running inside a real user gesture may start an
+unmuted player. Every automatic path — the bounded add/remove passes, the 90s
+watchdog, the layout circuit breaker, the stall sentinel — resumes **muted**
+and defers the audio to the next gesture. Muted playback is always permitted;
+unmuted playback outside a click is refused, every time, on every browser.
+
+**The bug this came from:** with one stream unmuted, adding another killed it.
+Adding resizes every tile, Twitch pauses the affected players, and recovery
+answers with `player.play()` from a timer — no gesture. For the unmuted card
+that is refused and Twitch fires `PLAYBACK_BLOCKED`. The handler then called
+`replayTwitchPlayback`, i.e. `play()` again plus `enforcePreferredMute`, and
+`enforcePreferredMute` deliberately does nothing to an unmuted card. So the one
+action that clears a block — muting — was skipped for the only card that is
+ever blocked. The card latched `blocked` with `data-embed-muted="0"`, so the
+mute button kept drawing the unmuted icon over a dead player, and the mute poll
+saw nothing to correct because `getMuted()` honestly reported `false` — the
+player was unmuted, just not allowed to play. On desktop nothing ever retried:
+`replayBlockedVisibleTwitchPlayers` was wired to a `pointerdown` on iPad only.
+Escalation made it worse, since `rebuildTwitchPlayer` honoured the unmuted
+preference and constructed a fresh `muted: false, autoplay: true` player —
+blocked by construction.
+
+**Fix:** `resumeBlockedTwitchPlayback` handles `PLAYBACK_BLOCKED`. On an
+unmuted card it marks `data-audio-wanted`, mutes, syncs the button so it stops
+lying, plays, and clears the `blocked` latch — the card is playing now, just
+silently. `restoreWantedTwitchAudio` turns the audio back on at the next
+`pointerdown`, at the stored `twitchVolume`, but only once the player is
+confirmed running; unmuting a still-stuck player would just re-block it. An
+explicit mute/unmute by the viewer clears any pending restore. `reloadStreamCard`
+and `rebuildTwitchPlayer` take a `userInitiated` flag: the header/hover Reload
+buttons, toolbar Refresh and the live-toast Reload keep `true`, while
+`escalate()`, the circuit breaker and the watchdog pass `false` and construct
+muted. The `pointerdown` retry now runs on every device, not just iPad.
+
+**Regression coverage:** `StreamGrid.test.ts`'s "blocked playback — unmuted
+Twitch recovery" suite fires a real `PLAYBACK_BLOCKED` at the constructed
+player and pins the call *order* (`setMuted(true)` before `play()`), the
+truthful button state, the deferred restore at the next gesture, the refusal to
+restore onto a still-paused player, an explicit viewer choice cancelling a
+pending restore, and that a user-clicked reload still builds unmuted.
+
 ## The 11-stream live test result
 
 Manually tested in production-equivalent conditions with ~11 concurrent
