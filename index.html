@@ -105,14 +105,21 @@
         if (!localStorage.getItem('multistream:welcome-dismissed')) {
           document.documentElement.classList.add('show-welcome');
         }
-        if (
-          localStorage.getItem('multistream:headers-hidden') === '1' &&
-          !window.matchMedia('(max-width: 640px)').matches &&
-          !(
-            /iPad/i.test(navigator.userAgent) ||
-            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-          )
-        ) {
+        // Keep in step with main.ts's applyDeviceHeadersOverride and
+        // isIPadDevice. iPad is always headerless (its own circular-close
+        // CSS), so it never takes the shared class. Phones DO honor the
+        // stored preference — Hide Headers replaces Refresh in the phone
+        // toolbar — and are deliberately not excluded here; excluding them
+        // would let headers paint before hydration removed them.
+        var isIPad =
+          /iPad/i.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        if (isIPad) {
+          // Set pre-hydration (main.ts sets it again) so the iPad-only
+          // capacity note never flashes the phone text first.
+          document.documentElement.classList.add('ipad-device');
+        }
+        if (localStorage.getItem('multistream:headers-hidden') === '1' && !isIPad) {
           document.documentElement.classList.add('headers-hidden');
         }
       } catch (e) {}
@@ -209,6 +216,10 @@
           <p class="site-intro__mobile-limit">
             On a phone, streams stack in a column. About three fit on screen at once. Scroll to move
             between them. Twitch may need you to stay on it a moment before the video fully plays.
+          </p>
+
+          <p class="site-intro__ipad-limit">
+            On iPad you can watch up to 10 streams at once. Nine or fewer plays best in landscape.
           </p>
         </section>
 
@@ -397,6 +408,11 @@
         <p class="toolbar__mobile-note">
           Scroll between streams — about 3 fit on screen. Twitch may need a moment on-screen before
           video plays.
+        </p>
+        <!-- Text is rewritten by StreamToolbar's syncIpadNote as the stream
+             count crosses IPAD_MAX_STREAMS; this is the at-rest wording. -->
+        <p id="ipad-stream-note" class="toolbar__ipad-note">
+          Up to 10 streams on iPad. Nine or fewer plays best in landscape.
         </p>
         <div id="twitch-status-announcer" class="visually-hidden" role="status" aria-live="polite"></div>
       </header>

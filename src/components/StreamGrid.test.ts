@@ -33,6 +33,7 @@ import {
   resumeVisibleStreamPlayers,
   filterLayoutVisibleStreamIds,
   isStreamCardLayoutVisible,
+  isStreamCardPlaybackEligible,
   pauseTheaterHiddenTwitchPlayers,
   setFocusedStream,
   setFocusViewPrimary,
@@ -3213,8 +3214,21 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(withoutComments).toMatch(
       /html\.ipad-device\s+\.stream-card__header,\s*html\.ipad-device\s+\.stream-card__toolbar\s*\{[^}]*display:\s*none\s*!important/,
     );
+    // The circle's appearance lives on the bare class and is switched on by
+    // `display` alone, so the phone headers-hidden case can enable the exact
+    // same control without a duplicated style block.
     expect(withoutComments).toMatch(
-      /html\.ipad-device\s+\.stream-card__ipad-close\s*\{[^}]*border-radius:\s*50%[^}]*color:\s*var\(--muted\)/,
+      /\n\.stream-card__ipad-close\s*\{[^}]*border-radius:\s*50%[^}]*color:\s*var\(--muted\)/,
+    );
+    expect(withoutComments).toMatch(
+      /html\.ipad-device\s+\.stream-card__ipad-close\s*\{[^}]*display:\s*inline-flex/,
+    );
+    // Small and faded over live video, but with the hit area restored so the
+    // shrink costs nothing in tap accuracy.
+    expect(withoutComments).toMatch(/\n\.stream-card__ipad-close\s*\{[^}]*width:\s*26px/);
+    expect(withoutComments).toMatch(/\n\.stream-card__ipad-close\s*\{[^}]*opacity:\s*0\.45/);
+    expect(withoutComments).toMatch(
+      /\.stream-card__ipad-close::before\s*\{[^}]*inset:\s*-8px/,
     );
     expect(withoutComments).toMatch(
       /html\.ipad-device\.watch-party-viewer\s+\.stream-card__ipad-close\s*\{[^}]*display:\s*none/,
@@ -3244,14 +3258,25 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     );
   });
 
-  it('phone chrome hides Hide Headers, restores header scrolling, and enlarges the welcome panel', async () => {
+  it('phone chrome swaps Refresh for Hide Headers, restores header scrolling, and enlarges the welcome panel', async () => {
     // @ts-expect-error no @types/node in this project — see comment above.
     const fs = await import('node:fs');
     const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
     const html: string = fs.readFileSync('index.html', 'utf-8');
     const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    // Refresh gives up the slot; Hide Headers takes it. #headers-toggle must
+    // NOT be hidden at phone width any more — syncHeadersButton hides it on
+    // iPad only.
     expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?#refresh-streams\s*\{[^}]*display:\s*none/,
+    );
+    expect(withoutComments).not.toMatch(
       /@media \(max-width:\s*640px\)[\s\S]*?#headers-toggle\s*\{[^}]*display:\s*none/,
+    );
+    // With headers hidden on a phone there is no hover toolbar to reach, so
+    // the same circular X iPad uses becomes the card's only action.
+    expect(withoutComments).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?html\.headers-hidden\s+\.stream-card__ipad-close\s*\{[^}]*display:\s*inline-flex/,
     );
     expect(withoutComments).toMatch(
       /@media \(max-width:\s*640px\)[\s\S]*?\.stream-card__header\s*\{[^}]*touch-action:\s*auto/,
@@ -3262,7 +3287,13 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(withoutComments).toMatch(
       /@media \(max-width:\s*640px\)[\s\S]*?\.site-intro__desktop-only\s*\{[^}]*display:\s*none/,
     );
-    expect(html).toMatch(/matchMedia\('\(max-width: 640px\)'\)/);
+    // The boot script no longer width-gates headers-hidden: phones honor the
+    // stored preference like desktop, and only iPad is excluded. Gating on
+    // width here would let headers paint before hydration removed them.
+    expect(html).not.toMatch(/matchMedia\('\(max-width: 640px\)'\)/);
+    expect(html).toMatch(/if \(localStorage\.getItem\('multistream:headers-hidden'\) === '1' && !isIPad\)/);
+    // Set pre-hydration so the iPad capacity note never flashes phone copy.
+    expect(html).toMatch(/classList\.add\('ipad-device'\)/);
     expect(html).toContain('class="site-intro__desktop-only"');
     expect(withoutComments).toMatch(
       /@media \(max-width:\s*640px\)[\s\S]*?\.stream-card__theater,\s*\.stream-card__focus,\s*\.stream-card__overlay-theater,\s*\.stream-card__overlay-focus\s*\{[^}]*display:\s*none/,
@@ -4023,6 +4054,28 @@ describe('phone visible playback (scroll-to-play)', () => {
     ]);
     expect(createdTwitchPlayers[0].isPaused()).toBe(true);
     expect(createdYouTubePlayers[0].playCallCount).toBeGreaterThan(0);
+
+    // The parked marker follows the promotion, and it is what keeps the stall
+    // sentinel, the 90s watchdog and the nudge from play()ing these cards back
+    // the moment the arbiter pauses them.
+    const twitchCard = container.querySelector<HTMLElement>('[data-stream-id="twitch:a"]')!;
+    const ytCard = container.querySelector<HTMLElement>(
+      '[data-stream-id="youtube:video:dQw4w9WgXcQ"]',
+    )!;
+    expect(twitchCard.dataset.phoneParked).toBe('1');
+    expect(ytCard.dataset.phoneParked).toBeUndefined();
+    expect(isStreamCardPlaybackEligible(twitchCard)).toBe(false);
+    expect(isStreamCardPlaybackEligible(ytCard)).toBe(true);
+
+    // Scrolling back re-promotes Twitch, which must clear its own marker.
+    applyPhoneVisiblePlayback(container, [
+      { id: 'twitch:a', ratio: 0.9 },
+      { id: 'youtube:video:dQw4w9WgXcQ', ratio: 0.1 },
+    ]);
+    expect(twitchCard.dataset.phoneParked).toBeUndefined();
+    expect(ytCard.dataset.phoneParked).toBe('1');
+    expect(isStreamCardPlaybackEligible(twitchCard)).toBe(true);
+    expect(isStreamCardPlaybackEligible(ytCard)).toBe(false);
   });
 
   it('does not enter Theater or Focus when card view controls are clicked on a phone viewport', async () => {
@@ -4043,4 +4096,39 @@ describe('phone visible playback (scroll-to-play)', () => {
     expect(container.dataset.viewMode).not.toBe('theater');
     expect(container.dataset.viewMode).not.toBe('focus');
   });
+});
+
+describe('isStreamCardPlaybackEligible — phone-parked cards are off-limits to the automatic sweeps', () => {
+  function card(dataset: Record<string, string> = {}): HTMLElement {
+    const el = document.createElement('article');
+    el.className = 'stream-card';
+    el.dataset.streamId = 'twitch:a';
+    el.dataset.platform = 'twitch';
+    for (const [k, v] of Object.entries(dataset)) el.dataset[k] = v;
+    return el;
+  }
+
+  it('is true for an ordinary card, matching layout visibility', () => {
+    const el = card();
+    expect(isStreamCardLayoutVisible(el)).toBe(true);
+    expect(isStreamCardPlaybackEligible(el)).toBe(true);
+  });
+
+  it('is false once the phone observer has parked the card', () => {
+    // The conflict this exists to end: applyPhoneVisiblePlayback pauses every
+    // off-screen card, and a sweep gating only on layout visibility would
+    // play() exactly those back, so the two trade the card back and forth.
+    const el = card({ phoneParked: '1' });
+    expect(isStreamCardLayoutVisible(el)).toBe(true);
+    expect(isStreamCardPlaybackEligible(el)).toBe(false);
+  });
+
+  it('is false for a Theater-hidden card regardless of parking', () => {
+    const grid = document.createElement('div');
+    grid.dataset.viewMode = 'theater';
+    const el = card();
+    grid.append(el);
+    expect(isStreamCardPlaybackEligible(el)).toBe(false);
+  });
+
 });

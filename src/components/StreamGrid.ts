@@ -3352,6 +3352,12 @@ function phoneStackActive(): boolean {
 function pausePhoneVisibleCard(card: HTMLElement): void {
   if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
   const streamId = card.dataset.streamId ?? '';
+  // Marked before the platform bail-outs below, so the flag records the
+  // *intent* to park (this card is not the visible one) rather than whether
+  // a pause was actually issued. Kick and Twitch-fallback cards keep playing
+  // off-screen — but they must still be excluded from the automatic sweeps,
+  // or a sweep will treat one as a stall candidate and remount it.
+  card.dataset.phoneParked = '1';
   if (card.dataset.platform === 'kick') return;
   if (card.dataset.platform === 'twitch') {
     if (card.dataset.twitchMode !== 'api') return;
@@ -3371,6 +3377,7 @@ function pausePhoneVisibleCard(card: HTMLElement): void {
 function playPhoneVisibleCard(card: HTMLElement): void {
   if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') return;
   const streamId = card.dataset.streamId ?? '';
+  delete card.dataset.phoneParked;
   if (card.dataset.platform === 'kick') return;
   if (card.dataset.platform === 'twitch') {
     if (card.dataset.twitchMode !== 'api') return;
@@ -3422,6 +3429,7 @@ export function applyPhoneVisiblePlayback(
     next = bestId;
   }
 
+  const promoted = next !== currentId ? next : null;
   phoneVisiblePrimaryId = next;
 
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
@@ -3430,7 +3438,41 @@ export function applyPhoneVisiblePlayback(
     else pausePhoneVisibleCard(card);
   }
 
+  if (promoted) beginPhoneVisibleRecovery(container, promoted);
+
   return phoneVisiblePrimaryId;
+}
+
+/**
+ * A newly-promoted phone primary gets the same bounded retry schedule every
+ * other recovery path in this app gets, instead of the single bare play()
+ * playPhoneVisibleCard issues. Twitch routinely ignores the first play() on a
+ * card that has just scrolled into view — it is still sizing/attaching — and
+ * with nothing to retry, that card sat paused until the user tapped it.
+ *
+ * Routed through playbackRecovery.overlay() rather than a run kind of its
+ * own: the precedence rule an overlay run wants is precisely the one a scroll
+ * promotion wants — never disturb an in-flight 'transaction' or 'new-player'
+ * run, but always supersede a stale play-only one, since promotions arrive in
+ * bursts while the grid itself never changes. Only the `cause` string differs,
+ * which is what the debug log reads.
+ *
+ * `startedAt` is now: a tap on the card *before* this promotion is what
+ * scrolled it into view, so it must not count as a user pause. Only an
+ * engagement after promotion should suppress recovery, which is exactly what
+ * createTwitchRecoveryTarget's isEligible compares against.
+ */
+function beginPhoneVisibleRecovery(container: HTMLElement, streamId: string): void {
+  const card = cardForStream(streamId);
+  if (!card?.isConnected || !container.contains(card)) return;
+  // api-mode Twitch is the only player this can help; everything else either
+  // has no programmatic play (Kick, Twitch fallback) or took its direct call
+  // in playPhoneVisibleCard and does not stall this way.
+  if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') return;
+  playbackRecovery.overlay(
+    [createTwitchRecoveryTarget(streamId, Date.now(), { remountOnEscalate: false })],
+    'phone-visible',
+  );
 }
 
 function phoneVisibleObserverCallback(entries: IntersectionObserverEntry[]): void {
@@ -3467,6 +3509,15 @@ export function syncPhoneVisiblePlayback(container: HTMLElement): void {
       for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
         playPhoneVisibleCard(card);
       }
+    } else {
+      // Still phone-width, but Focus/Theater has taken over arbitration (or
+      // there was nothing to resume). Nothing is parked by this observer any
+      // more, so the flag must be cleared regardless — leaving it set would
+      // lock those cards out of every automatic recovery sweep for as long as
+      // the mode lasted, with no observer around to ever clear it.
+      for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
+        delete card.dataset.phoneParked;
+      }
     }
     phoneVisiblePrimaryId = null;
     return;
@@ -3476,7 +3527,15 @@ export function syncPhoneVisiblePlayback(container: HTMLElement): void {
 
   if (!phoneVisibleObserver) {
     phoneVisibleObserver = new IntersectionObserver(phoneVisibleObserverCallback, {
-      threshold: [0, 0.25, 0.5, 0.75, 1],
+      // 0.1 steps rather than 0.25: the arbiter only reconsiders when a
+      // threshold is crossed, and at quarter-steps a card could cross
+      // PHONE_VISIBLE_MIN_RATIO mid-scroll without any callback firing near
+      // it, leaving the promotion until the scroll happened to stop on
+      // another boundary. No rootMargin — every phone card is already mounted
+      // eagerly at createPlayerElement, so there is nothing to pre-load, and
+      // an expanded root would report off-screen cards at full ratio and
+      // wreck the most-visible comparison this observer exists to make.
+      threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1],
     });
   }
 
@@ -3551,6 +3610,30 @@ export function isStreamCardLayoutVisible(card: HTMLElement): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * Eligibility for the *automatic, ungestured* sweeps — the stall sentinel,
+ * the 90s watchdog, the interaction nudge, the layout circuit breaker.
+ *
+ * isStreamCardLayoutVisible answers a narrower question than its name
+ * suggests: "is this a display:none Theater tile?". It knows nothing about
+ * scroll position and returns true for a card far outside the viewport. On a
+ * phone that is a direct conflict: applyPhoneVisiblePlayback deliberately
+ * parks every card but the one on screen, and a sweep gating only on layout
+ * visibility then play()s exactly those parked cards back — the observer
+ * re-pauses them on the next intersection callback, and the two trade the
+ * card back and forth while the stream the user is actually looking at waits
+ * its turn behind the churn. That is the "videos don't finish loading unless
+ * I tap play" behavior reported on iPhone.
+ *
+ * Triggered recovery is deliberately NOT routed through this: an add/remove
+ * or view-mode change is a real user action whose snapshot already decided
+ * what deserves recovery.
+ */
+export function isStreamCardPlaybackEligible(card: HTMLElement): boolean {
+  if (card.dataset.phoneParked === '1') return false;
+  return isStreamCardLayoutVisible(card);
 }
 
 export function filterLayoutVisibleStreamIds(
@@ -5018,7 +5101,7 @@ function runLayoutCircuitBreaker(container: HTMLElement, snapshotIds: readonly s
 
   const visibleSnapshot = snapshotIds.filter((streamId) => {
     const card = cardForStream(streamId);
-    return Boolean(card?.isConnected && container.contains(card) && isStreamCardLayoutVisible(card));
+    return Boolean(card?.isConnected && container.contains(card) && isStreamCardPlaybackEligible(card));
   });
   if (visibleSnapshot.length < LAYOUT_CIRCUIT_MIN_SNAPSHOT) return;
 
@@ -5079,7 +5162,7 @@ export function bindPlaybackRecovery(): void {
  */
 export function recoverStalledTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    if (!isStreamCardLayoutVisible(card)) continue;
+    if (!isStreamCardPlaybackEligible(card)) continue;
     if (card.dataset.platform !== 'twitch') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
     if (card.dataset.streamId && isActivelyWatchedStream(card.dataset.streamId)) continue;
@@ -5200,7 +5283,7 @@ export function startStallSentinel(
       for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
         if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
         if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;
-        if (!isStreamCardLayoutVisible(card)) continue;
+        if (!isStreamCardPlaybackEligible(card)) continue;
         const streamId = card.dataset.streamId ?? '';
         if (!streamId) continue;
         const latched = twitchPlayback.get(streamId);
@@ -5246,7 +5329,7 @@ export function __stopStallSentinelForTests(): void {
  */
 export function nudgeStalledTwitchPlayers(container: HTMLElement): void {
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
-    if (!isStreamCardLayoutVisible(card)) continue;
+    if (!isStreamCardPlaybackEligible(card)) continue;
     if (card.dataset.platform !== 'twitch') continue;
     if (card.dataset.twitchMode !== 'api') continue;
     if (card.dataset.tabFrozen === '1' || card.dataset.focusFrozen === '1') continue;

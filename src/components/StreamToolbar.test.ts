@@ -305,3 +305,146 @@ describe('bindStreamToolbar — overlay hooks for covering dropdowns', () => {
     expect(onOverlayClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('iPad stream cap', () => {
+  const IPAD_UA = 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X)';
+  const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+  let restoreNavigator: (() => void) | null = null;
+
+  function asDevice(userAgent: string, platform: string, maxTouchPoints: number): void {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { userAgent, platform, maxTouchPoints },
+      configurable: true,
+    });
+    restoreNavigator = () => {
+      if (original) Object.defineProperty(globalThis, 'navigator', original);
+    };
+  }
+
+  function setup() {
+    document.body.innerHTML = `
+      <form id="add-stream-form">
+        <div class="toolbar__input-wrap">
+          <input id="stream-input" />
+          <div id="add-stream-suggestions" hidden></div>
+        </div>
+        <button id="add-stream-submit" type="submit">Add Stream</button>
+      </form>
+      <button id="refresh-streams" type="button"></button>
+      <button id="headers-toggle" type="button">
+        <span class="toolbar__icon-btn-label"></span>
+      </button>
+      <p id="ipad-stream-note"></p>
+    `;
+    const store = createStreamStore();
+    // createStreamStore hydrates from the URL, and jsdom's location persists
+    // across every test in this file — without this the lineup arrives
+    // pre-populated by whatever ran before.
+    store.clearStreams();
+    bindStreamToolbar(store, createHeadersStore(), createViewModeStore(), {
+      refresh: async () => ({ outcome: 'ok' as const, twitchAllUnavailable: false }),
+      isRefreshInFlight: () => false,
+    });
+    return {
+      store,
+      form: document.querySelector<HTMLFormElement>('#add-stream-form')!,
+      input: document.querySelector<HTMLInputElement>('#stream-input')!,
+      submit: document.querySelector<HTMLButtonElement>('#add-stream-submit')!,
+      headers: document.querySelector<HTMLButtonElement>('#headers-toggle')!,
+      note: document.querySelector<HTMLElement>('#ipad-stream-note')!,
+    };
+  }
+
+  function fill(store: ReturnType<typeof createStreamStore>, count: number): void {
+    for (let i = 0; i < count; i += 1) store.addStream(`t:streamer${i}`);
+  }
+
+  function submitValue(
+    ctx: ReturnType<typeof setup>,
+    value: string,
+  ): void {
+    ctx.input.value = value;
+    ctx.input.dispatchEvent(new Event('input'));
+    ctx.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    ctx.form.dispatchEvent(new Event('submit', { cancelable: true }));
+  }
+
+  afterEach(() => {
+    restoreNavigator?.();
+    restoreNavigator = null;
+    document.body.innerHTML = '';
+    localStorage.clear();
+  });
+
+  it('refuses the eleventh manual add on iPad and says why', () => {
+    asDevice(IPAD_UA, 'iPad', 5);
+    const ctx = setup();
+    fill(ctx.store, 10);
+    expect(ctx.store.getStreams()).toHaveLength(10);
+
+    submitValue(ctx, 't:onemore');
+
+    expect(ctx.store.getStreams()).toHaveLength(10);
+    expect(ctx.input.getAttribute('aria-invalid')).toBe('stream-limit');
+    expect(ctx.note.textContent).toContain('Remove one to add another');
+  });
+
+  it('adds normally below the cap on iPad', () => {
+    asDevice(IPAD_UA, 'iPad', 5);
+    const ctx = setup();
+    fill(ctx.store, 9);
+
+    submitValue(ctx, 't:onemore');
+
+    expect(ctx.store.getStreams()).toHaveLength(10);
+  });
+
+  it('does not cap desktop', () => {
+    asDevice(MAC_UA, 'MacIntel', 0);
+    const ctx = setup();
+    fill(ctx.store, 12);
+
+    submitValue(ctx, 't:onemore');
+
+    expect(ctx.store.getStreams()).toHaveLength(13);
+  });
+
+  it('reports an over-cap lineup without trimming it — a shared link or party host always loads in full', () => {
+    asDevice(IPAD_UA, 'iPad', 5);
+    const ctx = setup();
+    // replaceLineup is the watch-party/URL-restore path; trimming here would
+    // desync a viewer from the host, so the cap must not touch it.
+    ctx.store.replaceLineup(
+      Array.from({ length: 12 }, (_, i) => ({
+        platform: 'twitch' as const,
+        channel: `streamer${i}`,
+      })),
+    );
+
+    expect(ctx.store.getStreams()).toHaveLength(12);
+    expect(ctx.note.textContent).toContain('12 streams loaded');
+    expect(ctx.note.textContent).toContain('10 or fewer');
+  });
+
+  it('disables the Add button at the cap and re-enables it once a stream is removed', () => {
+    asDevice(IPAD_UA, 'iPad', 5);
+    const ctx = setup();
+    fill(ctx.store, 10);
+    expect(ctx.submit.disabled).toBe(true);
+
+    ctx.store.removeStream(ctx.store.getStreams()[0].id);
+    expect(ctx.submit.disabled).toBe(false);
+  });
+
+  it('keeps Hide Headers available on a phone but hidden on iPad', () => {
+    asDevice(MAC_UA, 'MacIntel', 0);
+    const phone = setup();
+    expect(phone.headers.hidden).toBe(false);
+    restoreNavigator?.();
+
+    asDevice(IPAD_UA, 'iPad', 5);
+    const ipad = setup();
+    expect(ipad.headers.hidden).toBe(true);
+  });
+});

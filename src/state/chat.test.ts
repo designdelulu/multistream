@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createChatStore, isChatPlatform } from './chat';
 import type { StreamRef } from '../types';
 import type { StreamStore } from './streams';
@@ -66,5 +66,71 @@ describe('createChatStore', () => {
     expect(calls).toBe(afterOpen + 1);
     store.setVisible(false);
     expect(calls).toBe(afterOpen + 1);
+  });
+});
+
+describe('chat visibility restore by device', () => {
+  const IPAD_UA = 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X)';
+  const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+
+  function stubNavigator(userAgent: string, platform: string, maxTouchPoints: number): () => void {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { userAgent, platform, maxTouchPoints },
+      configurable: true,
+    });
+    return () => {
+      if (original) Object.defineProperty(globalThis, 'navigator', original);
+      else delete (globalThis as { navigator?: unknown }).navigator;
+    };
+  }
+
+  afterEach(() => {
+    localStorage.removeItem('multistream:chat-visible');
+  });
+
+  it('restores an explicitly-opened chat on desktop', () => {
+    localStorage.setItem('multistream:chat-visible', '1');
+    const restore = stubNavigator(MAC_UA, 'MacIntel', 0);
+    try {
+      expect(createChatStore(fakeStore([twitch('luhliv1')])).isVisible()).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('never starts open on iPad, even with an explicit stored preference', () => {
+    // The sidebar costs ~32vw there — the difference between a workable grid
+    // and tiles too small for Twitch to autoplay in. Reported live: chat
+    // appeared by itself on first load.
+    localStorage.setItem('multistream:chat-visible', '1');
+    const restore = stubNavigator(IPAD_UA, 'iPad', 5);
+    try {
+      expect(createChatStore(fakeStore([twitch('luhliv1')])).isVisible()).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('leaves the stored desktop preference untouched — the iPad rule is read-side only', () => {
+    localStorage.setItem('multistream:chat-visible', '1');
+    const restore = stubNavigator(IPAD_UA, 'iPad', 5);
+    try {
+      createChatStore(fakeStore([twitch('luhliv1')]));
+    } finally {
+      restore();
+    }
+    expect(localStorage.getItem('multistream:chat-visible')).toBe('1');
+  });
+
+  it('still opens on iPad when the user asks during the session', () => {
+    const restore = stubNavigator(IPAD_UA, 'iPad', 5);
+    try {
+      const store = createChatStore(fakeStore([twitch('luhliv1')]));
+      store.toggleVisible();
+      expect(store.isVisible()).toBe(true);
+    } finally {
+      restore();
+    }
   });
 });

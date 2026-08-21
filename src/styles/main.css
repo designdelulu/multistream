@@ -254,7 +254,8 @@ html.watch-party-viewer .stream-card__overlay-drag {
   color: #ffb8c8;
 }
 
-.toolbar__mobile-note {
+.toolbar__mobile-note,
+.toolbar__ipad-note {
   display: none;
   margin: 0;
   padding: 0 2px 2px;
@@ -263,7 +264,8 @@ html.watch-party-viewer .stream-card__overlay-drag {
   line-height: 1.35;
 }
 
-.site-intro__mobile-limit {
+.site-intro__mobile-limit,
+.site-intro__ipad-limit {
   color: var(--muted);
 }
 
@@ -1385,13 +1387,66 @@ html.headers-hidden .stream-card__overlay-controls {
   color: var(--danger);
 }
 
+/*
+ * The circular corner X: the only per-card action on surfaces that carry no
+ * control bar — iPad always, and a phone whose headers the user has hidden.
+ * Touch has no hover, so the headers-hidden hover toolbar that serves desktop
+ * is unreachable on both; this is what replaces it.
+ *
+ * The full appearance is defined here and gated purely on `display`, so the
+ * two enabling contexts (one a device class, one a width query) each need a
+ * single rule rather than a duplicated block.
+ *
+ * Deliberately small and faded: it sits on top of live video, where a solid
+ * 32px chip is a bite out of the picture. The visible circle is 26px; the
+ * ::before below restores a ~42px touch target, so shrinking it costs
+ * nothing in tap accuracy.
+ */
 .stream-card__ipad-close {
+  position: absolute;
+  z-index: 40;
+  top: 8px;
+  right: 8px;
   display: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, var(--border));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--muted);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  opacity: 0.45;
+  cursor: pointer;
+  transition: opacity 140ms ease;
+}
+
+/* Touch target only — keeps the hit area finger-sized at 26px painted. */
+.stream-card__ipad-close::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+}
+
+.stream-card__ipad-close:hover,
+.stream-card__ipad-close:focus-visible,
+.stream-card__ipad-close:active {
+  opacity: 1;
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 65%, var(--border));
+  background: color-mix(in srgb, var(--surface) 96%, black);
+}
+
+.stream-card__ipad-close svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 /*
- * iPad keeps the player box free of both horizontal control bars. The only
- * card action is a neutral circular X inset over the top-right corner.
+ * iPad keeps the player box free of both horizontal control bars.
  */
 html.ipad-device .stream-card {
   position: relative;
@@ -1403,35 +1458,7 @@ html.ipad-device .stream-card__toolbar {
 }
 
 html.ipad-device .stream-card__ipad-close {
-  position: absolute;
-  z-index: 40;
-  top: 8px;
-  right: 8px;
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--text) 35%, var(--border));
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  color: var(--muted);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  cursor: pointer;
-}
-
-html.ipad-device .stream-card__ipad-close:hover,
-html.ipad-device .stream-card__ipad-close:focus-visible {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--text) 65%, var(--border));
-  background: color-mix(in srgb, var(--surface) 96%, black);
-}
-
-html.ipad-device .stream-card__ipad-close svg {
-  display: block;
-  width: 16px;
-  height: 16px;
 }
 
 html.ipad-device.watch-party-viewer .stream-card__ipad-close {
@@ -2128,7 +2155,8 @@ html.show-welcome .welcome-modal {
   font-weight: 650;
 }
 
-.welcome-modal .site-intro__mobile-limit {
+.welcome-modal .site-intro__mobile-limit,
+.welcome-modal .site-intro__ipad-limit {
   display: none;
   margin-top: 2px;
   font-size: 0.8rem;
@@ -2276,6 +2304,35 @@ html.show-welcome .welcome-modal {
     overflow: visible;
   }
 
+  /*
+   * Refresh gives up its toolbar slot to Hide Headers on phones. Pull-to-
+   * refresh and the per-card reload already cover reloading; vertical space
+   * in a stacked column does not have a substitute. Hidden in CSS rather
+   * than JS so syncActionButtons' own hidden/disabled logic — and every
+   * other viewport — is untouched.
+   */
+  #refresh-streams {
+    display: none;
+  }
+
+  /* Headers hidden on a phone: the corner X is the only reachable card
+     action, since the hover toolbar below it needs a pointer. */
+  html.headers-hidden .stream-card {
+    position: relative;
+  }
+
+  html.headers-hidden .stream-card__ipad-close {
+    display: inline-flex;
+  }
+
+  html.headers-hidden .stream-card__toolbar {
+    display: none !important;
+  }
+
+  html.headers-hidden.watch-party-viewer .stream-card__ipad-close {
+    display: none;
+  }
+
   .main-layout {
     flex-direction: column;
     flex: 1 0 auto;
@@ -2300,9 +2357,11 @@ html.show-welcome .welcome-modal {
     display: none;
   }
 
-  #headers-toggle {
-    display: none;
-  }
+  /*
+   * #headers-toggle is deliberately NOT hidden here any more — Hide Headers
+   * is a phone control now, taking the slot #refresh-streams gives up above.
+   * syncHeadersButton still hides it on iPad, which has no use for it.
+   */
 
   .site-intro__desktop-only {
     display: none;
@@ -2632,7 +2691,14 @@ html.show-welcome .welcome-modal {
   }
 }
 
-@media (max-width: 1024px) {
+/*
+ * Phone notes describe stacked-column scrolling, which only happens at
+ * PHONE_MAX_WIDTH (640). This reveal used to be 1024px, which caught every
+ * iPad and told iPad users to "scroll between streams" in a grid that does
+ * not scroll. iPad has its own note below, gated on the device class rather
+ * than a width, since an iPad in landscape is wider than 1024 anyway.
+ */
+@media (max-width: 640px) {
   .toolbar__mobile-note {
     display: block;
   }
@@ -2640,6 +2706,22 @@ html.show-welcome .welcome-modal {
   .welcome-modal .site-intro__mobile-limit {
     display: block;
   }
+}
+
+html.ipad-device .toolbar__ipad-note,
+html.ipad-device .welcome-modal .site-intro__ipad-limit {
+  display: block;
+}
+
+/*
+ * An iPad narrowed into Split View or Slide Over is under 640px, so it
+ * matches the phone query above as well — without this it would show both
+ * notes at once, and they say different things. The device note wins: the
+ * stream cap is the fact that still applies at any width.
+ */
+html.ipad-device .toolbar__mobile-note,
+html.ipad-device .welcome-modal .site-intro__mobile-limit {
+  display: none;
 }
 
 @media (min-width: 641px) and (max-width: 1024px) {

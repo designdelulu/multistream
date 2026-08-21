@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isIPadDevice, resolveDisplayViewMode } from './viewport';
+import { IPAD_MAX_STREAMS, isIPadDevice, resolveDisplayViewMode } from './viewport';
 
 describe('isIPadDevice', () => {
   it('recognizes a legacy iPad user agent', () => {
@@ -57,5 +57,15 @@ describe('resolveDisplayViewMode', () => {
         maxTouchPoints: 0,
       }),
     ).toBe('focus');
+  });
+});
+
+describe('IPAD_MAX_STREAMS', () => {
+  it('is the flat ten-stream ceiling the toolbar enforces', () => {
+    // Deliberately one number, not orientation-aware: a cap that changed on
+    // rotation would put an existing lineup "over cap" mid-session with no
+    // action the user took. Landscape's tighter comfortable limit is advisory
+    // copy (the iPad note in index.html), not a second threshold.
+    expect(IPAD_MAX_STREAMS).toBe(10);
   });
 });

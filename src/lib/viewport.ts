@@ -3,6 +3,23 @@ import type { ViewMode } from '../state/viewMode';
 /** Phone-only layout (stacked streams, no chat). Tablets and desktop keep the grid. */
 export const PHONE_MAX_WIDTH = 640;
 
+/**
+ * Most streams an iPad may hold via manual adds. Past this the grid tiles
+ * shrink below the box Twitch will autoplay in (see
+ * TWITCH_MIN_AUTOPLAY_WIDTH/HEIGHT in StreamGrid.ts) and most cards simply
+ * never start — confirmed live at 12. Ten is the portrait ceiling; landscape
+ * is comfortable at nine, but the cap is deliberately a single flat number
+ * rather than orientation-aware, so it never changes under the user mid-
+ * session and no stream can become "over cap" just by turning the device.
+ * The landscape guidance is advisory copy instead (see the iPad note in
+ * index.html).
+ *
+ * This bounds the *Add* control only. A shared link or a watch-party lineup
+ * always loads in full — trimming one would desync a party viewer from the
+ * host — and warns once instead.
+ */
+export const IPAD_MAX_STREAMS = 10;
+
 type DeviceNavigator = Pick<Navigator, 'userAgent' | 'platform' | 'maxTouchPoints'>;
 
 /** Modern iPadOS may identify itself as Macintosh; touch capability disambiguates it from a Mac. */

@@ -11,7 +11,7 @@ import {
   refreshKickStatus,
   refreshTwitchStatus,
 } from './StreamGrid';
-import { isIPadDevice, isPhoneViewport } from '../lib/viewport';
+import { IPAD_MAX_STREAMS, isIPadDevice } from '../lib/viewport';
 import type { Platform } from '../types';
 import type { HeadersStore } from '../state/headers';
 import type { StreamStore } from '../state/streams';
@@ -278,6 +278,7 @@ export function bindStreamToolbar(
   );
   const partyStatus = document.querySelector<HTMLElement>('#watch-party-status');
   const partyStatusText = document.querySelector<HTMLElement>('#watch-party-status-text');
+  const ipadNote = document.querySelector<HTMLElement>('#ipad-stream-note');
 
   if (!form || !input || !suggestions) {
     throw new Error('Stream toolbar elements not found');
@@ -453,6 +454,16 @@ export function bindStreamToolbar(
     const value = stripAtPrefix(inputEl.value);
     if (!value) return;
 
+    // Checked before parsing/resolving so a TikTok short link — the one input
+    // shape that would otherwise fire a network round trip first — is turned
+    // away at the same point as everything else.
+    if (atIPadStreamLimit()) {
+      inputEl.classList.add('toolbar__input--error');
+      inputEl.setAttribute('aria-invalid', 'stream-limit');
+      syncIpadNote();
+      return;
+    }
+
     const candidate = plainUsernameCandidate(inputEl.value);
     if (candidate && !suggestionsEl.hidden) {
       // Plain username — require an explicit Twitch or Kick pick from the dropdown.
@@ -549,6 +560,13 @@ export function bindStreamToolbar(
     if (refreshButton) {
       refreshButton.hidden = !hasStreams;
     }
+    // Disabled rather than hidden at the iPad cap: a control that vanishes
+    // reads as a bug, where a greyed one plus the note underneath explains
+    // itself. The submit handler still checks independently — this is the
+    // affordance, not the enforcement.
+    if (submitButton) {
+      submitButton.disabled = atIPadStreamLimit();
+    }
     syncPartyMenu();
   }
 
@@ -571,13 +589,41 @@ export function bindStreamToolbar(
     });
   }
 
-  function phoneViewport(): boolean {
-    return typeof window.matchMedia === 'function' && isPhoneViewport();
+  /**
+   * iPad's manual-add ceiling (IPAD_MAX_STREAMS). Only ever consulted for
+   * adds the user types — a restored link or a party lineup loads in full and
+   * is reported by syncIpadNote instead, never trimmed.
+   */
+  function atIPadStreamLimit(): boolean {
+    return isIPadDevice() && store.getStreams().length >= IPAD_MAX_STREAMS;
+  }
+
+  /**
+   * The single iPad line under the toolbar, carrying whichever of three
+   * states is true. Kept as one element rather than a toast because the
+   * over-capacity condition *persists* — those streams stay loaded — so a
+   * notice that auto-hides after 8s would state a fact the user can still see
+   * contradicted on screen. Hidden entirely off-iPad by CSS.
+   */
+  function syncIpadNote(): void {
+    if (!ipadNote) return;
+    const count = store.getStreams().length;
+    if (count > IPAD_MAX_STREAMS) {
+      ipadNote.textContent = `${count} streams loaded — iPad plays best with ${IPAD_MAX_STREAMS} or fewer.`;
+      return;
+    }
+    if (count === IPAD_MAX_STREAMS) {
+      ipadNote.textContent = `iPad holds ${IPAD_MAX_STREAMS} streams. Remove one to add another.`;
+      return;
+    }
+    ipadNote.textContent = `Up to ${IPAD_MAX_STREAMS} streams on iPad. Nine or fewer plays best in landscape.`;
   }
 
   function syncHeadersButton(): void {
     if (!headersButton) return;
-    if (phoneViewport() || isIPadDevice()) {
+    // Phones keep this control (it replaces Refresh there); iPad has its own
+    // always-headerless CSS, so the toggle would be a no-op.
+    if (isIPadDevice()) {
       headersButton.hidden = true;
       return;
     }
@@ -937,7 +983,7 @@ export function bindStreamToolbar(
 
   headersButton?.addEventListener('click', () => {
     if (isStreamFocused()) return;
-    if (phoneViewport() || isIPadDevice()) return;
+    if (isIPadDevice()) return;
     headersStore.toggle();
   });
 
@@ -983,8 +1029,10 @@ export function bindStreamToolbar(
     syncActionButtons();
     syncHeadersButton();
     syncFocusViewButton();
+    syncIpadNote();
   }
 
+  store.subscribe(syncIpadNote);
   store.subscribe(syncActionButtons);
   headersStore.subscribe(syncHeadersButton);
   viewModeStore.subscribe(syncFocusViewButton);

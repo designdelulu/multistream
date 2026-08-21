@@ -1,5 +1,6 @@
 import type { StreamRef } from '../types';
 import type { StreamStore } from './streams';
+import { isIPadDevice } from '../lib/viewport';
 
 const STORAGE_KEY = 'multistream:chat-visible';
 
@@ -16,9 +17,17 @@ const CHAT_PLATFORMS = new Set(['twitch', 'kick']);
  * explicit "not off", which opened chat by default for every first-time
  * visitor and for anyone who added their very first stream before ever
  * touching the chat toggle.
+ *
+ * iPad never restores an open state. The sidebar takes ~32vw there, which is
+ * the difference between a workable grid and tiles too small for Twitch to
+ * autoplay in, and it is not what anyone wants on first load. The toggle
+ * still works during the session — chat just never *starts* open. Deliberately
+ * a read-side rule only: the stored value is left untouched, so the same
+ * browser profile on desktop keeps its real preference.
  */
 function loadVisiblePreference(): boolean {
   try {
+    if (typeof navigator !== 'undefined' && isIPadDevice()) return false;
     return localStorage.getItem(STORAGE_KEY) === '1';
   } catch {
     return false;

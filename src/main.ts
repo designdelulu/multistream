@@ -86,12 +86,20 @@ const screenWakeLock = bindScreenWakeLock(
 store.subscribe(() => screenWakeLock.sync());
 
 /**
- * Phones have no Hide Headers control; iPad has its own headerless CSS with
- * a single circular close action. Strip the compact-footer class without
- * persisting over the desktop preference, and restore it on desktop.
+ * iPad has its own headerless CSS with a single circular close action, so the
+ * shared `headers-hidden` class is stripped there regardless of preference.
+ *
+ * Phones used to be stripped alongside it, back when they had no Hide Headers
+ * control at all. They do now — it replaces Refresh in the phone toolbar,
+ * where vertical space is worth more than a button that duplicates a pull-to-
+ * refresh — so a phone honors the stored preference like desktop does. The
+ * per-card circle X (the same element iPad uses) is what remains reachable
+ * while headers are hidden; the hover toolbar is not, since touch has no
+ * hover. Keep this in step with the pre-hydration boot script in index.html,
+ * or headers flash in before hydration strips them.
  */
 function applyDeviceHeadersOverride(): void {
-  if ((typeof window.matchMedia === 'function' && isPhoneViewport()) || isIPadDevice()) {
+  if (isIPadDevice()) {
     document.documentElement.classList.remove('headers-hidden');
     return;
   }
@@ -303,7 +311,14 @@ function syncPrimaryChat(options: { openSupportedChat?: boolean } = {}): void {
     chatStore.setToggleAllowed(isChatPlatform(platform));
     if (isChatPlatform(platform)) {
       chatStore.setSelectedId(primaryId);
-      if (options.openSupportedChat) {
+      // Never force chat open on iPad. resolveDisplayViewMode maps store mode
+      // `focus` to display mode `theater` there, so an iPad entering Focus
+      // lands in this branch where a desktop would not — which is exactly how
+      // chat appeared unbidden on first load. The toggle stays available; it
+      // just is not opened for the user. Guarded here rather than at the call
+      // sites so both of them (afterViewModeToggle and
+      // bindFocusViewPrimaryChanged) inherit it.
+      if (options.openSupportedChat && !isIPadDevice()) {
         chatStore.setVisible(true, { persist: false });
       }
     } else {
