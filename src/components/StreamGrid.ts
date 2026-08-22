@@ -2853,12 +2853,25 @@ function handleCardFocusClick(container: HTMLElement, streamId: string): void {
   focusViewEntryHandler?.(streamId);
 }
 
-/** On the current primary in solo mode, reveals the tray; on anything else, Theater entry with tray. */
+/**
+ * On the current primary: reveals the tray in solo mode, and exits Theater back
+ * to Grid when the tray is already up. On anything else, Theater entry with tray.
+ *
+ * The exit half goes through focusViewExitHandler — the same handler the
+ * primary's X and Escape use — so all three ways out of Theater are one path.
+ * It used to fall through and do nothing at all here, while
+ * syncTheaterButtonLabel labelled that exact state "Exit Theater Mode" with
+ * aria-pressed="true": the control announced itself as the exit and then
+ * ignored the click. Hiding the tray back to solo stays on the Focus button
+ * (handleCardFocusClick), so both directions of the tray toggle survive.
+ */
 function handleCardTheaterClick(container: HTMLElement, streamId: string): void {
   if (typeof window.matchMedia === 'function' && isPhoneViewport()) return;
   if (isCurrentPrimaryInPrimaryMode(container, streamId)) {
     if (container.dataset.viewMode === 'theater') {
       focusViewToggleHandler?.();
+    } else {
+      focusViewExitHandler?.();
     }
     return;
   }
@@ -3724,20 +3737,40 @@ export function filterLayoutVisibleStreamIds(
 }
 
 /**
- * Twitch muted autoplay needs a box of at least 400×300. Automatic remount
- * skips smaller visible boxes (Focus under-grid cells are 160–220px and
- * rely on the first embed, not a remount). A 0×0 reading (jsdom, or not
- * yet laid out) is treated as unknown — not a reason to skip.
+ * Automatic remount skips a box too small to come back usefully: a fresh embed
+ * in a small cell returns blank or refuses to start, which is worse than the
+ * paused tile it replaced.
+ *
+ * The pair is Twitch's documented minimum *embed* size, and the thing to
+ * understand about it is that **no 16:9 player can satisfy it** — 300px of
+ * height needs 533px of width. That is not an oversight, it is what this gate
+ * is for: it keeps automatic remounts off for every grid card and every Focus
+ * tray tile, leaving them to play()-only recovery and, as a last resort, the
+ * 90s watchdog.
+ *
+ * That side effect is load-bearing, and it was learned the hard way. Lowering
+ * the pair to 320x180 made grid cards (roughly 480x270 at three or four
+ * columns) eligible, and the result was the reported regression: a removal
+ * makes the bottom row pause for a moment and recover on its own, invisibly —
+ * but once escalate() could act on those cards, that invisible blip became a
+ * multi-second black reload of the whole row. Confirmed against the 2026-08-21
+ * 21:30 production build, which carries these values and does not exhibit it.
+ *
+ * The Focus primary (~1457x820 on a desktop stream area) does pass, and is
+ * still remounted when its play() passes are exhausted.
+ *
+ * A 0x0 reading (jsdom, or not yet laid out) is treated as unknown — not a
+ * reason to skip.
  */
-const TWITCH_MIN_AUTOPLAY_WIDTH = 400;
-const TWITCH_MIN_AUTOPLAY_HEIGHT = 300;
+const TWITCH_MIN_REMOUNT_WIDTH = 400;
+const TWITCH_MIN_REMOUNT_HEIGHT = 300;
 
 function isTwitchEmbedBoxLargeEnoughForRemount(card: HTMLElement): boolean {
   const box = streamIframe(card) ?? card.querySelector<HTMLElement>('.stream-card__player');
   const rect = box?.getBoundingClientRect();
   if (!rect) return true;
   if (rect.width <= 0 && rect.height <= 0) return true;
-  return rect.width >= TWITCH_MIN_AUTOPLAY_WIDTH && rect.height >= TWITCH_MIN_AUTOPLAY_HEIGHT;
+  return rect.width >= TWITCH_MIN_REMOUNT_WIDTH && rect.height >= TWITCH_MIN_REMOUNT_HEIGHT;
 }
 
 /**
@@ -5191,29 +5224,53 @@ function runLayoutCircuitBreaker(container: HTMLElement, snapshotIds: readonly s
   // FakeTwitchPlayer the waiter is watching so the original instance stays paused.
   const pending = new Set(playbackRecovery.pendingIds());
 
-  const visibleSnapshot = snapshotIds.filter((streamId) => {
-    const card = cardForStream(streamId);
-    return Boolean(card?.isConnected && container.contains(card) && isStreamCardPlaybackEligible(card));
-  });
-  if (visibleSnapshot.length < LAYOUT_CIRCUIT_MIN_SNAPSHOT) return;
-
-  const stuck: HTMLElement[] = [];
-  for (const streamId of visibleSnapshot) {
+  /*
+   * One list, used for both halves of the ratio.
+   *
+   * Every filter below used to sit on the numerator only, while the
+   * denominator counted each playback-eligible card in the snapshot — so a
+   * card the numerator could never contain still made the breaker harder to
+   * trip. `pending` was the worst of them, since it is normally *every* id:
+   * this timer is armed by the same beginAddRemoveRecovery call that starts
+   * the coordinator, and 250ms later the coordinator is still holding all of
+   * them (its passes run to 3000ms). That is deliberate — remounting here
+   * would fight the play() schedule — but it means this path only ever judges
+   * ids the coordinator has already released, and the ratio has to be taken
+   * over those same ids to mean anything.
+   *
+   * The size gate mattered separately: before it was corrected, a Focus tray
+   * tile could not pass it at all, so the primary was the only card that
+   * could ever be counted stuck while the whole tray sat in the denominator.
+   *
+   * The per-card remount for a resize-paused tile is escalate() in
+   * createTwitchRecoveryTarget, which runs once a card's own passes are
+   * exhausted. This stays what it has always been: a last-resort sweep for
+   * ids nothing else is chasing.
+   */
+  const candidates: { streamId: string; card: HTMLElement; player: Twitch.Player }[] = [];
+  for (const streamId of snapshotIds) {
     if (pending.has(streamId)) continue;
     const card = cardForStream(streamId);
-    if (!card) continue;
+    if (!card?.isConnected || !container.contains(card)) continue;
+    if (!isStreamCardPlaybackEligible(card)) continue;
     if (card.dataset.platform !== 'twitch' || card.dataset.twitchMode !== 'api') continue;
     if (!isTwitchEmbedBoxLargeEnoughForRemount(card)) continue;
     const player = twitchPlayers.get(streamId);
     if (!player) continue;
-    if (checkPaused(player, streamId) === true) stuck.push(card);
+    candidates.push({ streamId, card, player });
   }
+  if (candidates.length < LAYOUT_CIRCUIT_MIN_SNAPSHOT) return;
 
-  if (stuck.length / visibleSnapshot.length < LAYOUT_CIRCUIT_RATIO) return;
+  const stuck = candidates
+    .filter(({ player, streamId }) => checkPaused(player, streamId) === true)
+    .map(({ card }) => card);
+
+  if (stuck.length / candidates.length < LAYOUT_CIRCUIT_RATIO) return;
 
   layoutCircuitCooldownUntil = Date.now() + LAYOUT_CIRCUIT_COOLDOWN_MS;
   logPlayerEvent('circuit-break', {
     paused: stuck.length,
+    candidates: candidates.length,
     snapshot: snapshotIds.length,
   });
   for (const card of stuck) {
@@ -5878,9 +5935,21 @@ function updateFocusViewLayout(container: HTMLElement, streamArea: Element, tota
   for (const card of container.querySelectorAll<HTMLElement>('.stream-card')) {
     card.style.removeProperty('grid-column');
   }
+  /*
+   * Sorted by `order`, not left in DOM order. syncStreamGrid deliberately
+   * appends new cards and never reparents a mounted one (that would detach
+   * its iframe), so visual position comes from the `order` it assigns from
+   * the store index. Undo re-inserts a stream mid-list —
+   * store.insertStream(stream, index) — while its card lands at the end of
+   * the DOM, and from then on the two orders disagree. Indexing the unsorted
+   * list then picked the wrong card as the first of the last row and gave it
+   * the centering offset, which starts a card mid-row in a track another card
+   * already occupies. Two overlapping players is one obscured player, and an
+   * obscured player pauses.
+   */
   const trayCards = Array.from(
     container.querySelectorAll<HTMLElement>('.stream-card:not(.is-focus-primary)'),
-  );
+  ).sort((a, b) => Number(a.style.order || '0') - Number(b.style.order || '0'));
   if (includeTray && secondaryCount > 0) {
     const lastRowCount = secondaryCount - (result.trayRows - 1) * trayColumns;
     if (lastRowCount > 0 && lastRowCount < trayColumns) {

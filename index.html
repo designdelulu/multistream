@@ -427,15 +427,25 @@
         <aside id="chat-panel" class="chat-panel" aria-label="Stream chat" hidden></aside>
       </div>
 
-      <div id="undo-toast" class="undo-toast" hidden role="status" aria-live="polite">
-        <span class="undo-toast__message"></span>
-        <button type="button" class="undo-toast__action">Undo</button>
-      </div>
+      <!--
+        Both toasts live in one fixed strip pinned over the footer, and the
+        footer reserves exactly that strip's height. That is not cosmetic:
+        Twitch embed requirement 1.3 forbids obscuring a player, and Twitch
+        enforces it, so a toast that lands on a player pauses it. Docking them
+        here keeps every toast rect clear of every player rect. The dock also
+        centres them as a row, which is why neither toast positions itself and
+        .live-toast no longer needs an upward offset to avoid the other one.
+      -->
+      <div class="toast-dock">
+        <div id="undo-toast" class="undo-toast" hidden role="status" aria-live="polite">
+          <span class="undo-toast__message"></span>
+          <button type="button" class="undo-toast__action">Undo</button>
+        </div>
 
-      <!-- Same styling as the undo toast; .live-toast offsets it upward so the two never overlap. -->
-      <div id="live-toast" class="undo-toast live-toast" hidden role="status" aria-live="polite">
-        <span class="undo-toast__message live-toast__message"></span>
-        <button type="button" class="undo-toast__action live-toast__action">Reload</button>
+        <div id="live-toast" class="undo-toast live-toast" hidden role="status" aria-live="polite">
+          <span class="undo-toast__message live-toast__message"></span>
+          <button type="button" class="undo-toast__action live-toast__action">Reload</button>
+        </div>
       </div>
 
       <div id="story-preview-backdrop" class="story-preview__backdrop" hidden></div>

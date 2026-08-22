@@ -60,6 +60,20 @@ const EMPTY_RESULT: WeightedGridResult = {
 };
 
 /**
+ * Contain-fit a 16:9 box inside a width x height budget: whichever dimension
+ * is the tighter constraint wins, and the other is re-derived from it. Shared
+ * by the grid packer and the Focus under-grid so both produce boxes the embed
+ * fills edge to edge — a host even a couple of pixels wide of 16:9 makes the
+ * provider letterbox inside it.
+ */
+function clamp16by9(width: number, height: number): [number, number] {
+  if ((width * 9) / 16 < height) {
+    return [width, (width * 9) / 16];
+  }
+  return [(height * 16) / 9, height];
+}
+
+/**
  * Direct descendant of MultiTwitch's optimize_size (see updateGridLayout's
  * own doc comment): brute-force every column count from 1..maxColumns,
  * clamp each candidate cell to 16:9, and keep whichever column count yields
@@ -90,13 +104,6 @@ export function computeWeightedGridLayout(
 
   const portraitCount = items.filter((item) => item.orientation === 'portrait').length;
   const landscapeCount = count - portraitCount;
-
-  const clamp16by9 = (width: number, height: number): [number, number] => {
-    if ((width * 9) / 16 < height) {
-      return [width, (width * 9) / 16];
-    }
-    return [(height * 16) / 9, height];
-  };
 
   let best: WeightedGridResult = EMPTY_RESULT;
 
@@ -169,11 +176,17 @@ const EMPTY_FOCUS: FocusViewLayoutResult = {
   trayRows: 0,
 };
 
-/** Old chat-closed film-strip band — empirically large enough for Twitch to start. */
-const MIN_TRAY_HEIGHT = 160;
-const MAX_TRAY_HEIGHT = 220;
+/**
+ * Old chat-closed film-strip band — empirically large enough for Twitch to
+ * start, and well under Twitch's documented 400x300 embed minimum. That gap is
+ * deliberate (see the "not the Twitch-doc 400x300 floor" case in this file's
+ * tests): a tray tile is a glanceable thumbnail, not a viewing surface. It is
+ * also the floor StreamGrid.ts's remount gate uses for tray cards, since the
+ * grid-wide 400x300 would exclude every tray tile from recovery outright.
+ */
+export const MIN_TRAY_HEIGHT = 160;
 /** 16:9 width at ~172px, the chat-closed 1920 size that used to work. */
-const TRAY_FIT_COLUMN_WIDTH = Math.round((172 * 16) / 9);
+export const TRAY_FIT_COLUMN_WIDTH = Math.round((172 * 16) / 9);
 /** Primary keeps the majority of the viewport; under-grid shrinks if needed. */
 const UNDER_GRID_MAX_FRACTION = 0.4;
 
@@ -239,23 +252,34 @@ export function computeFocusViewLayout(
       // this is what lets the last row center cleanly in main.css/StreamGrid.ts.
       trayRows = Math.ceil(secondaries / fitColumns);
       trayColumns = Math.max(1, Math.ceil(secondaries / trayRows));
-      const provisionalColumnWidth = Math.max(
+      const columnWidth = Math.max(
         64,
         Math.floor((areaWidth - gap * (trayColumns - 1)) / trayColumns),
       );
-      let cellHeight = Math.min(
-        MAX_TRAY_HEIGHT,
-        Math.max(MIN_TRAY_HEIGHT, Math.round((provisionalColumnWidth * 9) / 16)),
-      );
       const underHeightFor = (height: number): number =>
         trayRows * (height + chromeHeightPerRow) + gap * Math.max(0, trayRows - 1);
+      /*
+       * Two budgets, and the tile is the contain-fit between them: the track
+       * width the row-balancing above produced, and the per-row share of the
+       * 40% under-grid allowance (which is the actual "primary stays dominant"
+       * guarantee). Whichever binds first decides the tile, and the other
+       * dimension is re-derived, so the box is exactly 16:9 either way.
+       *
+       * This replaces a fixed 220px height cap that ignored the track
+       * entirely. When row-balancing produced fewer columns than fit — 6
+       * secondaries at fitColumns=5 becomes 2 rows of 3 — the track came out
+       * far wider than 16:9 at that capped height (618x220 where 16:9 wanted
+       * 391), and the provider pillarboxed the difference. The height ceiling
+       * here does the job the cap was there for, without fighting the width.
+       */
       const maxUnder = Math.floor(areaHeight * UNDER_GRID_MAX_FRACTION);
-      if (maxUnder > 0 && underHeightFor(cellHeight) > maxUnder) {
-        const heightBudget = maxUnder - gap * Math.max(0, trayRows - 1);
-        const perRow = Math.floor(heightBudget / trayRows) - chromeHeightPerRow;
-        cellHeight = Math.max(1, Math.min(cellHeight, perRow));
-      }
-      trayHeight = cellHeight;
+      const heightBudget =
+        maxUnder > 0
+          ? Math.floor((maxUnder - gap * Math.max(0, trayRows - 1)) / trayRows) -
+            chromeHeightPerRow
+          : areaHeight;
+      const [, fittedHeight] = clamp16by9(columnWidth, Math.max(1, heightBudget));
+      trayHeight = Math.max(1, Math.floor(fittedHeight));
       trayColumnWidth = Math.round((trayHeight * 16) / 9);
       primaryAreaHeight = areaHeight - underHeightFor(trayHeight) - gap - chromeHeightPerRow;
     }

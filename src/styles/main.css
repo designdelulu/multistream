@@ -13,6 +13,14 @@
   --status-live: #3ddc84;
   /* Fixed compact controls below each player while headers are hidden. */
   --toolbar-open-height: 30px;
+  /*
+   * Height of the toast strip at the very bottom. .site-footer reserves this
+   * as its min-height and .toast-dock fills it, so a toast is always inside
+   * the footer band and never over a player. Changing one without the other
+   * puts toasts back on top of the video — StreamGrid.test.ts asserts the two
+   * read the same variable.
+   */
+  --toast-dock-height: 38px;
   --radius: 10px;
   --grid-columns: 2;
 }
@@ -293,19 +301,105 @@ html.watch-party-viewer .stream-card__overlay-drag {
   border-color: var(--danger);
 }
 
+/*
+ * Angle of the chasing border beam on the Add Stream button below — the site's
+ * only one. A matching ring on the Theater tray tiles was tried and removed;
+ * see the tray card rule for why, and do not wire a second reader of this
+ * anywhere near a live embed.
+ *
+ * Registered with @property so it has a type: an unregistered custom property
+ * is an untyped token and keyframes cannot interpolate it, which leaves the
+ * beam sitting perfectly still. Where @property is unsupported it degrades to a
+ * static gradient ring, which still reads as deliberate.
+ */
+@property --beam-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes beam-spin {
+  to {
+    --beam-angle: 360deg;
+  }
+}
+
+/*
+ * `position: relative` is here to anchor the beam ring below, and the glow is
+ * an ordinary outer box-shadow, which paints outside the border box where the
+ * label can never be.
+ *
+ * The first version of this beam was a pair of `z-index: -1` pseudos meant to
+ * peek out from behind the button's opaque face, and it rendered nothing: that
+ * trick needs an ancestor to be a stacking context to contain the negative
+ * index, and neither `.toolbar` (opaque background, no position/z-index) nor
+ * `#app` is one. The pseudos escaped to the root stacking context and painted
+ * *behind the toolbar's own background*, so all that ever showed was the blurred
+ * glow spilling past the toolbar's edges. The masked band below paints ABOVE the
+ * button instead and needs no stacking context anywhere, which is also why this
+ * rule no longer has to avoid `filter` / `isolation` / `z-index`.
+ */
 .toolbar__form > button[type='submit'] {
+  position: relative;
   flex: 0 0 auto;
   padding: 10px 16px;
   border: 0;
   border-radius: 8px;
   background: var(--accent);
+  box-shadow: 0 0 14px color-mix(in srgb, #c084fc 45%, transparent);
   color: white;
   font-weight: 600;
   cursor: pointer;
 }
 
+/*
+ * The beam: one conic-gradient with most of the circle transparent — so what
+ * travels the perimeter is a comet, not a full rainbow ring — over a dim base
+ * ring, masked down to the 2px band just outside the button.
+ *
+ * This is the site's only beam. The Theater tray briefly had a matching one and
+ * it is gone — a masked, animating pseudo anywhere near a live Twitch embed
+ * stops playback (docs/PLAYBACK_STABILITY.md). Nothing is near this one.
+ *
+ * Both breakpoints keep the button at border-radius: 8px, so 10px here (8 + the
+ * 2px the band sticks out) is correct without a media-query nudge.
+ */
+.toolbar__form > button[type='submit']::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  padding: 2px;
+  border-radius: 10px;
+  background:
+    conic-gradient(
+      from var(--beam-angle),
+      transparent 0deg 198deg,
+      #a78bfa 252deg,
+      #c084fc 295deg,
+      #e879f9 331deg,
+      transparent 360deg
+    ),
+    linear-gradient(color-mix(in srgb, var(--accent) 30%, transparent) 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: beam-spin 2.4s linear infinite;
+}
+
 .toolbar__form > button[type='submit']:hover {
-  filter: brightness(1.08);
+  background: color-mix(in srgb, var(--accent) 88%, white);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolbar__form > button[type='submit']::after {
+    animation: none;
+  }
 }
 
 .toolbar__actions {
@@ -1064,6 +1158,68 @@ html.headers-hidden .stream-grid:not([data-view-mode='focus']):not([data-view-mo
     );
 }
 
+/*
+ * Headers-hidden Theater tray: make room for the hover toolbar the same way
+ * Grid does — shrink the player — because the Grid rules that do it are scoped
+ * away from Focus/Theater while the rule that OPENS the toolbar (below) is not.
+ * Without this the toolbar grew the card 30px past its fixed
+ * --focus-tray-row-height track: the next row painted over the overflow and the
+ * last row's was clipped by the focus grid's own overflow: hidden.
+ *
+ * Hover-only, not Grid's always-on `flex: 1 1 auto` lock. The resting tile has
+ * to keep its exact `aspect-ratio: 16 / 9` — that pin exists because the card's
+ * 1px border otherwise pushes a pixel-height box off ratio and the provider
+ * letterboxes the difference — so only the hovered tile goes off ratio, which
+ * is what Grid already does on hover anyway.
+ *
+ * Driven off --focus-tray-height (the tile height JS computes) rather than
+ * 100%, the same var the portrait tray rule reads. The transition matches the
+ * toolbar's own 0.15s height animation so the two move together.
+ */
+html.headers-hidden .stream-grid[data-view-mode='focus']
+  .stream-card:not(.is-focus-primary)
+  .stream-card__player {
+  transition: height 0.15s ease;
+}
+
+html.headers-hidden .stream-grid[data-view-mode='focus']
+  .stream-card:not(.is-focus-primary):hover
+  .stream-card__player,
+html.headers-hidden .stream-grid[data-view-mode='focus']
+  .stream-card:not(.is-focus-primary):focus-within
+  .stream-card__player {
+  height: calc(var(--focus-tray-height, 0px) - var(--toolbar-open-height));
+  aspect-ratio: unset;
+}
+
+/*
+ * Kick's iframe is laid out wide and scaled, so a shorter box clips its bottom
+ * chrome (volume / pause) — re-scale on the smaller of the two constraints,
+ * exactly as the Grid rule above does with --player-height.
+ *
+ * Twitch deliberately gets NO companion rule, and must not grow one. Its tray
+ * iframe is plain `inset: 0`, so it simply resizes with the player — the same
+ * thing an ordinary window resize does to it every day, and not a known pause
+ * trigger. Putting a transform on a live Twitch embed is: a translateY lift and
+ * a render-big-and-scale-down mount have each been tried and each stopped
+ * playback dead (docs/PLAYBACK_STABILITY.md).
+ */
+html.headers-hidden .stream-grid[data-view-mode='focus']
+  .stream-card--kick:not(.is-focus-primary):hover .stream-card__iframe,
+html.headers-hidden .stream-grid[data-view-mode='focus']
+  .stream-card--kick:not(.is-focus-primary):focus-within .stream-card__iframe {
+  transform: translate(-50%, -50%)
+    scale(
+      min(
+        var(--kick-scale, 1),
+        calc(
+          (var(--focus-tray-height, 9999px) - var(--toolbar-open-height)) /
+            (var(--kick-render-width) * 9 / 16)
+        )
+      )
+    );
+}
+
 .stream-card__toolbar {
   display: none;
   flex: 0 0 auto;
@@ -1591,43 +1747,66 @@ html.headers-hidden .stream-grid[data-focus-id] .stream-card.is-focused .stream-
    * tile (see StreamGrid.ts's updateFocusViewLayout) — full rows still fill
    * the width exactly as before since every tray card spans 2 tracks.
    */
-  grid-template-columns: repeat(calc(var(--focus-tray-count, 1) * 2), minmax(0, 1fr));
+  /*
+   * Tracks are half a tile wide rather than 1fr, so a row is exactly as wide
+   * as the tiles in it and `justify-content: center` centers it for any count.
+   * With 1fr the tracks always filled the container, which forced each tile to
+   * either stretch off 16:9 or float in a track much wider than itself.
+   */
+  /*
+   * Half-tile tracks, minus the gap that sits BETWEEN a card's two tracks:
+   * a span-2 card covers track + 12px gap + track, so each track has to be
+   * (tile - gap) / 2 for the card to come out exactly one tile wide. Sizing
+   * each track at tile/2 instead makes every card a full gap too wide.
+   *
+   * Fallback is the 306px film-strip column, not 0 — a cleared or
+   * not-yet-written var must degrade to a usable tray, never to collapsed
+   * zero-width tracks.
+   */
+  grid-template-columns: repeat(
+    calc(var(--focus-tray-count, 1) * 2),
+    calc((var(--focus-tray-column-width, 306px) - 12px) / 2)
+  );
   grid-template-rows: auto;
   grid-auto-rows: var(--focus-tray-row-height, auto);
   grid-auto-flow: row;
   align-content: start;
-  justify-content: start;
+  justify-content: center;
   overflow: hidden;
 }
 
+/*
+ * Layout only. A tray tile is deliberately structurally IDENTICAL to a Grid
+ * card: no position, no isolation, no overflow override, no pseudo-element,
+ * and nothing whatsoever on :hover.
+ *
+ * That is not minimalism, it is the settled result of five attempts at a
+ * per-card hover affordance here, each of which broke Twitch playback
+ * differently (docs/PLAYBACK_STABILITY.md has the full list). The last one
+ * mounted a masked, animating ring permanently at `z-index: -1` inside an
+ * isolated card, which was supposed to be the safe shape and instead paused
+ * EVERY tray embed on hover rather than just the hovered one, and slowed
+ * initial Twitch startup in Theater relative to Grid even before any hover.
+ *
+ * Promotability is signalled without touching the card box at all: the header
+ * carries `cursor: pointer` and a :focus-visible outline further down, and its
+ * title attribute names the action.
+ */
 .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) {
   grid-column: span 2;
   width: 100%;
   align-self: start;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-/* Promotable tray cards lift on hover/focus; the header tooltip names the action. */
-.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):hover,
-.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):has(
-    .stream-card__header:focus-visible
-  ) {
-  transform: translateY(-4px);
-  box-shadow: 0 10px 24px rgb(0 0 0 / 0.4);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) {
-    transition: none;
-  }
-
-  .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):hover,
-  .stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary):has(
-      .stream-card__header:focus-visible
-    ) {
-    transform: none;
-  }
-
+/*
+ * A portrait tray tile is 9:16 at the shared band height, so its card must be
+ * that narrow too — otherwise the header and border sit in dead space beside
+ * the video. Overrides the span-2 track width above, not the band height.
+ */
+.stream-grid[data-view-mode='focus']
+  .stream-card[data-orientation='portrait']:not(.is-focus-primary) {
+  width: calc(var(--focus-tray-height, 0px) * 9 / 16);
+  justify-self: center;
 }
 
 /*
@@ -1671,9 +1850,17 @@ html.ipad-device .stream-grid[data-view-mode='theater'] .stream-card.is-focus-pr
   outline-offset: -2px;
 }
 
-.stream-grid[data-view-mode='focus'] .stream-card .stream-card__player {
+/*
+ * aspect-ratio rather than the pixel height, so the box is exactly 16:9 no
+ * matter what the card's 1px border takes off the width — the same guarantee
+ * the portrait rule below already gets from `aspect-ratio: 9 / 16`. Height
+ * lands a hair under --focus-tray-height (the border), which the fixed
+ * --focus-tray-row-height track absorbs.
+ */
+.stream-grid[data-view-mode='focus'] .stream-card:not(.is-focus-primary) .stream-card__player {
   width: 100%;
-  height: var(--focus-tray-height, auto);
+  height: auto;
+  aspect-ratio: 16 / 9;
 }
 
 .stream-grid[data-view-mode='focus']
@@ -1876,26 +2063,55 @@ html.headers-hidden .stream-grid[data-view-mode='theater'] .stream-card.is-focus
 }
 
 /*
- * Undo toast (Section 16): shown for a few seconds after any stream removal
- * (Grid or Focus View — see main.ts's bindStreamRemoved wiring), never a
- * modal, never blocking the grid underneath it.
+ * The toast strip. Fixed to the bottom of the viewport, exactly as tall as the
+ * band .site-footer reserves for it, and centred as a flex row so the undo and
+ * live toasts sit side by side instead of one being offset upward over the
+ * grid.
+ *
+ * This is a playback fix, not a layout preference. Twitch embed requirement
+ * 1.3 forbids obscuring a player and Twitch enforces it from inside the
+ * iframe, so any toast whose box overlapped a player's box paused that player
+ * — the bottom-centre position this replaces landed squarely on the Theater
+ * tray. Occlusion is measured on bounding boxes, so "mostly clear" is not
+ * clear; the strip has to be wholly inside the footer band.
+ *
+ * pointer-events are off on the dock itself so the empty strip never steals a
+ * click from the footer links underneath it.
  */
-.undo-toast {
+.toast-dock {
   position: fixed;
-  left: 50%;
-  bottom: 24px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 60;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 16px;
+  justify-content: center;
+  gap: 10px;
+  height: var(--toast-dock-height);
+  padding: 0 12px;
+  pointer-events: none;
+}
+
+/*
+ * Undo toast (Section 16): shown for a few seconds after any stream removal
+ * (Grid or Focus View — see main.ts's bindStreamRemoved wiring), never a
+ * modal, never blocking the grid underneath it. Sized to fit the dock — the
+ * padding here and --toast-dock-height move together.
+ */
+.undo-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 5px 6px 5px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
   color: var(--text);
-  font-size: 0.9rem;
-  transform: translate(-50%, 0);
+  font-size: 0.82rem;
+  pointer-events: auto;
   animation: undo-toast-in 0.18s ease-out;
 }
 
@@ -1903,15 +2119,19 @@ html.headers-hidden .stream-grid[data-view-mode='theater'] .stream-card.is-focus
   display: none;
 }
 
+/*
+ * Opacity only, no rise. The dock is barely taller than the toast, so a
+ * translate of any size carries it out of the reserved band mid-animation —
+ * and the band is the whole reason the toast no longer pauses a player.
+ * StreamGrid.test.ts asserts no transform comes back here.
+ */
 @keyframes undo-toast-in {
   from {
     opacity: 0;
-    transform: translate(-50%, 8px);
   }
 
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
   }
 }
 
@@ -1927,12 +2147,12 @@ html.headers-hidden .stream-grid[data-view-mode='theater'] .stream-card.is-focus
 
 .undo-toast__action {
   flex: none;
-  padding: 6px 12px;
+  padding: 3px 10px;
   border: 1px solid var(--accent);
   border-radius: calc(var(--radius) - 4px);
   background: transparent;
   color: var(--accent);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -1943,11 +2163,12 @@ html.headers-hidden .stream-grid[data-view-mode='theater'] .stream-card.is-focus
   color: var(--text);
 }
 
-/* The "back live" toast reuses .undo-toast entirely, just stacked above it
-   so both can be visible at once without overlapping. */
-.live-toast {
-  bottom: 84px;
-}
+/*
+ * The "back live" toast reuses .undo-toast entirely. It used to carry
+ * `bottom: 84px` to clear the undo toast, which pushed it up over the grid and
+ * onto a player. The dock's flex row separates them now, so it needs no
+ * offset of its own — and must not grow one back.
+ */
 
 /*
  * Story card preview (Section 18/13): shows the real rendered PNG before
@@ -2183,8 +2404,19 @@ html.show-welcome .welcome-modal {
   filter: brightness(1.08);
 }
 
+/*
+ * min-height reserves the toast strip. .toast-dock is fixed and would
+ * otherwise float over whatever the grid puts at the bottom of the viewport —
+ * a Theater tray tile — and obscuring a Twitch player pauses it. Reserving the
+ * band permanently costs a few pixels once, where growing the footer only
+ * while a toast is up would resize every player twice per removal through the
+ * ResizeObserver in main.ts.
+ */
 .site-footer {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  min-height: var(--toast-dock-height);
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding: 8px 14px;
@@ -2197,6 +2429,17 @@ html.show-welcome .welcome-modal {
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.35;
+}
+
+/*
+ * The toasts sit in the footer's own band, so while one is up the credit line
+ * would show around its edges. visibility, not display: the line has to keep
+ * its box or the footer collapses below --toast-dock-height and the dock is
+ * over the grid again — which is the pause this whole arrangement prevents.
+ * Where :has() is unsupported the line simply shows through, same as before.
+ */
+#app:has(.undo-toast:not([hidden])) .site-footer__line {
+  visibility: hidden;
 }
 
 .site-footer__line a {
@@ -2557,6 +2800,17 @@ html.show-welcome .welcome-modal {
   .site-footer {
     padding: 6px max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
       max(12px, env(safe-area-inset-left));
+  }
+
+  /*
+   * Phones let the page scroll (#app drops to overflow: visible above), so the
+   * fixed dock stays pinned to the viewport while the footer scrolls away from
+   * under it — a toast here CAN land on the single stacked card. That is what
+   * the overlay-recovery hook in main.ts covers; the safe-area inset just
+   * keeps it off the home indicator.
+   */
+  .toast-dock {
+    bottom: env(safe-area-inset-bottom, 0px);
   }
 
   .site-footer__line {

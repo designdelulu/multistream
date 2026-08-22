@@ -14,6 +14,7 @@ import {
   bindFocusViewEntry,
   bindTheaterViewEntry,
   bindFocusViewPromotion,
+  bindFocusViewExit,
   bindFocusViewToggle,
   bindStreamRemoved,
   bindStreamWentLive,
@@ -1281,6 +1282,16 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
     expect(createdTwitchPlayers[1].destroyCallCount).toBe(0);
   });
 
+  /*
+   * Regression: the remount gate measured getBoundingClientRect, which reports
+   * the VISUALLY TRANSFORMED rect. Focus tray Twitch embeds are laid out at
+   * TWITCH_MIN_EMBED_WIDTH and CSS-scaled into a much smaller tile, so that
+   * reading was the ~231x130 on screen rather than the 534x300 the provider
+   * actually gates on — every scaled tray tile would fail the gate and be
+   * locked out of both remount paths, exactly the dead-tile bug the scaling
+   * was added to fix. The layout box is the size Twitch sees, so it is the
+   * size the gate has to ask about.
+   */
   it('snapshotPlayingTwitchPlayersUnder only returns players whose box intersects the given rect', async () => {
     const twitchStreams: StreamRef[] = ['a', 'b'].map((channel) => ({
       id: `twitch:${channel}`,
@@ -1611,6 +1622,118 @@ describe('syncStreamGrid — mixed-provider player identity (Twitch pause regres
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(createdTwitchPlayers[0].destroyCallCount).toBe(0);
     expect(createdTwitchPlayers[1].destroyCallCount).toBe(0);
+  });
+
+  /**
+   * Sizes the box isTwitchEmbedBoxLargeEnoughForRemount measures. jsdom
+   * reports 0×0 for everything, which the gate deliberately reads as
+   * "unknown, do not skip" — so without this every card would pass the gate
+   * for the wrong reason and neither of the two tests below would mean
+   * anything.
+   */
+  function sizeTwitchEmbed(streamId: string, width: number, height: number): void {
+    const mount = container.querySelector<HTMLElement>(
+      `[data-stream-id="${streamId}"] .stream-card__iframe`,
+    );
+    expect(mount).toBeTruthy();
+    mount!.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: width, bottom: height, width, height }) as DOMRect;
+  }
+
+  async function mountFocusViewWithStuckPlayers(): Promise<StreamRef[]> {
+    const twitchStreams: StreamRef[] = ['a', 'b', 'c', 'd', 'e'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(twitchStreams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(5));
+    for (const player of createdTwitchPlayers) player.play();
+    setFocusViewPrimary(container, 'twitch:a');
+    syncViewMode(container, 'focus', twitchStreams);
+    return twitchStreams;
+  }
+
+  /**
+   * The contract the 2026-08-21 21:30 production build had, and the regression
+   * guard that would have caught this round-trip.
+   *
+   * A tray tile measures 428×241 at four columns on a 1911×1478 desktop stream
+   * area, and a grid card is roughly 480×270 at three or four columns. Neither
+   * passes 400×300 — no 16:9 box can, since 300px of height needs 533px of
+   * width — so neither is ever auto-remounted, and both are left to
+   * play()-only recovery.
+   *
+   * Lowering the pair to 320×180 made both eligible, and the reported symptom
+   * was the whole bottom row of a grid going black for seconds on a removal:
+   * those cards pause briefly and recover on their own, and the remount turned
+   * an invisible blip into a visible reload.
+   */
+  it('never auto-remounts a tray-sized tile when its play() passes are exhausted', async () => {
+    await mountFocusViewWithStuckPlayers();
+    sizeTwitchEmbed('twitch:a', 1457, 820);
+    for (const channel of ['b', 'c', 'd', 'e']) sizeTwitchEmbed(`twitch:${channel}`, 428, 241);
+
+    const snapshotIds = snapshotPlayingTwitchPlayers(container);
+    expect(snapshotIds).toHaveLength(5);
+
+    // Stuck for real: Twitch refuses to resume, so every pass reads paused
+    // and the run ends 'exhausted' rather than 'success'.
+    for (const player of createdTwitchPlayers) {
+      player.playFails = true;
+      player.pause();
+    }
+    // A remount appends its replacement to createdTwitchPlayers, so hold the
+    // originals — they are the instances a remount would destroy.
+    const [primaryPlayer, ...trayPlayers] = createdTwitchPlayers;
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      beginAddRemoveRecovery(container, snapshotIds, 'remove');
+      // Last play() pass at 3000ms, observe-only pass one CONFIRM_TAIL_MS later.
+      vi.advanceTimersByTime(4500);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // play() was still attempted on every tile — recovery is not disabled,
+    // only the reload is.
+    expect(trayPlayers.every((player) => player.playCallCount > 1)).toBe(true);
+    expect(trayPlayers.every((player) => player.destroyCallCount === 0)).toBe(true);
+    // The Focus primary is large enough to come back usefully, so it still is.
+    expect(primaryPlayer.destroyCallCount).toBeGreaterThan(0);
+  });
+
+  /**
+   * The other end of the same floor. A three-row tray cell measures 254×143
+   * on that same area, and a rebuilt embed that small comes back blank — a
+   * worse outcome than the paused tile it replaced. Gating per card, not
+   * globally, is the point: the primary beside it is still remounted.
+   */
+  it('escalate leaves a strip-sized cell alone while still remounting the primary', async () => {
+    await mountFocusViewWithStuckPlayers();
+    sizeTwitchEmbed('twitch:a', 1457, 820);
+    for (const channel of ['b', 'c', 'd', 'e']) sizeTwitchEmbed(`twitch:${channel}`, 254, 143);
+
+    const snapshotIds = snapshotPlayingTwitchPlayers(container);
+    for (const player of createdTwitchPlayers) {
+      player.playFails = true;
+      player.pause();
+    }
+    const [primaryPlayer, ...trayPlayers] = createdTwitchPlayers;
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      beginAddRemoveRecovery(container, snapshotIds, 'remove');
+      vi.advanceTimersByTime(4500);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(primaryPlayer.destroyCallCount).toBeGreaterThan(0);
+    expect(trayPlayers.every((player) => player.destroyCallCount === 0)).toBe(true);
   });
 
   it('resumeVisibleStreamPlayers replays YouTube and remounts Kick that were Theater-hidden', async () => {
@@ -1959,6 +2082,324 @@ describe('syncViewMode / setFocusViewPrimary — DOM identity across Grid <-> Fo
 
     streamArea.remove();
     document.body.append(container);
+  });
+
+  /**
+   * Regression: the centering offset was applied by DOM index, but visual
+   * position comes from the `order` syncStreamGrid assigns — and the two stop
+   * agreeing the moment a stream is inserted mid-list, which is exactly what
+   * Undo does (store.insertStream(stream, index)) while the card itself is
+   * appended at the end of the DOM. The offset then started a card mid-row in
+   * a track another card already held, overlapping two players — and an
+   * obscured Twitch player pauses.
+   */
+  it('centers the visually first card of a partial last tray row, not the DOM-first one', async () => {
+    const streamArea = document.createElement('div');
+    streamArea.className = 'stream-area';
+    container.remove();
+    streamArea.append(container);
+    document.body.append(streamArea);
+    Object.defineProperty(streamArea, 'clientWidth', { configurable: true, get: () => 1600 });
+    Object.defineProperty(streamArea, 'clientHeight', { configurable: true, get: () => 900 });
+
+    const makeStream = (channel: string): StreamRef => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    });
+
+    const initial = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(makeStream);
+    syncStreamGrid(container, fakeStore(initial));
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(7));
+
+    // Undo re-inserting 'z' at index 3: its card is appended last in the DOM
+    // but sorts fourth by `order`, so DOM order and visual order now differ.
+    const restored = [...initial];
+    restored.splice(3, 0, makeStream('z'));
+    syncStreamGrid(container, fakeStore(restored));
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(8));
+    setFocusViewPrimary(container, 'twitch:a');
+    syncViewMode(container, 'focus', restored);
+    updateGridLayout(container);
+
+    const domOrder = [...container.querySelectorAll<HTMLElement>('.stream-card')].map(
+      (card) => card.dataset.streamId,
+    );
+    expect(domOrder[domOrder.length - 1]).toBe('twitch:z');
+
+    expect(Number.parseInt(container.style.getPropertyValue('--focus-tray-count'), 10)).toBe(4);
+    const offsetCards = [...container.querySelectorAll<HTMLElement>('.stream-card')].filter(
+      (card) => card.style.gridColumn !== '',
+    );
+    expect(offsetCards).toHaveLength(1);
+    // Tray by `order`: b, c, z, d | e, f, g — so 'e' starts the last row.
+    // By DOM index it would have been 'f'.
+    expect(offsetCards[0]?.dataset.streamId).toBe('twitch:e');
+    expect(offsetCards[0]?.style.gridColumn).toBe('2 / span 2');
+
+    streamArea.remove();
+    document.body.append(container);
+  });
+
+  /*
+   * Regression: tray tiles were stretched to their track and pillarboxed by
+   * the provider, because --focus-tray-column-width was computed, written,
+   * and then read by nothing. These pin the whole chain: the var is written,
+   * the CSS consumes it for both orientations, and the tile is a true 16:9
+   * box rather than whatever shape the track happened to be.
+   */
+  it('writes a tray column width that is the true 16:9 partner of the tray height', async () => {
+    const streamArea = document.createElement('div');
+    streamArea.className = 'stream-area';
+    container.remove();
+    streamArea.append(container);
+    document.body.append(streamArea);
+    Object.defineProperty(streamArea, 'clientWidth', { configurable: true, get: () => 1904 });
+    Object.defineProperty(streamArea, 'clientHeight', { configurable: true, get: () => 1690 });
+
+    // The reported lineup: 1 primary + 6 secondaries, which row-balances to
+    // 3 columns x 2 rows and used to produce a 618x220 (2.81:1) tile.
+    const streams: StreamRef[] = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((channel) => ({
+      id: `twitch:${channel}`,
+      platform: 'twitch',
+      channel,
+      muted: true,
+      orientation: 'landscape',
+    }));
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('[data-stream-id]')).toHaveLength(7),
+    );
+    syncViewMode(container, 'focus', streams);
+    updateGridLayout(container);
+
+    const trayHeight = Number.parseInt(container.style.getPropertyValue('--focus-tray-height'), 10);
+    const trayWidth = Number.parseInt(
+      container.style.getPropertyValue('--focus-tray-column-width'),
+      10,
+    );
+    expect(trayHeight).toBeGreaterThan(0);
+    // Floor, because updateFocusViewLayout floors both before writing them.
+    expect(trayWidth).toBe(Math.floor(Math.round((trayHeight * 16) / 9)));
+
+    streamArea.remove();
+    document.body.append(container);
+  });
+
+  /*
+   * Regression: Twitch refuses to autoplay an embed below its documented
+   * 400x300, and tray tiles routinely land at half that — every Twitch tile in
+   * a busy Theater tray simply never started. The tray now lays the embed out
+   * at TWITCH_MIN_EMBED_WIDTH and scales it down, the same trade the Kick path
+   * makes for its own 769px chrome floor.
+   */
+  it('sizes tray cards from the computed column width, per orientation', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    // Tracks are half a tile MINUS the gap that sits between a card's two
+    // tracks — without that subtraction every span-2 card is a gap too wide.
+    expect(withoutComments).toMatch(
+      /grid-template-columns:\s*repeat\(\s*calc\(var\(--focus-tray-count[^)]*\)\s*\*\s*2\)\s*,\s*calc\(\(var\(--focus-tray-column-width[^)]*\)\s*-\s*12px\)\s*\/\s*2\)/,
+    );
+    // The tray player is pinned to 16:9 rather than the raw pixel height, so
+    // the card's 1px border cannot push the box off-ratio.
+    expect(withoutComments).toMatch(
+      /\.stream-grid\[data-view-mode='focus'\]\s+\.stream-card:not\(\.is-focus-primary\)\s+\.stream-card__player\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*9/,
+    );
+    // Portrait tray cards track the 9:16 player instead of the landscape width.
+    expect(withoutComments).toMatch(
+      /\.stream-grid\[data-view-mode='focus'\]\s+\.stream-card\[data-orientation='portrait'\]:not\(\.is-focus-primary\)\s*\{[^}]*width:\s*calc\(var\(--focus-tray-height[^}]*\*\s*9\s*\/\s*16\)/,
+    );
+    // The portrait player rule it depends on must still pin a true 9:16 box.
+    expect(withoutComments).toMatch(
+      /\.stream-grid\[data-view-mode='focus'\]\s*\.stream-card\[data-orientation='portrait'\]:not\(\.is-focus-primary\)\s*\.stream-card__player\s*\{[^}]*aspect-ratio:\s*9\s*\/\s*16/,
+    );
+  });
+
+  /*
+   * Regression: headers-hidden opens a 30px toolbar below the player on hover,
+   * but the rules that make room for it by shrinking the player are scoped
+   * grid-only while the rule that OPENS it is not. In Theater the tray card
+   * therefore grew past its fixed row track — the next row painted over the
+   * overflow, and the last row's was clipped by the grid's overflow: hidden.
+   */
+  it('makes room for the headers-hidden hover toolbar in the Theater tray', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    const hoverRule = withoutComments.match(
+      /html\.headers-hidden \.stream-grid\[data-view-mode='focus'\]\s+\.stream-card:not\(\.is-focus-primary\):hover\s+\.stream-card__player,[\s\S]*?\{([^}]*)\}/,
+    );
+    expect(hoverRule).not.toBeNull();
+    expect(hoverRule?.[1]).toMatch(
+      /height:\s*calc\(var\(--focus-tray-height[^)]*\)\s*-\s*var\(--toolbar-open-height\)\)/,
+    );
+    // Hover-only: the resting tile must keep the pinned 16:9 box, so this must
+    // not be a permanent flex lock the way the Grid rule is.
+    expect(withoutComments).not.toMatch(
+      /html\.headers-hidden \.stream-grid\[data-view-mode='focus'\]\s+\.stream-card:not\(\.is-focus-primary\)\s+\.stream-card__player\s*\{[^}]*flex:/,
+    );
+    // Kick re-scales so its bottom chrome stays inside the shorter box.
+    expect(withoutComments).toMatch(
+      /html\.headers-hidden \.stream-grid\[data-view-mode='focus'\]\s+\.stream-card--kick:not\(\.is-focus-primary\):hover \.stream-card__iframe/,
+    );
+    // Twitch deliberately does NOT: a shorter player crops its fixed-size,
+    // already-scaled iframe with no transform change and no re-composite.
+    // Re-scaling a live Twitch embed on hover is what paused it before.
+    expect(withoutComments).not.toMatch(
+      /html\.headers-hidden[^{]*\.stream-card--twitch[^{]*:hover[^{]*\{[^}]*transform/,
+    );
+  });
+
+  /*
+   * Five attempts at a per-card hover affordance on Theater tray tiles, five
+   * different ways of breaking Twitch playback: a translateY lift, an inset
+   * shadow, a hover-created masked band at `z-index: 2`, and finally a masked
+   * band mounted permanently at `z-index: -1` inside an isolated card — which
+   * paused EVERY tray embed on hover instead of just the hovered one, and
+   * slowed initial Twitch startup in Theater relative to Grid before any hover
+   * at all. See docs/PLAYBACK_STABILITY.md.
+   *
+   * The settled rule: a tray tile is structurally identical to a Grid card. Not
+   * "a safer hover style" — none at all. These two tests exist so attempt #6 is
+   * not written by someone reading only the CSS and seeing an empty-looking
+   * rule that seems to be missing its affordance.
+   */
+  it('gives a tray card no hover styling at all', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    // No tray-card :hover rule exists — not a transform, not a shadow, nothing.
+    expect(withoutComments).not.toMatch(
+      /\.stream-grid\[data-view-mode='focus'\] \.stream-card:not\(\.is-focus-primary\):hover[\s,{]/,
+    );
+    // Nor a :has(:focus-visible) twin, which is how the glow was written.
+    expect(withoutComments).not.toMatch(
+      /\.stream-grid\[data-view-mode='focus'\] \.stream-card:not\(\.is-focus-primary\):has\(/,
+    );
+    // The oldest regression, kept verbatim: no transform anywhere in the tray
+    // card rules, including a transition that would animate one back in.
+    expect(withoutComments).not.toMatch(
+      /\.stream-grid\[data-view-mode='focus'\] \.stream-card:not\(\.is-focus-primary\)[^{]*\{[^}]*transform/,
+    );
+  });
+
+  it('leaves the tray card box structurally identical to a Grid card', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    const trayRule = withoutComments.match(
+      /\.stream-grid\[data-view-mode='focus'\] \.stream-card:not\(\.is-focus-primary\) \{([^}]*)\}/,
+    );
+    expect(trayRule).not.toBeNull();
+    // Layout only. Each of these was added to support the ring and each has its
+    // own cost near a cross-origin iframe: `isolation` forces a stacking
+    // context per tile, `overflow: clip` changes how the grid composites, and
+    // `position` exists only to anchor a pseudo that must not come back.
+    expect(trayRule?.[1]).not.toMatch(/position:/);
+    expect(trayRule?.[1]).not.toMatch(/isolation:/);
+    expect(trayRule?.[1]).not.toMatch(/overflow/);
+    expect(trayRule?.[1]).not.toMatch(/box-shadow:/);
+    expect(trayRule?.[1]).not.toMatch(/transition:/);
+
+    // And no pseudo-element on a tray card, at any z-index, hovered or not.
+    expect(withoutComments).not.toMatch(
+      /\.stream-grid\[data-view-mode='focus'\] \.stream-card:not\(\.is-focus-primary\)(:[a-z-]+)*::(before|after)/,
+    );
+  });
+
+  /*
+   * Regression: the Add Stream beam was first written as `z-index: -1` pseudos
+   * peeking out from behind the button's opaque face. Nothing rendered. That
+   * trick needs an ancestor stacking context to contain the negative index, and
+   * neither .toolbar (opaque background, no position/z-index) nor #app is one,
+   * so the pseudos escaped to the root and painted behind the toolbar's own
+   * background. The fix is a masked band painted ABOVE the button, which needs
+   * no stacking context anywhere — so no negative z-index may come back.
+   */
+  it('draws the Add Stream beam above the button, not behind it', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    const beam = withoutComments.match(
+      /\.toolbar__form > button\[type='submit'\]::after \{([\s\S]*?)\n\}/,
+    );
+    expect(beam).not.toBeNull();
+    expect(beam?.[1]).not.toMatch(/z-index:\s*-/);
+    expect(beam?.[1]).toMatch(/mask-composite:\s*exclude/);
+    expect(beam?.[1]).toMatch(/conic-gradient\(\s*from var\(--beam-angle\)/);
+    // Masked to a band, so it can paint on top without covering the label.
+    expect(beam?.[1]).toMatch(/pointer-events:\s*none/);
+    // The angle only interpolates because it is registered; unregistered it is
+    // an untyped token and the beam sits perfectly still.
+    expect(withoutComments).toMatch(/@property --beam-angle \{[^}]*syntax:\s*'<angle>'/);
+    // No ::before survives from the old two-pseudo version.
+    expect(withoutComments).not.toMatch(/\.toolbar__form > button\[type='submit'\]::before/);
+  });
+
+  /*
+   * Reported from production: removing a stream popped the undo toast over a
+   * Theater tray tile and that tile paused for ~10s. Twitch embed requirement
+   * 1.3 forbids obscuring a player and Twitch enforces it from inside the
+   * iframe, so the toast has to be somewhere no player ever is. It is docked in
+   * a fixed strip at the bottom, and .site-footer reserves exactly that strip's
+   * height so the strip is always over footer and never over grid.
+   *
+   * The whole fix is those two rules reading the SAME variable. Nothing else
+   * would catch them drifting apart, and drifting apart puts toasts back on top
+   * of the video with no visible symptom in the stylesheet.
+   */
+  it('docks both toasts in the footer strip the footer reserves', async () => {
+    // @ts-expect-error no @types/node in this project — see comment above.
+    const fs = await import('node:fs');
+    const css: string = fs.readFileSync('src/styles/main.css', 'utf-8');
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    expect(withoutComments).toMatch(/:root \{[^}]*--toast-dock-height:/);
+
+    const dock = withoutComments.match(/\.toast-dock \{([^}]*)\}/);
+    expect(dock).not.toBeNull();
+    expect(dock?.[1]).toMatch(/position:\s*fixed/);
+    expect(dock?.[1]).toMatch(/bottom:\s*0/);
+    expect(dock?.[1]).toMatch(/height:\s*var\(--toast-dock-height\)/);
+    // An empty strip must not swallow clicks on the footer links under it.
+    expect(dock?.[1]).toMatch(/pointer-events:\s*none/);
+
+    // The reservation. Without it the fixed dock floats over the tray.
+    const footer = withoutComments.match(/\.site-footer \{([^}]*)\}/);
+    expect(footer).not.toBeNull();
+    expect(footer?.[1]).toMatch(/min-height:\s*var\(--toast-dock-height\)/);
+
+    // Neither toast positions itself any more — the dock's flex row places
+    // both, so the old bottom-centre coordinates cannot come back.
+    const toast = withoutComments.match(/\.undo-toast \{([^}]*)\}/);
+    expect(toast).not.toBeNull();
+    expect(toast?.[1]).not.toMatch(/position:/);
+    expect(toast?.[1]).not.toMatch(/bottom:/);
+    expect(toast?.[1]).not.toMatch(/left:/);
+    // .live-toast's `bottom: 84px` stacking offset is what pushed it up onto
+    // the grid; the flex row separates the two instead.
+    expect(withoutComments).not.toMatch(/\.live-toast \{[^}]*bottom:/);
+
+    // The entrance animation must not move the toast either: the dock is only
+    // a few px taller than the toast, so any translate carries it out of the
+    // reserved band for the length of the animation.
+    const keyframes = withoutComments.match(/@keyframes undo-toast-in \{([\s\S]*?)\n\}/);
+    expect(keyframes).not.toBeNull();
+    expect(keyframes?.[1]).not.toMatch(/transform/);
   });
 
   it('clears a partial-row grid-column offset from a card promoted to primary', async () => {
@@ -2834,6 +3275,49 @@ describe('Theater entry turns primary audio on (restores pre-regression behavior
     expect(createdTwitchPlayers).toHaveLength(2);
   });
 
+  /*
+   * Regression: the primary's Theater button was labeled "Exit Theater Mode"
+   * with aria-pressed="true" while its click handler fell through and did
+   * nothing at all — the control announced itself as the exit and then ignored
+   * the click. It now goes through focusViewExitHandler, the same handler the
+   * primary's X and Escape use.
+   */
+  it('primary Theater button exits to Grid, and does not remount the player doing it', async () => {
+    const streams: StreamRef[] = [
+      { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
+      { id: 'twitch:b', platform: 'twitch', channel: 'b', muted: true, orientation: 'landscape' },
+    ];
+    syncStreamGrid(container, fakeStore(streams));
+    await vi.waitFor(() => expect(createdTwitchPlayers).toHaveLength(2));
+    const player = createdTwitchPlayers[0];
+    enterFocus(container, 'twitch:a', streams);
+    syncViewMode(container, 'focus', streams);
+
+    const card = container.querySelector<HTMLElement>('[data-stream-id="twitch:a"]')!;
+    const mount = card.querySelector<HTMLElement>('.stream-card__iframe')!;
+
+    let toggleCalls = 0;
+    bindFocusViewToggle(() => {
+      toggleCalls += 1;
+      syncViewMode(container, 'theater', streams);
+    });
+    bindFocusViewExit(() => {
+      syncViewMode(container, 'grid', streams);
+    });
+
+    card.querySelector<HTMLButtonElement>('.stream-card__theater')!.click();
+
+    expect(container.dataset.viewMode).toBe('grid');
+    // The tray toggle must not have fired — hiding the tray back to solo stays
+    // on the Focus button, and firing both would land in the wrong mode.
+    expect(toggleCalls).toBe(0);
+    // Exiting is a mode change, not a rebuild: same card, same mount, same player.
+    expect(container.querySelector('[data-stream-id="twitch:a"]')).toBe(card);
+    expect(card.querySelector('.stream-card__iframe')).toBe(mount);
+    expect(createdTwitchPlayers).toHaveLength(2);
+    expect(createdTwitchPlayers[0]).toBe(player);
+  });
+
   it('grid Theater button is labeled Enter Theater Mode and primary Theater reflects tray state', async () => {
     const streams: StreamRef[] = [
       { id: 'twitch:a', platform: 'twitch', channel: 'a', muted: true, orientation: 'landscape' },
@@ -3193,8 +3677,12 @@ describe('data-has-portrait wiring — grid-auto-rows must stay portrait-scoped'
     expect(withoutComments).toMatch(
       /\.stream-grid\[data-view-mode='focus'\] \.stream-card\.is-focus-primary \{[^}]*align-self:\s*center/,
     );
+    // `center`, not the old `start`: tray tracks are now exactly half a tile
+    // wide rather than 1fr, so a row is only as wide as the tiles in it and
+    // has to be centered in the container. Under 1fr the tracks always filled
+    // the width, which is what forced tiles off 16:9.
     expect(withoutComments).toMatch(
-      /\.stream-grid\[data-view-mode='focus'\][^{]*\{[^}]*justify-content:\s*start/,
+      /\.stream-grid\[data-view-mode='focus'\][^{]*\{[^}]*justify-content:\s*center/,
     );
     expect(withoutComments).toMatch(
       /\.stream-grid\[data-view-mode='focus'\][^{]*\{[^}]*grid-auto-flow:\s*row/,

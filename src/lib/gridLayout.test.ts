@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeFocusViewLayout,
   computeWeightedGridLayout,
+  CARD_HEADER_HEIGHT,
   COMPACT_TOOLBAR_HEIGHT,
   GRID_GAP,
   PORTRAIT_ROW_SPAN,
@@ -215,12 +216,59 @@ describe('computeFocusViewLayout', () => {
     expect(portraitResult.primaryWidth).toBeLessThan(landscapeResult.primaryWidth);
   });
 
-  it('under-grid cell height stays in the old chat-closed 160–220 band across viewport sizes', () => {
+  /*
+   * The old assertion here was a hard 160–220 band. The upper half of that
+   * band was a fixed height cap that ignored the track width, and when
+   * row-balancing produced a track wider than 16:9 at that height the tile
+   * stretched and the provider pillarboxed it (the reported "black bars on
+   * the left and right of each video"). The cap is gone; what replaces it as
+   * the invariant is below — a true 16:9 tile, and an under-grid that still
+   * respects its 40% share so the primary stays dominant.
+   */
+  it('under-grid tiles stay a true 16:9 box across viewport sizes', () => {
     for (const width of [320, 375, 430, 768, 900, 1024, 1280, 1440, 1920]) {
       const result = computeFocusViewLayout(width, 800, 'landscape');
       expect(result.trayHeight).toBeGreaterThanOrEqual(160);
-      expect(result.trayHeight).toBeLessThanOrEqual(220);
+      expect(result.trayColumnWidth).toBe(Math.round((result.trayHeight * 16) / 9));
     }
+  });
+
+  it('under-grid tiles are 16:9 for every secondary count, and never exceed their track', () => {
+    for (let secondaryCount = 1; secondaryCount <= 10; secondaryCount += 1) {
+      const result = computeFocusViewLayout(1880, 1666, 'landscape', { secondaryCount });
+      expect(result.trayColumnWidth).toBe(Math.round((result.trayHeight * 16) / 9));
+
+      // A tile must fit the track the balancing gave it — the old cap let a
+      // 618px track hold a 618x220 box, which is 2.81:1, not 16:9.
+      const trackWidth = Math.floor((1880 - GRID_GAP * (result.trayColumns - 1)) / result.trayColumns);
+      expect(result.trayColumnWidth).toBeLessThanOrEqual(trackWidth + 1);
+    }
+  });
+
+  it('under-grid never claims more than its 40% share of the area height', () => {
+    for (const secondaryCount of [1, 3, 6, 9]) {
+      for (const areaHeight of [800, 1056, 1666]) {
+        const result = computeFocusViewLayout(1880, areaHeight, 'landscape', {
+          secondaryCount,
+          chromeHeightPerRow: CARD_HEADER_HEIGHT,
+        });
+        const underHeight =
+          result.trayRows * (result.trayHeight + CARD_HEADER_HEIGHT) +
+          Math.max(0, result.trayRows - 1) * GRID_GAP;
+        expect(underHeight).toBeLessThanOrEqual(Math.floor(areaHeight * 0.4));
+      }
+    }
+  });
+
+  it('the reported 6-stream case is 3x2 at true 16:9, not the old stretched 618x220', () => {
+    const result = computeFocusViewLayout(1880, 1666, 'landscape', {
+      secondaryCount: 6,
+      chromeHeightPerRow: CARD_HEADER_HEIGHT,
+    });
+    expect(result.trayColumns).toBe(3);
+    expect(result.trayRows).toBe(2);
+    expect(result.trayHeight).toBeGreaterThan(220);
+    expect(result.trayColumnWidth).toBe(Math.round((result.trayHeight * 16) / 9));
   });
 
   it('chat-open desktop cells stay in the 160–220 band, not the Twitch-doc 400×300 floor', () => {

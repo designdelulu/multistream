@@ -6,7 +6,7 @@ export const PHONE_MAX_WIDTH = 640;
 /**
  * Most streams an iPad may hold via manual adds. Past this the grid tiles
  * shrink below the box Twitch will autoplay in (see
- * TWITCH_MIN_AUTOPLAY_WIDTH/HEIGHT in StreamGrid.ts) and most cards simply
+ * TWITCH_MIN_REMOUNT_WIDTH/HEIGHT in StreamGrid.ts) and most cards simply
  * never start — confirmed live at 12. Ten is the portrait ceiling; landscape
  * is comfortable at nine, but the cap is deliberately a single flat number
  * rather than orientation-aware, so it never changes under the user mid-

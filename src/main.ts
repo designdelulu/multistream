@@ -608,6 +608,36 @@ function recoverAfterOverlay(diffLabel: string): void {
 }
 
 /*
+ * The two edges every covering overlay reports, in one place. The toolbar
+ * suggestions and share menu call these through OverlayHooks; the undo and
+ * live toasts call them directly. Everything that can land on top of a player
+ * routes here so there is exactly one recovery implementation to reason about.
+ *
+ * Both take the overlay's own rect and both must be fired on the hidden<->
+ * visible EDGE only. A re-render while the overlay stays up (another keystroke,
+ * a second stream removed while the toast is still counting down) must not
+ * restart recovery, or a run is cancelled and restarted faster than its own
+ * play() offsets can land.
+ *
+ * The close edge has to measure BEFORE hiding — a hidden element's rect
+ * collapses to 0x0, and snapshotPlayingTwitchPlayersUnder falls back to the
+ * whole grid on a zero-area rect, which turns a targeted nudge into a
+ * grid-wide one.
+ */
+function handleOverlayOpen(rect: DOMRect): void {
+  overlayIdentitiesBefore = captureTwitchPlayerIdentities(gridEl);
+  overlayPlaybackSnapshot = snapshotPlayingTwitchPlayersUnder(gridEl, rect);
+  overlayRecoveryStartedAt = Date.now();
+  logTwitchPlayerIdentities(gridEl, 'overlay-before-open');
+  recoverAfterOverlay('overlay-open-diff');
+}
+
+function handleOverlayClose(): void {
+  logTwitchPlayerIdentities(gridEl, 'overlay-before-close');
+  recoverAfterOverlay('overlay-close-diff');
+}
+
+/*
  * Host spotlight sync: the watch-party controller needs to read the current
  * view (host pushes), apply a host view (viewer follows), and hear about
  * local view changes (host's 400ms-debounced push). View changes come from
@@ -700,17 +730,8 @@ const toolbar = bindStreamToolbar(
   },
   watchParty,
   {
-    onOverlayOpen: (rect) => {
-      overlayIdentitiesBefore = captureTwitchPlayerIdentities(gridEl);
-      overlayPlaybackSnapshot = snapshotPlayingTwitchPlayersUnder(gridEl, rect);
-      overlayRecoveryStartedAt = Date.now();
-      logTwitchPlayerIdentities(gridEl, 'overlay-before-open');
-      recoverAfterOverlay('overlay-open-diff');
-    },
-    onOverlayClose: () => {
-      logTwitchPlayerIdentities(gridEl, 'overlay-before-close');
-      recoverAfterOverlay('overlay-close-diff');
-    },
+    onOverlayOpen: handleOverlayOpen,
+    onOverlayClose: handleOverlayClose,
   },
 );
 const reorder = bindStreamReorder(gridEl, store, headersStore, {
@@ -855,21 +876,37 @@ const undoToastActionEl = undoToastEl?.querySelector<HTMLButtonElement>('.undo-t
 let undoToastHideTimer = 0;
 let pendingUndo: { stream: StreamRef; index: number } | null = null;
 
+/*
+ * The overlay hooks below are a safety net, not the fix. The toast is docked
+ * inside the footer band (.toast-dock in main.css) precisely so its rect never
+ * meets a player's, because obscuring a Twitch embed pauses it — Twitch embed
+ * requirement 1.3, enforced from inside the iframe. On phones, though, the
+ * page scrolls under a fixed dock, so a toast can still land on the single
+ * stacked card; there the hooks turn a ~10s stall-sentinel recovery into a
+ * sub-second play(). Edge-triggered: a second removal while the toast is still
+ * up replaces the pending undo without restarting recovery.
+ */
 function hideUndoToast(): void {
   if (!undoToastEl) return;
+  const wasVisible = !undoToastEl.hidden;
   window.clearTimeout(undoToastHideTimer);
   undoToastHideTimer = 0;
   undoToastEl.hidden = true;
   pendingUndo = null;
+  // The close edge needs no rect: beginOverlayRecovery replays the snapshot
+  // taken on the OPEN edge, when the toast was still on screen to be measured.
+  if (wasVisible) handleOverlayClose();
 }
 
 function showUndoToast(stream: StreamRef, index: number): void {
   if (!undoToastEl || !undoToastMessageEl) return;
+  const wasHidden = undoToastEl.hidden;
   pendingUndo = { stream, index };
   undoToastMessageEl.textContent = 'Stream removed';
   undoToastEl.hidden = false;
   window.clearTimeout(undoToastHideTimer);
   undoToastHideTimer = window.setTimeout(hideUndoToast, UNDO_TOAST_DURATION_MS);
+  if (wasHidden) handleOverlayOpen(undoToastEl.getBoundingClientRect());
 }
 
 undoToastActionEl?.addEventListener('click', () => {
@@ -893,7 +930,10 @@ bindStreamRemoved((removed, index) => {
  * cards resolve their live video once at mount, so its stats polling has no
  * offline → live transition to detect (see bindStreamWentLive's doc comment).
  */
-const liveToast = createLiveToast(document.querySelector<HTMLElement>('#live-toast'));
+const liveToast = createLiveToast(document.querySelector<HTMLElement>('#live-toast'), {
+  onOverlayOpen: handleOverlayOpen,
+  onOverlayClose: handleOverlayClose,
+});
 bindStreamWentLive((card) => {
   const name =
     card.querySelector<HTMLElement>('.stream-card__name-badge-channel')?.textContent?.trim() ||
